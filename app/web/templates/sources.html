@@ -29,7 +29,21 @@
 <p class="muted">未找到 feeds.yaml。</p>
 {% endif %}
 
-<h2>新增来源</h2>
+<h2>自动发现来源</h2>
+<p class="muted">给一个网站地址，自动发现它的 RSS 订阅；找不到则加为网页爬取源。</p>
+<form method="post" action="/sources/discover" class="add-form">
+  <input name="url" placeholder="网站/栏目 URL（如 https://openai.com/blog）" required/>
+  <input name="topics" placeholder="主题（逗号分隔）"/>
+  <button type="submit" class="btn primary">从网址发现</button>
+</form>
+<p class="muted">或按关键词联网搜索相关站点并自动添加（使用 DuckDuckGo，无需 API key）。</p>
+<form method="post" action="/sources/search" class="add-form">
+  <input name="keyword" placeholder="关键词（如 physical AI robotics blog）" required/>
+  <input name="topics" placeholder="主题（逗号分隔）"/>
+  <button type="submit" class="btn primary">按关键词发现</button>
+</form>
+
+<h2>手动新增来源</h2>
 <form method="post" action="/sources/add" class="add-form">
   <input name="name" placeholder="名称" required/>
   <select name="type">

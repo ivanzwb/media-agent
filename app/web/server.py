@@ -10,6 +10,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.config import Config
 from app.db import connect, init_db
+from app.discovery import discover_from_url, discover_from_keyword
 from app.feeds import load_feeds, save_feeds, SourceConfig
 from app.images.base import get_image_provider
 from app.llm.base import get_provider
@@ -137,6 +138,31 @@ def create_app(config: Config | None = None,
             name=name, type=type, url=url, topics=topic_list, mode=mode,
             include_pattern=include_pattern or None))
         save_feeds(cfg, feeds_path)
+        return RedirectResponse(url="/sources", status_code=303)
+
+    def _append_sources(found):
+        cfg = load_feeds(feeds_path)
+        existing = {s.url for s in cfg.sources}
+        added = 0
+        for s in found:
+            if s.url not in existing:
+                cfg.sources.append(s)
+                existing.add(s.url)
+                added += 1
+        if added:
+            save_feeds(cfg, feeds_path)
+        return added
+
+    @app.post("/sources/discover")
+    def sources_discover(url: str = Form(...), topics: str = Form("")):
+        topic_list = [t.strip() for t in topics.split(",") if t.strip()]
+        _append_sources(discover_from_url(url, topics=topic_list))
+        return RedirectResponse(url="/sources", status_code=303)
+
+    @app.post("/sources/search")
+    def sources_search(keyword: str = Form(...), topics: str = Form("")):
+        topic_list = [t.strip() for t in topics.split(",") if t.strip()]
+        _append_sources(discover_from_keyword(keyword, topics=topic_list))
         return RedirectResponse(url="/sources", status_code=303)
 
     @app.post("/run")

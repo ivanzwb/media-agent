@@ -126,6 +126,40 @@ def test_settings_save_schedule(tmp_path):
     assert store.get_setting("schedule_enabled") == "1"
 
 
+def test_sources_discover_from_url(tmp_path, monkeypatch):
+    client, store, feeds = make_client(tmp_path)
+    from app.feeds import SourceConfig
+    monkeypatch.setattr(
+        "app.web.server.discover_from_url",
+        lambda url, topics=None: [SourceConfig(
+            name="Found Blog", type="rss", url="https://found.com/feed.xml",
+            topics=topics or [])])
+    r = client.post("/sources/discover",
+                    data={"url": "https://found.com", "topics": "AI"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    from app.feeds import load_feeds
+    cfg = load_feeds(feeds)
+    assert any(s.url == "https://found.com/feed.xml" for s in cfg.sources)
+
+
+def test_sources_search_adds(tmp_path, monkeypatch):
+    client, store, feeds = make_client(tmp_path)
+    from app.feeds import SourceConfig
+    monkeypatch.setattr(
+        "app.web.server.discover_from_keyword",
+        lambda keyword, topics=None: [SourceConfig(
+            name="KW Site", type="scrape", url="https://kw.com/",
+            topics=topics or [], mode="list")])
+    r = client.post("/sources/search",
+                    data={"keyword": "physical ai", "topics": "物理AI"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    from app.feeds import load_feeds
+    cfg = load_feeds(feeds)
+    assert any(s.url == "https://kw.com/" for s in cfg.sources)
+
+
 def test_draft_adapt_creates_platform_draft(tmp_path):
     client, store, _ = make_client(tmp_path)
     art, draft = seed(store)
