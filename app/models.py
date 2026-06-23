@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+import hashlib
+import re
+from dataclasses import dataclass, field
+from datetime import datetime
+from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
+
+_TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term",
+                    "utm_content", "utm", "ref", "ref_src", "spm"}
+
+
+class ArticleStatus:
+    ARCHIVED = "archived"
+    CLASSIFIED = "classified"
+    DRAFTED = "drafted"
+
+
+class DraftStatus:
+    DRAFTED = "drafted"
+    REVIEWING = "reviewing"
+    APPROVED = "approved"
+    PUBLISHED = "published"
+
+
+def slugify(text: str) -> str:
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9\s-]", "", text)
+    text = re.sub(r"[\s_-]+", "-", text).strip("-")
+    return text or "untitled"
+
+
+@dataclass
+class Article:
+    title: str
+    content_md: str
+    url: str
+    source_name: str
+    source_type: str
+    published_at: datetime | None
+    images: list[str]
+    raw_summary: str | None
+    fetched_at: datetime
+    topic: str | None = None
+    archive_path: str | None = None
+    id: int | None = None
+
+    def normalized_url(self) -> str:
+        parts = urlparse(self.url)
+        query = [(k, v) for k, v in parse_qsl(parts.query)
+                 if k.lower() not in _TRACKING_PARAMS]
+        return urlunparse(parts._replace(query=urlencode(query), fragment=""))
+
+    def fingerprint(self) -> str:
+        norm_title = re.sub(r"\s+", " ", self.title).strip().lower()
+        key = f"{self.normalized_url()}|{norm_title}"
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+@dataclass
+class Draft:
+    article_id: int
+    platform: str
+    title_candidates: list[str]
+    body_md: str
+    topic: str
+    source_url: str
+    source_name: str
+    cover_image: str | None = None
+    flagged_claims: list[str] = field(default_factory=list)
+    status: str = DraftStatus.DRAFTED
+    draft_path: str | None = None
+    id: int | None = None

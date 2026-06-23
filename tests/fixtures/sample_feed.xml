@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+  <title>Example AI Blog</title>
+  <item>
+    <title>New Model Released</title>
+    <link>https://example.com/new-model</link>
+    <description>A summary of the new model and its benchmark results.</description>
+    <pubDate>Mon, 05 Jan 2026 10:00:00 GMT</pubDate>
+  </item>
+  <item>
+    <title>Robotics Update</title>
+    <link>https://example.com/robotics</link>
+    <description>Progress on embodied agents.</description>
+    <pubDate>Tue, 06 Jan 2026 10:00:00 GMT</pubDate>
+  </item>
+</channel>
+</rss>

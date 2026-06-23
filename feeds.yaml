@@ -1,0 +1,17 @@
+topics:
+  - name: AI
+    keywords: [AI, LLM, AGI, foundation model, GPT, model]
+  - name: 物理AI
+    keywords: [robotics, embodied, world model, physical AI, manipulation]
+
+sources:
+  - name: OpenAI Blog
+    type: rss
+    url: https://openai.com/blog/rss.xml
+    topics: [AI]
+  - name: Google DeepMind Blog
+    type: scrape
+    mode: list
+    url: https://deepmind.google/discover/blog/
+    include_pattern: /discover/blog/
+    topics: [AI, 物理AI]
