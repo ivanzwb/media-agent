@@ -40,3 +40,15 @@ def attach_cover(draft: Draft, provider: ImageProvider, images_dir) -> Draft:
     except Exception:
         draft.cover_image = None
     return draft
+
+
+def inject_image_prompt(draft: Draft, prompt: str | None = None) -> str:
+    """Return a placeholder prompt text for the article body.
+    
+    When no real image provider is configured, this prompt is appended to the
+    draft body so users can copy it into an external image generation tool.
+    """
+    title = (draft.title_candidates[0] if draft.title_candidates
+             else "cover")
+    p = prompt or f"科技自媒体封面图：{title}"
+    return f"\n\n:::image-prompt\n{p}\n:::\n"

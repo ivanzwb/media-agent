@@ -7,8 +7,12 @@ from openai import OpenAI
 
 
 class OpenAIImageProvider:
-    def __init__(self, api_key: str | None = None, model: str | None = None):
-        self.client = OpenAI(api_key=api_key)
+    def __init__(self, api_key: str | None = None, model: str | None = None,
+                 base_url: str | None = None):
+        kwargs = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self.client = OpenAI(**kwargs)
         self.model = model or "dall-e-3"
 
     def generate(self, prompt: str, out_path: Path) -> Path:

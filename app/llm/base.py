@@ -16,11 +16,12 @@ class LLMProvider(Protocol):
 
 
 def get_provider(name: str, api_key: str | None = None,
-                 model: str | None = None) -> LLMProvider:
+                 model: str | None = None,
+                 base_url: str | None = None) -> LLMProvider:
     if name == "mock":
         from app.llm.providers.mock import MockProvider
         return MockProvider()
     if name == "openai":
         from app.llm.providers.openai import OpenAIProvider
-        return OpenAIProvider(api_key=api_key, model=model)
+        return OpenAIProvider(api_key=api_key, model=model, base_url=base_url)
     raise ValueError(f"Unknown LLM provider: {name}")

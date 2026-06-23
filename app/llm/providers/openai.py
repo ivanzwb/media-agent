@@ -7,8 +7,12 @@ from app.llm.base import Message
 
 class OpenAIProvider:
     def __init__(self, api_key: str | None = None,
-                 model: str | None = None):
-        self.client = OpenAI(api_key=api_key)
+                 model: str | None = None,
+                 base_url: str | None = None):
+        kwargs = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self.client = OpenAI(**kwargs)
         self.model = model or "gpt-4o-mini"
 
     def chat(self, messages: list[Message], **opts) -> str:

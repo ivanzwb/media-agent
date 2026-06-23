@@ -6,13 +6,13 @@ from datetime import datetime, timedelta, timezone
 from app.feeds import FeedsConfig
 from app.images.base import ImageProvider
 from app.llm.base import LLMProvider
-from app.models import Article
+from app.models import Article, Draft
 from app.sources.dedup import dedup
 from app.sources.rss import fetch_feed
 from app.sources.scraper import scrape_list, scrape_single
 from app.store import Store
 from app.pipeline.classifier import classify
-from app.pipeline.images import attach_cover
+from app.pipeline.images import attach_cover, inject_image_prompt
 from app.pipeline.rewriter import rewrite
 
 
@@ -52,6 +52,25 @@ def filter_by_age(articles: list[Article], max_age_days: int | None,
             if a.published_at is None or a.published_at >= cutoff]
 
 
+def _append_prompt(draft: Draft, store: Store) -> None:
+    """Append an image-generation prompt placeholder to the draft body."""
+    meta = store.read_draft_body(draft.id)
+    body = meta.get("body_md", "")
+    titles = meta.get("title_candidates") or draft.title_candidates or []
+    prompt_draft = Draft(
+        article_id=draft.article_id,
+        title_candidates=titles,
+        body_md="",  # not used, we build from existing body
+        topic=meta.get("topic", ""),
+        source_url=meta.get("source_url", ""),
+        source_name=meta.get("source_name", ""),
+        platform=draft.platform,
+        status=meta.get("status", "drafted"),
+    )
+    prompt_block = inject_image_prompt(prompt_draft)
+    store.update_draft_body(draft.id, titles, body + prompt_block)
+
+
 def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
                  max_drafts: int = 10,
                  image_provider: ImageProvider | None = None,
@@ -83,7 +102,14 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
             stats["drafted"] += 1
             if image_provider is not None:
                 attach_cover(saved_draft, image_provider, store.config.images_dir)
-                store.set_draft_cover(saved_draft.id, saved_draft.cover_image)
+                if saved_draft.cover_image:
+                    store.set_draft_cover(saved_draft.id, saved_draft.cover_image)
+                else:
+                    # Generation failed — inject prompt placeholder in body
+                    _append_prompt(saved_draft, store)
+            else:
+                # No image provider configured — inject prompt placeholder
+                _append_prompt(saved_draft, store)
     finally:
         if run_id is not None:
             store.finish_run(run_id, json.dumps(stats, ensure_ascii=False))

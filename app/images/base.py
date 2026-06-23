@@ -10,11 +10,13 @@ class ImageProvider(Protocol):
 
 
 def get_image_provider(name: str | None, api_key: str | None = None,
-                       model: str | None = None) -> "ImageProvider":
+                       model: str | None = None,
+                       base_url: str | None = None) -> "ImageProvider":
     if name in ("mock", None, ""):
         from app.images.providers.mock import MockImageProvider
         return MockImageProvider()
     if name == "openai":
         from app.images.providers.openai_images import OpenAIImageProvider
-        return OpenAIImageProvider(api_key=api_key, model=model)
+        return OpenAIImageProvider(api_key=api_key, model=model,
+                                   base_url=base_url)
     raise ValueError(f"Unknown image provider: {name}")

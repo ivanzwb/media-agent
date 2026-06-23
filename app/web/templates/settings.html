@@ -37,6 +37,13 @@
       <input type="text" name="llm_model" id="llm_model"
              value="{{ llm_model }}" placeholder="gpt-4o-mini（使用 provider 默认）"/>
     </div>
+
+    <div class="field">
+      <label for="llm_api_base">API Endpoint <span class="env-hint">MEDIA_AGENT_LLM_API_BASE</span></label>
+      <input type="text" name="llm_api_base" id="llm_api_base"
+             value="{{ llm_api_base }}" placeholder="https://api.openai.com/v1（默认）"/>
+      <span class="field-desc">自定义 OpenAI 兼容 API 地址，如 Azure、Ollama、本地 LLM 等</span>
+    </div>
   </fieldset>
 
   <fieldset>
@@ -45,9 +52,38 @@
     <div class="field">
       <label for="image_provider">Image Provider <span class="env-hint">MEDIA_AGENT_IMAGE_PROVIDER</span></label>
       <select name="image_provider" id="image_provider">
-        <option value="mock" {{ 'selected' if image_provider == 'mock' else '' }}>mock（占位图）</option>
+        <option value="mock" {{ 'selected' if image_provider == 'mock' else '' }}>mock（不生成，注入提示词）</option>
         <option value="openai" {{ 'selected' if image_provider == 'openai' else '' }}>openai（DALL-E）</option>
       </select>
+      <span class="field-desc">选择 mock 时不会生成图片，而是在文章中插入图片提示词占位文本</span>
+    </div>
+
+    <div class="field">
+      <label for="image_api_key">Image API Key <span class="env-hint">MEDIA_AGENT_IMAGE_API_KEY</span></label>
+      <div class="api-key-row">
+        <input type="password" name="image_api_key" id="image_api_key"
+               placeholder="{% if img_key_set %}留空则不修改{% else %}sk-... 或留空使用 LLM Key{% endif %}"
+               autocomplete="off"/>
+        {% if img_key_set %}
+        <span class="key-badge set">已设置</span>
+        <code class="key-masked">{{ img_key_masked }}</code>
+        {% else %}
+        <span class="key-badge unset">未设置</span>
+        <span class="field-desc" style="margin:0">留空则复用 LLM API Key</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="image_api_base">Image API Endpoint <span class="env-hint">MEDIA_AGENT_IMAGE_API_BASE</span></label>
+      <input type="text" name="image_api_base" id="image_api_base"
+             value="{{ image_api_base }}" placeholder="留空则复用 LLM Endpoint 或使用默认"/>
+    </div>
+
+    <div class="field">
+      <label for="image_model">Image Model <span class="env-hint">MEDIA_AGENT_IMAGE_MODEL</span></label>
+      <input type="text" name="image_model" id="image_model"
+             value="{{ image_model }}" placeholder="dall-e-3（默认）"/>
     </div>
   </fieldset>
 

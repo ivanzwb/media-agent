@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -31,6 +31,13 @@ def create_app(config: Config | None = None,
     config.ensure_dirs()
     feeds_path = Path(feeds_path)
 
+    # Apply DB overrides to the in-memory config so it reflects saved settings
+    _init_conn = connect(config.db_path)
+    init_db(_init_conn)
+    _init_store = Store(_init_conn, config)
+    config._apply_db_overrides(_init_store)
+    _init_conn.close()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.scheduler = start_if_enabled(get_store(), run_now)
@@ -55,9 +62,13 @@ def create_app(config: Config | None = None,
         feeds_cfg = load_feeds(feeds_path)
         provider = get_provider(run_config.llm_provider,
                                 run_config.llm_api_key,
-                                run_config.llm_model)
+                                run_config.llm_model,
+                                base_url=run_config.llm_api_base)
         image_provider = get_image_provider(
-            run_config.image_provider, run_config.llm_api_key)
+            run_config.image_provider,
+            run_config.image_api_key or run_config.llm_api_key,
+            model=run_config.image_model,
+            base_url=run_config.image_api_base or run_config.llm_api_base)
         return run_pipeline(
             feeds_cfg, store, provider, image_provider=image_provider,
             record=True, max_age_days=run_config.max_age_days,
@@ -251,7 +262,8 @@ def create_app(config: Config | None = None,
         run_config = Config.load(store=store)
         provider = get_provider(run_config.llm_provider,
                                 run_config.llm_api_key,
-                                run_config.llm_model)
+                                run_config.llm_model,
+                                base_url=run_config.llm_api_base)
         result = adapt(meta.get("body_md", ""), titles[0], platform, provider)
         new_draft = Draft(
             article_id=row["article_id"], platform=platform,
@@ -265,12 +277,19 @@ def create_app(config: Config | None = None,
         return RedirectResponse(url=f"/drafts/{saved.id}/edit", status_code=303)
 
     @app.get("/settings", response_class=HTMLResponse)
-    def settings_page(request: Request):
+    def settings_page(request: Request, response: Response):
         store = get_store()
+        # Prevent browser caching so saved settings always appear
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
         # Read DB overrides to pre-fill the form
         db_llm_provider = store.get_setting("llm_provider") or ""
         db_llm_model = store.get_setting("llm_model") or ""
+        db_llm_api_base = store.get_setting("llm_api_base") or ""
         db_image_provider = store.get_setting("image_provider") or ""
+        db_image_api_base = store.get_setting("image_api_base") or ""
+        db_image_model = store.get_setting("image_model") or ""
         db_max_age_days = store.get_setting("max_age_days") or ""
         db_max_per_source = store.get_setting("max_per_source") or ""
 
@@ -282,17 +301,30 @@ def create_app(config: Config | None = None,
         else:
             masked = ""
 
+        # Image API key mask
+        img_key_val = store.get_setting("image_api_key")
+        img_key_set = bool(img_key_val and img_key_val.strip())
+        if img_key_set:
+            img_masked = img_key_val[:4] + "..." + img_key_val[-4:] if len(img_key_val) > 8 else "****"
+        else:
+            img_masked = ""
+
         return templates.TemplateResponse(request, "settings.html", {
             "llm_provider": db_llm_provider or config.llm_provider,
             "llm_model": db_llm_model or (config.llm_model or ""),
+            "llm_api_base": db_llm_api_base or (config.llm_api_base or ""),
             "image_provider": db_image_provider or (config.image_provider or "mock"),
+            "image_api_base": db_image_api_base or (config.image_api_base or ""),
+            "image_model": db_image_model or (config.image_model or ""),
             "data_dir": str(config.data_dir),
-            "max_age_days": db_max_age_days or (
-                str(config.max_age_days) if config.max_age_days is not None else ""),
-            "max_per_source": db_max_per_source or (
-                str(config.max_per_source) if config.max_per_source is not None else ""),
+            "max_age_days": db_max_age_days if db_max_age_days and db_max_age_days != "0" else (
+                str(config.max_age_days) if config.max_age_days is not None and config.max_age_days > 0 else ""),
+            "max_per_source": db_max_per_source if db_max_per_source and db_max_per_source != "0" else (
+                str(config.max_per_source) if config.max_per_source is not None and config.max_per_source > 0 else ""),
             "api_key_set": api_key_set,
             "api_key_masked": masked,
+            "img_key_set": img_key_set,
+            "img_key_masked": img_masked,
             "schedule_cron": store.get_setting("schedule_cron", ""),
             "schedule_enabled": store.get_setting("schedule_enabled", "0") == "1",
             "active": "settings"})
@@ -301,7 +333,11 @@ def create_app(config: Config | None = None,
     def settings_save(llm_provider: str = Form(""),
                       llm_api_key: str = Form(""),
                       llm_model: str = Form(""),
+                      llm_api_base: str = Form(""),
                       image_provider: str = Form(""),
+                      image_api_key: str = Form(""),
+                      image_api_base: str = Form(""),
+                      image_model: str = Form(""),
                       max_age_days: str = Form(""),
                       max_per_source: str = Form(""),
                       schedule_cron: str = Form(""),
@@ -312,7 +348,10 @@ def create_app(config: Config | None = None,
         str_fields = {
             "llm_provider": llm_provider.strip(),
             "llm_model": llm_model.strip(),
+            "llm_api_base": llm_api_base.strip(),
             "image_provider": image_provider.strip(),
+            "image_api_base": image_api_base.strip(),
+            "image_model": image_model.strip(),
         }
         for db_key, value in str_fields.items():
             if value:
@@ -326,24 +365,33 @@ def create_app(config: Config | None = None,
             store.set_setting("llm_api_key", api_key)
         # If empty, leave existing value unchanged
 
-        # Integer fields
-        int_fields = {
-            "max_age_days": max_age_days.strip(),
-            "max_per_source": max_per_source.strip(),
-        }
-        for db_key, value in int_fields.items():
-            if value:
-                # Validate it's a positive integer
-                try:
-                    int_val = int(value)
-                    if int_val >= 0:
-                        store.set_setting(db_key, value)
-                    else:
-                        store.delete_setting(db_key)
-                except ValueError:
-                    store.delete_setting(db_key)
-            else:
-                store.delete_setting(db_key)
+        # Image API key: only save if explicitly provided
+        img_api_key = image_api_key.strip()
+        if img_api_key:
+            store.set_setting("image_api_key", img_api_key)
+
+        # Integer fields: only save if explicitly provided
+        if max_age_days.strip():
+            try:
+                int_val = int(max_age_days.strip())
+                if int_val >= 0:
+                    store.set_setting("max_age_days", max_age_days.strip())
+                else:
+                    store.delete_setting("max_age_days")
+            except ValueError:
+                pass  # leave existing value unchanged
+        # If empty, leave existing value unchanged
+
+        if max_per_source.strip():
+            try:
+                int_val = int(max_per_source.strip())
+                if int_val >= 0:
+                    store.set_setting("max_per_source", max_per_source.strip())
+                else:
+                    store.delete_setting("max_per_source")
+            except ValueError:
+                pass
+        # If empty, leave existing value unchanged
 
         # Scheduler settings (unchanged)
         store.set_setting("schedule_cron", schedule_cron.strip())

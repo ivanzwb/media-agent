@@ -43,11 +43,15 @@ def run(feeds: str = typer.Option("feeds.yaml", help="Path to feeds.yaml"),
     cfg = Config.load()
     store = _store()
     feeds_cfg = load_feeds(Path(feeds))
-    provider = get_provider(cfg.llm_provider, cfg.llm_api_key, cfg.llm_model)
+    provider = get_provider(cfg.llm_provider, cfg.llm_api_key, cfg.llm_model,
+                            base_url=cfg.llm_api_base)
     image_provider = None
     if with_images:
         from app.images.base import get_image_provider
-        image_provider = get_image_provider(cfg.image_provider, cfg.llm_api_key)
+        image_provider = get_image_provider(cfg.image_provider,
+                                            cfg.image_api_key or cfg.llm_api_key,
+                                            model=cfg.image_model,
+                                            base_url=cfg.image_api_base or cfg.llm_api_base)
     stats = run_pipeline(
         feeds_cfg, store, provider, max_drafts=max_drafts,
         image_provider=image_provider, record=True,

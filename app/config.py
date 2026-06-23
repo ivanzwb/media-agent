@@ -35,7 +35,11 @@ class Config:
     llm_provider: str = "mock"
     llm_api_key: str | None = None
     llm_model: str | None = None
+    llm_api_base: str | None = None
     image_provider: str | None = None
+    image_api_key: str | None = None
+    image_api_base: str | None = None
+    image_model: str | None = None
     max_age_days: int | None = None
     max_per_source: int | None = None
 
@@ -63,7 +67,11 @@ class Config:
             llm_provider=os.environ.get("MEDIA_AGENT_LLM_PROVIDER", "mock"),
             llm_api_key=os.environ.get("MEDIA_AGENT_LLM_API_KEY"),
             llm_model=os.environ.get("MEDIA_AGENT_LLM_MODEL"),
+            llm_api_base=os.environ.get("MEDIA_AGENT_LLM_API_BASE"),
             image_provider=os.environ.get("MEDIA_AGENT_IMAGE_PROVIDER"),
+            image_api_key=os.environ.get("MEDIA_AGENT_IMAGE_API_KEY"),
+            image_api_base=os.environ.get("MEDIA_AGENT_IMAGE_API_BASE"),
+            image_model=os.environ.get("MEDIA_AGENT_IMAGE_MODEL"),
             max_age_days=_int_env("MEDIA_AGENT_MAX_AGE_DAYS"),
             max_per_source=_int_env("MEDIA_AGENT_MAX_PER_SOURCE"),
         )
@@ -77,7 +85,11 @@ class Config:
             "llm_provider": "llm_provider",
             "llm_api_key": "llm_api_key",
             "llm_model": "llm_model",
+            "llm_api_base": "llm_api_base",
             "image_provider": "image_provider",
+            "image_api_key": "image_api_key",
+            "image_api_base": "image_api_base",
+            "image_model": "image_model",
         }
         for attr, db_key in str_overrides.items():
             val = store.get_setting(db_key)
