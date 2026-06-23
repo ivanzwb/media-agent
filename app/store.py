@@ -240,16 +240,21 @@ class Store:
     # ----- clear helpers -----
 
     def clear_articles(self) -> int:
-        """Delete all articles from DB and remove archive files."""
+        """Delete all articles (and dependent drafts) from DB and remove files."""
         import shutil
+        # Drafts depend on articles via FK — delete them first
+        draft_count = self.conn.execute("SELECT COUNT(*) AS c FROM drafts").fetchone()["c"]
+        self.conn.execute("DELETE FROM drafts")
         count = self.conn.execute("SELECT COUNT(*) AS c FROM articles").fetchone()["c"]
         self.conn.execute("DELETE FROM articles")
         self.conn.commit()
-        archive = self.config.data_dir / "archive"
-        if archive.exists():
-            shutil.rmtree(str(archive))
-            archive.mkdir(parents=True, exist_ok=True)
-        return count
+        # Remove file trees
+        for sub in ("archive", "drafts"):
+            d = self.config.data_dir / sub
+            if d.exists():
+                shutil.rmtree(str(d))
+                d.mkdir(parents=True, exist_ok=True)
+        return count + draft_count
 
     def clear_drafts(self) -> int:
         """Delete all drafts from DB and remove draft files."""
