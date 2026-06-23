@@ -4,23 +4,101 @@
 <h1>来源与主题</h1>
 
 {% if feeds %}
+<!-- ====== TOPICS ====== -->
 <h2>主题</h2>
-<ul>
+<table>
+  <thead><tr><th>名称</th><th>关键词</th><th style="width:120px">操作</th></tr></thead>
+  <tbody>
   {% for t in feeds.topics %}
-  <li><strong>{{ t.name }}</strong> — 关键词：{{ t.keywords | join(", ") }}</li>
+    <tr id="topic-row-{{ loop.index }}">
+      <td><strong>{{ t.name }}</strong></td>
+      <td class="muted">{{ t.keywords | join(", ") }}</td>
+      <td class="actions">
+        <button class="btn small" onclick="toggleEdit('topic-edit-{{ loop.index }}')">编辑</button>
+        <form method="post" action="/sources/topics/delete" style="display:inline"
+              onsubmit="return confirm('确定要删除主题「{{ t.name }}」吗？')">
+          <input type="hidden" name="name" value="{{ t.name }}"/>
+          <button type="submit" class="btn small danger">删除</button>
+        </form>
+      </td>
+    </tr>
+    <tr id="topic-edit-{{ loop.index }}" class="inline-edit" style="display:none">
+      <td colspan="3">
+        <form method="post" action="/sources/topics/edit" class="inline-form">
+          <input type="hidden" name="old_name" value="{{ t.name }}"/>
+          <input name="name" value="{{ t.name }}" placeholder="主题名称" required style="max-width:140px"/>
+          <input name="keywords" value="{{ t.keywords | join(', ') }}" placeholder="关键词（逗号分隔）" style="max-width:300px"/>
+          <button type="submit" class="btn primary small">保存</button>
+          <button type="button" class="btn small" onclick="toggleEdit('topic-edit-{{ loop.index }}')">取消</button>
+        </form>
+      </td>
+    </tr>
   {% endfor %}
-</ul>
+  </tbody>
+</table>
 
+<details class="add-section">
+  <summary>＋ 添加主题</summary>
+  <form method="post" action="/sources/topics/add" class="inline-form">
+    <input name="name" placeholder="主题名称（如 AI、物理AI）" required style="max-width:160px"/>
+    <input name="keywords" placeholder="关键词（逗号分隔，如 AI, LLM, GPT）" required style="max-width:320px"/>
+    <button type="submit" class="btn primary small">添加</button>
+  </form>
+</details>
+
+<!-- ====== SOURCES ====== -->
 <h2>来源</h2>
 <table>
-  <thead><tr><th>名称</th><th>类型</th><th>URL</th><th>主题</th><th>模式</th></tr></thead>
+  <thead><tr><th>名称</th><th>类型</th><th>URL</th><th>主题</th><th>模式</th><th>状态</th><th style="width:140px">操作</th></tr></thead>
   <tbody>
   {% for s in feeds.sources %}
-    <tr>
-      <td>{{ s.name }}</td><td>{{ s.type }}</td>
+    <tr id="src-row-{{ loop.index }}" class="{{ 'disabled-row' if not s.enabled else '' }}">
+      <td>{{ s.name }}</td>
+      <td>{{ s.type }}</td>
       <td class="path">{{ s.url }}</td>
       <td>{{ s.topics | join(", ") }}</td>
       <td>{{ s.mode if s.type=='scrape' else '-' }}</td>
+      <td>
+        <form method="post" action="/sources/toggle" style="display:inline">
+          <input type="hidden" name="url" value="{{ s.url }}"/>
+          <button type="submit" class="btn small {{ 'warn' if not s.enabled else '' }}">
+            {{ '已禁用' if not s.enabled else '已启用' }}
+          </button>
+        </form>
+      </td>
+      <td class="actions">
+        <button class="btn small" onclick="toggleEdit('src-edit-{{ loop.index }}')">编辑</button>
+        <form method="post" action="/sources/delete" style="display:inline"
+              onsubmit="return confirm('确定要删除来源「{{ s.name }}」吗？')">
+          <input type="hidden" name="url" value="{{ s.url }}"/>
+          <button type="submit" class="btn small danger">删除</button>
+        </form>
+      </td>
+    </tr>
+    <tr id="src-edit-{{ loop.index }}" class="inline-edit" style="display:none">
+      <td colspan="7">
+        <form method="post" action="/sources/edit" class="inline-form">
+          <input type="hidden" name="url" value="{{ s.url }}"/>
+          <input name="name" value="{{ s.name }}" placeholder="名称" required style="max-width:140px"/>
+          <select name="type" style="max-width:100px">
+            <option value="rss" {{ 'selected' if s.type=='rss' else '' }}>rss</option>
+            <option value="scrape" {{ 'selected' if s.type=='scrape' else '' }}>scrape</option>
+          </select>
+          <input name="topics" value="{{ s.topics | join(', ') }}" placeholder="主题（逗号分隔）" style="max-width:160px"/>
+          {% if s.type == 'scrape' %}
+          <select name="mode" style="max-width:100px">
+            <option value="single" {{ 'selected' if s.mode=='single' else '' }}>single</option>
+            <option value="list" {{ 'selected' if s.mode=='list' else '' }}>list</option>
+          </select>
+          <input name="include_pattern" value="{{ s.include_pattern or '' }}" placeholder="include_pattern" style="max-width:160px"/>
+          {% else %}
+          <input type="hidden" name="mode" value="single"/>
+          <input type="hidden" name="include_pattern" value=""/>
+          {% endif %}
+          <button type="submit" class="btn primary small">保存</button>
+          <button type="button" class="btn small" onclick="toggleEdit('src-edit-{{ loop.index }}')">取消</button>
+        </form>
+      </td>
     </tr>
   {% endfor %}
   </tbody>
@@ -29,6 +107,7 @@
 <p class="muted">未找到 feeds.yaml。</p>
 {% endif %}
 
+<!-- ====== DISCOVERY ====== -->
 <h2>自动发现来源</h2>
 <p class="muted">给一个网站地址，自动发现它的 RSS 订阅；找不到则加为网页爬取源。</p>
 <form method="post" action="/sources/discover" class="add-form">
@@ -59,4 +138,11 @@
   <input name="include_pattern" placeholder="include_pattern（爬取列表用，可选）"/>
   <button type="submit" class="btn primary">添加</button>
 </form>
+
+<script>
+function toggleEdit(id) {
+  var el = document.getElementById(id);
+  if (el) el.style.display = el.style.display === 'none' ? 'table-row' : 'none';
+}
+</script>
 {% endblock %}

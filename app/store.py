@@ -232,3 +232,7 @@ class Store:
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, value))
         self.conn.commit()
+
+    def delete_setting(self, key: str) -> None:
+        self.conn.execute("DELETE FROM settings WHERE key=?", (key,))
+        self.conn.commit()

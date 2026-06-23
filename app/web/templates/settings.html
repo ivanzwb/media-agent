@@ -2,28 +2,107 @@
 {% block title %}设置 · Media Agent{% endblock %}
 {% block content %}
 <h1>设置</h1>
-<p class="muted">以下配置通过环境变量设置（修改后重启服务生效）。</p>
-<table>
-  <tbody>
-    <tr><th>LLM Provider</th><td>{{ llm_provider }} <span class="muted">(MEDIA_AGENT_LLM_PROVIDER)</span></td></tr>
-    <tr><th>LLM Model</th><td>{{ llm_model or "(默认)" }} <span class="muted">(MEDIA_AGENT_LLM_MODEL)</span></td></tr>
-    <tr><th>Image Provider</th><td>{{ image_provider }} <span class="muted">(MEDIA_AGENT_IMAGE_PROVIDER)</span></td></tr>
-    <tr><th>Data Dir</th><td class="path">{{ data_dir }} <span class="muted">(MEDIA_AGENT_DATA_DIR)</span></td></tr>
-    <tr><th>最大文章天数</th><td>{{ max_age_days if max_age_days is not none else "(不限)" }} <span class="muted">(MEDIA_AGENT_MAX_AGE_DAYS)</span></td></tr>
-    <tr><th>每源最多条数</th><td>{{ max_per_source if max_per_source is not none else "(不限)" }} <span class="muted">(MEDIA_AGENT_MAX_PER_SOURCE)</span></td></tr>
-  </tbody>
-</table>
-<p class="muted">API Key 通过 MEDIA_AGENT_LLM_API_KEY 设置，出于安全不在此展示。</p>
+<p class="muted">配置通过环境变量设置，也可在此覆盖（覆盖值存储在数据库中，优先级高于环境变量）。</p>
 
-<h2>定时运行</h2>
-<form method="post" action="/settings" class="schedule-form">
-  <label>Cron 表达式（如 <code>0 8 * * *</code> 每天 8 点）</label>
-  <input name="schedule_cron" value="{{ schedule_cron }}" placeholder="0 8 * * *"/>
-  <label class="check">
-    <input type="checkbox" name="schedule_enabled" value="1" {{ 'checked' if schedule_enabled else '' }}/>
-    启用定时运行
-  </label>
-  <button type="submit" class="btn primary">保存定时设置</button>
+<form method="post" action="/settings" class="settings-form">
+
+  <fieldset>
+    <legend>LLM 配置</legend>
+
+    <div class="field">
+      <label for="llm_provider">LLM Provider <span class="env-hint">MEDIA_AGENT_LLM_PROVIDER</span></label>
+      <select name="llm_provider" id="llm_provider">
+        <option value="mock" {{ 'selected' if llm_provider == 'mock' else '' }}>mock（离线测试）</option>
+        <option value="openai" {{ 'selected' if llm_provider == 'openai' else '' }}>openai</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="llm_api_key">API Key <span class="env-hint">MEDIA_AGENT_LLM_API_KEY</span></label>
+      <div class="api-key-row">
+        <input type="password" name="llm_api_key" id="llm_api_key"
+               placeholder="{% if api_key_set %}留空则不修改{% else %}sk-...{% endif %}"
+               autocomplete="off"/>
+        {% if api_key_set %}
+        <span class="key-badge set">已设置</span>
+        <code class="key-masked">{{ api_key_masked }}</code>
+        {% else %}
+        <span class="key-badge unset">未设置</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="llm_model">LLM Model <span class="env-hint">MEDIA_AGENT_LLM_MODEL</span></label>
+      <input type="text" name="llm_model" id="llm_model"
+             value="{{ llm_model }}" placeholder="gpt-4o-mini（使用 provider 默认）"/>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>图片生成</legend>
+
+    <div class="field">
+      <label for="image_provider">Image Provider <span class="env-hint">MEDIA_AGENT_IMAGE_PROVIDER</span></label>
+      <select name="image_provider" id="image_provider">
+        <option value="mock" {{ 'selected' if image_provider == 'mock' else '' }}>mock（占位图）</option>
+        <option value="openai" {{ 'selected' if image_provider == 'openai' else '' }}>openai（DALL-E）</option>
+      </select>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>采集限制</legend>
+
+    <div class="field">
+      <label for="max_age_days">最大文章天数 <span class="env-hint">MEDIA_AGENT_MAX_AGE_DAYS</span></label>
+      <input type="number" name="max_age_days" id="max_age_days"
+             value="{{ max_age_days }}" placeholder="0 或留空 = 不限"
+             min="0" step="1" style="max-width:200px"/>
+      <span class="field-desc">只采集 N 天内的文章，留空或 0 表示不限</span>
+    </div>
+
+    <div class="field">
+      <label for="max_per_source">每源最多条数 <span class="env-hint">MEDIA_AGENT_MAX_PER_SOURCE</span></label>
+      <input type="number" name="max_per_source" id="max_per_source"
+             value="{{ max_per_source }}" placeholder="0 或留空 = 不限"
+             min="0" step="1" style="max-width:200px"/>
+      <span class="field-desc">每个来源最多采集 N 篇文章，留空或 0 表示不限</span>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>数据目录（只读）</legend>
+    <div class="field">
+      <label>Data Dir <span class="env-hint">MEDIA_AGENT_DATA_DIR</span></label>
+      <code class="path-display">{{ data_dir }}</code>
+      <span class="field-desc">通过环境变量设置，不可在此修改</span>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>定时运行</legend>
+
+    <div class="field">
+      <label for="schedule_cron">Cron 表达式</label>
+      <input type="text" name="schedule_cron" id="schedule_cron"
+             value="{{ schedule_cron }}" placeholder="0 8 * * *（每天 8 点）"
+             style="max-width:260px"/>
+      <span class="field-desc">如 <code>0 8 * * *</code> 每天 8 点，<code>0 */6 * * *</code> 每 6 小时</span>
+    </div>
+
+    <div class="field">
+      <label class="check">
+        <input type="checkbox" name="schedule_enabled" value="1"
+               {{ 'checked' if schedule_enabled else '' }}/>
+        启用定时运行
+      </label>
+    </div>
+  </fieldset>
+
+  <div class="form-actions">
+    <button type="submit" class="btn primary">保存所有设置</button>
+    <span class="muted" style="margin-left:12px">大部分设置在下次运行或重启服务时生效</span>
+  </div>
 </form>
-<p class="muted">定时设置在服务启动时生效；修改后请重启 <code>serve</code>。</p>
 {% endblock %}
