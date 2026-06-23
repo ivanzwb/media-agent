@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}编辑草稿 #{{ draft.id }} · Media Agent{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/easymde/dist/easymde.min.css"/>
+<script src="https://unpkg.com/easymde/dist/easymde.min.js"></script>
+{% endblock %}
+{% block content %}
+<h1>编辑草稿 #{{ draft.id }}</h1>
+
+{% if flagged_claims %}
+<div class="warn">
+  <strong>⚠ 事实校验存疑（请人工核对原文后再发）：</strong>
+  <ul>{% for c in flagged_claims %}<li>{{ c }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<div class="edit-grid">
+  <div>
+    {% if meta.cover_image %}
+    <p class="muted">封面：</p>
+    <img class="cover" src="/images/{{ meta.cover_image }}" alt="cover"/>
+    {% endif %}
+    <p class="muted">来源：<a href="{{ meta.source_url }}" target="_blank" rel="noopener">{{ meta.source_name }}</a></p>
+  </div>
+  <form method="post" action="/drafts/{{ draft.id }}" class="edit-form">
+    <label>候选标题（每行一个）</label>
+    <textarea name="title_candidates" rows="3">{{ title_candidates_text }}</textarea>
+
+    <label>正文（Markdown）</label>
+    <textarea name="body_md" id="editor">{{ body_md }}</textarea>
+
+    <label>状态</label>
+    <select name="status">
+      {% for s in statuses %}
+      <option value="{{ s }}" {{ 'selected' if draft.status==s else '' }}>{{ s }}</option>
+      {% endfor %}
+    </select>
+
+    <button type="submit" class="btn primary">保存</button>
+    <a class="btn" href="/drafts">返回列表</a>
+  </form>
+</div>
+
+<script>
+  var easyMDE = new EasyMDE({ element: document.getElementById('editor'),
+    spellChecker: false, autoDownloadFontAwesome: true });
+</script>
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}仪表盘 · Media Agent{% endblock %}
+{% block content %}
+<h1>仪表盘</h1>
+<div class="cards">
+  <div class="card"><div class="num">{{ stats.articles }}</div><div>已归档文章</div></div>
+  <div class="card"><div class="num">{{ stats.drafts }}</div><div>草稿</div></div>
+  <div class="card"><div class="num">{{ stats.runs }}</div><div>运行次数</div></div>
+</div>
+
+<h2>最近运行</h2>
+{% if runs %}
+<table>
+  <thead><tr><th>开始时间</th><th>状态</th><th>统计</th></tr></thead>
+  <tbody>
+  {% for r in runs %}
+    <tr><td>{{ r.started_at }}</td><td>{{ r.status }}</td><td><code>{{ r.stats_json }}</code></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">还没有运行记录。点击右上角"立即运行"。</p>{% endif %}
+
+<h2>最新草稿</h2>
+{% if drafts %}
+<ul class="draft-list">
+  {% for d in drafts %}
+  <li><a href="/drafts/{{ d.id }}/edit">#{{ d.id }} · {{ d.status }} · {{ d.draft_path }}</a></li>
+  {% endfor %}
+</ul>
+{% else %}<p class="muted">还没有草稿。</p>{% endif %}
+{% endblock %}

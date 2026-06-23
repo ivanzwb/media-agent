@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}设置 · Media Agent{% endblock %}
+{% block content %}
+<h1>设置</h1>
+<p class="muted">以下配置通过环境变量设置（修改后重启服务生效）。</p>
+<table>
+  <tbody>
+    <tr><th>LLM Provider</th><td>{{ llm_provider }} <span class="muted">(MEDIA_AGENT_LLM_PROVIDER)</span></td></tr>
+    <tr><th>LLM Model</th><td>{{ llm_model or "(默认)" }} <span class="muted">(MEDIA_AGENT_LLM_MODEL)</span></td></tr>
+    <tr><th>Image Provider</th><td>{{ image_provider }} <span class="muted">(MEDIA_AGENT_IMAGE_PROVIDER)</span></td></tr>
+    <tr><th>Data Dir</th><td class="path">{{ data_dir }} <span class="muted">(MEDIA_AGENT_DATA_DIR)</span></td></tr>
+  </tbody>
+</table>
+<p class="muted">API Key 通过 MEDIA_AGENT_LLM_API_KEY 设置，出于安全不在此展示。</p>
+{% endblock %}

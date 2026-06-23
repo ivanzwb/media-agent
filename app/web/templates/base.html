@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{% block title %}Media Agent{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css"/>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">📰 Media Agent</div>
+    <nav>
+      <a href="/" class="{{ 'on' if active=='dashboard' else '' }}">仪表盘</a>
+      <a href="/archive" class="{{ 'on' if active=='archive' else '' }}">归档</a>
+      <a href="/drafts" class="{{ 'on' if active=='drafts' else '' }}">草稿</a>
+      <a href="/sources" class="{{ 'on' if active=='sources' else '' }}">来源</a>
+      <a href="/settings" class="{{ 'on' if active=='settings' else '' }}">设置</a>
+    </nav>
+    <form method="post" action="/run" class="run-form">
+      <button type="submit" class="btn primary">▶ 立即运行</button>
+    </form>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

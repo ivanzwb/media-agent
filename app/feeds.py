@@ -45,3 +45,22 @@ def load_feeds(path: Path | str) -> FeedsConfig:
             enabled=s.get("enabled", True),
         ))
     return FeedsConfig(topics=topics, sources=sources)
+
+
+def save_feeds(config: FeedsConfig, path: Path | str) -> None:
+    data = {
+        "topics": [{"name": t.name, "keywords": t.keywords}
+                   for t in config.topics],
+        "sources": [],
+    }
+    for s in config.sources:
+        entry = {"name": s.name, "type": s.type, "url": s.url,
+                 "topics": s.topics, "enabled": s.enabled}
+        if s.type == "scrape":
+            entry["mode"] = s.mode
+            if s.include_pattern:
+                entry["include_pattern"] = s.include_pattern
+        data["sources"].append(entry)
+    Path(path).write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8")

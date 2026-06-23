@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}来源 · Media Agent{% endblock %}
+{% block content %}
+<h1>来源与主题</h1>
+
+{% if feeds %}
+<h2>主题</h2>
+<ul>
+  {% for t in feeds.topics %}
+  <li><strong>{{ t.name }}</strong> — 关键词：{{ t.keywords | join(", ") }}</li>
+  {% endfor %}
+</ul>
+
+<h2>来源</h2>
+<table>
+  <thead><tr><th>名称</th><th>类型</th><th>URL</th><th>主题</th><th>模式</th></tr></thead>
+  <tbody>
+  {% for s in feeds.sources %}
+    <tr>
+      <td>{{ s.name }}</td><td>{{ s.type }}</td>
+      <td class="path">{{ s.url }}</td>
+      <td>{{ s.topics | join(", ") }}</td>
+      <td>{{ s.mode if s.type=='scrape' else '-' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">未找到 feeds.yaml。</p>
+{% endif %}
+
+<h2>新增来源</h2>
+<form method="post" action="/sources/add" class="add-form">
+  <input name="name" placeholder="名称" required/>
+  <select name="type">
+    <option value="rss">rss</option>
+    <option value="scrape">scrape</option>
+  </select>
+  <input name="url" placeholder="URL" required/>
+  <input name="topics" placeholder="主题（逗号分隔）"/>
+  <select name="mode">
+    <option value="single">single</option>
+    <option value="list">list</option>
+  </select>
+  <input name="include_pattern" placeholder="include_pattern（爬取列表用，可选）"/>
+  <button type="submit" class="btn primary">添加</button>
+</form>
+{% endblock %}

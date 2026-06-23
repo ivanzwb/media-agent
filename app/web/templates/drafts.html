@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}草稿 · Media Agent{% endblock %}
+{% block content %}
+<h1>草稿</h1>
+<div class="filters">
+  <a href="/drafts" class="chip {{ 'on' if not current_status else '' }}">全部</a>
+  {% for s in statuses %}
+  <a href="/drafts?status={{ s }}" class="chip {{ 'on' if current_status==s else '' }}">{{ s }}</a>
+  {% endfor %}
+</div>
+<table>
+  <thead><tr><th>#</th><th>状态</th><th>平台</th><th>文件</th><th>更新时间</th><th></th></tr></thead>
+  <tbody>
+  {% for d in drafts %}
+    <tr>
+      <td>{{ d.id }}</td>
+      <td><span class="badge {{ d.status }}">{{ d.status }}</span></td>
+      <td>{{ d.platform }}</td>
+      <td class="path">{{ d.draft_path }}</td>
+      <td>{{ d.updated_at }}</td>
+      <td><a class="btn" href="/drafts/{{ d.id }}/edit">编辑</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if not drafts %}<p class="muted">暂无草稿。</p>{% endif %}
+{% endblock %}

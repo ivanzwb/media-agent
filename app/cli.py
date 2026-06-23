@@ -32,14 +32,33 @@ def init():
 
 @app.command()
 def run(feeds: str = typer.Option("feeds.yaml", help="Path to feeds.yaml"),
-        max_drafts: int = typer.Option(10)):
+        max_drafts: int = typer.Option(10),
+        with_images: bool = typer.Option(False, "--with-images",
+                                         help="Generate cover images")):
     """Run one full pipeline pass."""
     cfg = Config.load()
     store = _store()
     feeds_cfg = load_feeds(Path(feeds))
     provider = get_provider(cfg.llm_provider, cfg.llm_api_key, cfg.llm_model)
-    stats = run_pipeline(feeds_cfg, store, provider, max_drafts=max_drafts)
+    image_provider = None
+    if with_images:
+        from app.images.base import get_image_provider
+        image_provider = get_image_provider(cfg.image_provider, cfg.llm_api_key)
+    stats = run_pipeline(feeds_cfg, store, provider, max_drafts=max_drafts,
+                         image_provider=image_provider, record=True)
     typer.echo(json.dumps(stats, ensure_ascii=False))
+
+
+@app.command()
+def serve(host: str = typer.Option("127.0.0.1"),
+          port: int = typer.Option(8000),
+          feeds: str = typer.Option("feeds.yaml", help="Path to feeds.yaml")):
+    """Start the local web UI."""
+    import uvicorn
+    from app.web.server import create_app
+    cfg = Config.load()
+    cfg.ensure_dirs()
+    uvicorn.run(create_app(cfg, feeds_path=feeds), host=host, port=port)
 
 
 if __name__ == "__main__":
