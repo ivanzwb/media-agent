@@ -9,7 +9,21 @@
     <tr><th>LLM Model</th><td>{{ llm_model or "(默认)" }} <span class="muted">(MEDIA_AGENT_LLM_MODEL)</span></td></tr>
     <tr><th>Image Provider</th><td>{{ image_provider }} <span class="muted">(MEDIA_AGENT_IMAGE_PROVIDER)</span></td></tr>
     <tr><th>Data Dir</th><td class="path">{{ data_dir }} <span class="muted">(MEDIA_AGENT_DATA_DIR)</span></td></tr>
+    <tr><th>最大文章天数</th><td>{{ max_age_days if max_age_days is not none else "(不限)" }} <span class="muted">(MEDIA_AGENT_MAX_AGE_DAYS)</span></td></tr>
+    <tr><th>每源最多条数</th><td>{{ max_per_source if max_per_source is not none else "(不限)" }} <span class="muted">(MEDIA_AGENT_MAX_PER_SOURCE)</span></td></tr>
   </tbody>
 </table>
 <p class="muted">API Key 通过 MEDIA_AGENT_LLM_API_KEY 设置，出于安全不在此展示。</p>
+
+<h2>定时运行</h2>
+<form method="post" action="/settings" class="schedule-form">
+  <label>Cron 表达式（如 <code>0 8 * * *</code> 每天 8 点）</label>
+  <input name="schedule_cron" value="{{ schedule_cron }}" placeholder="0 8 * * *"/>
+  <label class="check">
+    <input type="checkbox" name="schedule_enabled" value="1" {{ 'checked' if schedule_enabled else '' }}/>
+    启用定时运行
+  </label>
+  <button type="submit" class="btn primary">保存定时设置</button>
+</form>
+<p class="muted">定时设置在服务启动时生效；修改后请重启 <code>serve</code>。</p>
 {% endblock %}

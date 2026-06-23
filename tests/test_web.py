@@ -114,3 +114,25 @@ def test_settings_ok(tmp_path):
     r = client.get("/settings")
     assert r.status_code == 200
     assert "LLM Provider" in r.text
+
+
+def test_settings_save_schedule(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    r = client.post("/settings", data={
+        "schedule_cron": "0 8 * * *", "schedule_enabled": "1"},
+        follow_redirects=False)
+    assert r.status_code == 303
+    assert store.get_setting("schedule_cron") == "0 8 * * *"
+    assert store.get_setting("schedule_enabled") == "1"
+
+
+def test_draft_adapt_creates_platform_draft(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    art, draft = seed(store)
+    before = len(store.list_drafts())
+    r = client.post(f"/drafts/{draft.id}/adapt",
+                    data={"platform": "xiaohongshu"}, follow_redirects=False)
+    assert r.status_code == 303
+    drafts = store.list_drafts()
+    assert len(drafts) == before + 1
+    assert any(d["platform"] == "xiaohongshu" for d in drafts)

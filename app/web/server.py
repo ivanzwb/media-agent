@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
@@ -13,7 +13,10 @@ from app.db import connect, init_db
 from app.feeds import load_feeds, save_feeds, SourceConfig
 from app.images.base import get_image_provider
 from app.llm.base import get_provider
+from app.models import Draft
+from app.pipeline.adapter import adapt, PLATFORMS
 from app.pipeline.orchestrator import run_pipeline
+from app.scheduler import start_if_enabled
 from app.store import Store
 
 _BASE = Path(__file__).parent
@@ -27,7 +30,15 @@ def create_app(config: Config | None = None,
     config.ensure_dirs()
     feeds_path = Path(feeds_path)
 
-    app = FastAPI(title="Media Agent")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.scheduler = start_if_enabled(get_store(), run_now)
+        yield
+        sched = getattr(app.state, "scheduler", None)
+        if sched is not None and sched.running:
+            sched.shutdown(wait=False)
+
+    app = FastAPI(title="Media Agent", lifespan=lifespan)
     templates = Jinja2Templates(directory=str(_TEMPLATES))
     app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
@@ -35,6 +46,18 @@ def create_app(config: Config | None = None,
         conn = connect(config.db_path)
         init_db(conn)
         return Store(conn, config)
+
+    def run_now():
+        store = get_store()
+        feeds_cfg = load_feeds(feeds_path)
+        provider = get_provider(config.llm_provider, config.llm_api_key,
+                                config.llm_model)
+        image_provider = get_image_provider(
+            config.image_provider, config.llm_api_key)
+        return run_pipeline(
+            feeds_cfg, store, provider, image_provider=image_provider,
+            record=True, max_age_days=config.max_age_days,
+            max_per_source=config.max_per_source)
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
@@ -118,23 +141,53 @@ def create_app(config: Config | None = None,
 
     @app.post("/run")
     def trigger_run():
+        run_now()
+        return RedirectResponse(url="/", status_code=303)
+
+    @app.post("/drafts/{draft_id}/adapt")
+    def draft_adapt(draft_id: int, platform: str = Form(...)):
         store = get_store()
-        feeds_cfg = load_feeds(feeds_path)
+        row = store.get_draft(draft_id)
+        meta = store.read_draft_body(draft_id)
+        if not row or not meta:
+            return HTMLResponse("draft not found", status_code=404)
+        titles = meta.get("title_candidates") or ["稿件"]
         provider = get_provider(config.llm_provider, config.llm_api_key,
                                 config.llm_model)
-        image_provider = get_image_provider(
-            config.image_provider, config.llm_api_key)
-        run_pipeline(feeds_cfg, store, provider, image_provider=image_provider,
-                     record=True)
-        return RedirectResponse(url="/", status_code=303)
+        result = adapt(meta.get("body_md", ""), titles[0], platform, provider)
+        new_draft = Draft(
+            article_id=row["article_id"], platform=platform,
+            title_candidates=result["title_candidates"],
+            body_md=result["body_md"],
+            topic=meta.get("topic", "uncategorized"),
+            source_url=meta.get("source_url", ""),
+            source_name=meta.get("source_name", ""),
+            cover_image=meta.get("cover_image"))
+        saved = store.save_draft(new_draft)
+        return RedirectResponse(url=f"/drafts/{saved.id}/edit", status_code=303)
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request):
+        store = get_store()
         return templates.TemplateResponse(request, "settings.html", {
             "llm_provider": config.llm_provider,
             "llm_model": config.llm_model,
             "image_provider": config.image_provider or "mock",
             "data_dir": str(config.data_dir),
+            "max_age_days": config.max_age_days,
+            "max_per_source": config.max_per_source,
+            "schedule_cron": store.get_setting("schedule_cron", ""),
+            "schedule_enabled": store.get_setting("schedule_enabled", "0") == "1",
             "active": "settings"})
+
+    @app.post("/settings")
+    def settings_save(schedule_cron: str = Form(""),
+                      schedule_enabled: str = Form("0")):
+        store = get_store()
+        store.set_setting("schedule_cron", schedule_cron.strip())
+        store.set_setting(
+            "schedule_enabled", "1" if schedule_enabled in ("1", "on", "true")
+            else "0")
+        return RedirectResponse(url="/settings", status_code=303)
 
     return app

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 from app.feeds import FeedsConfig
 from app.images.base import ImageProvider
@@ -15,36 +16,55 @@ from app.pipeline.images import attach_cover
 from app.pipeline.rewriter import rewrite
 
 
-def collect_sources(feeds: FeedsConfig) -> list[Article]:
+def collect_sources(feeds: FeedsConfig,
+                    max_per_source: int | None = None) -> list[Article]:
     articles: list[Article] = []
     for src in feeds.sources:
         if not src.enabled:
             continue
         try:
             if src.type == "rss":
-                articles.extend(fetch_feed(src.url, src.name))
+                items = fetch_feed(src.url, src.name)
             elif src.type == "scrape":
                 if src.mode == "list":
-                    articles.extend(scrape_list(
-                        src.url, src.name, include_pattern=src.include_pattern))
+                    items = scrape_list(
+                        src.url, src.name, include_pattern=src.include_pattern)
                 else:
                     art = scrape_single(src.url, src.name)
-                    if art:
-                        articles.append(art)
+                    items = [art] if art else []
+            else:
+                items = []
         except Exception:
             continue
+        if max_per_source:
+            items = items[:max_per_source]
+        articles.extend(items)
     return articles
+
+
+def filter_by_age(articles: list[Article], max_age_days: int | None,
+                  now: datetime | None = None) -> list[Article]:
+    if not max_age_days:
+        return articles
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=max_age_days)
+    return [a for a in articles
+            if a.published_at is None or a.published_at >= cutoff]
 
 
 def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
                  max_drafts: int = 10,
                  image_provider: ImageProvider | None = None,
-                 record: bool = False) -> dict:
+                 record: bool = False,
+                 max_age_days: int | None = None,
+                 max_per_source: int | None = None) -> dict:
     stats = {"fetched": 0, "archived": 0, "classified": 0, "drafted": 0}
     run_id = store.record_run() if record else None
 
     try:
-        articles = dedup(collect_sources(feeds))
+        articles = collect_sources(feeds, max_per_source=max_per_source)
+        articles = filter_by_age(articles, max_age_days)
+        articles = dedup(articles)
         stats["fetched"] = len(articles)
 
         new_articles: list[Article] = []

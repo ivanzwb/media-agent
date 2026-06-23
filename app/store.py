@@ -220,3 +220,15 @@ class Store:
         runs = self.conn.execute(
             "SELECT COUNT(*) AS c FROM runs").fetchone()["c"]
         return {"articles": articles, "drafts": drafts, "runs": runs}
+
+    def get_setting(self, key: str, default=None):
+        row = self.conn.execute(
+            "SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT INTO settings(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value))
+        self.conn.commit()

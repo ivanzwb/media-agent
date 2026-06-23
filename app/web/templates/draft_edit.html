@@ -41,6 +41,17 @@
   </form>
 </div>
 
+<h2>生成平台适配版本</h2>
+<p class="muted">基于当前主稿内容，生成对应平台风格的新草稿（不会改动本稿）。</p>
+<div class="adapt-row">
+  {% for p in ["wechat", "xiaohongshu", "zhihu"] %}
+  <form method="post" action="/drafts/{{ draft.id }}/adapt">
+    <input type="hidden" name="platform" value="{{ p }}"/>
+    <button type="submit" class="btn">{{ p }}</button>
+  </form>
+  {% endfor %}
+</div>
+
 <script>
   var easyMDE = new EasyMDE({ element: document.getElementById('editor'),
     spellChecker: false, autoDownloadFontAwesome: true });

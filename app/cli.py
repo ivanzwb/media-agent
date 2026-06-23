@@ -33,6 +33,10 @@ def init():
 @app.command()
 def run(feeds: str = typer.Option("feeds.yaml", help="Path to feeds.yaml"),
         max_drafts: int = typer.Option(10),
+        max_age_days: int = typer.Option(0, help="Only keep articles newer "
+                                         "than N days (0 = unlimited)"),
+        max_per_source: int = typer.Option(0, help="Cap articles per source "
+                                           "(0 = unlimited)"),
         with_images: bool = typer.Option(False, "--with-images",
                                          help="Generate cover images")):
     """Run one full pipeline pass."""
@@ -44,8 +48,11 @@ def run(feeds: str = typer.Option("feeds.yaml", help="Path to feeds.yaml"),
     if with_images:
         from app.images.base import get_image_provider
         image_provider = get_image_provider(cfg.image_provider, cfg.llm_api_key)
-    stats = run_pipeline(feeds_cfg, store, provider, max_drafts=max_drafts,
-                         image_provider=image_provider, record=True)
+    stats = run_pipeline(
+        feeds_cfg, store, provider, max_drafts=max_drafts,
+        image_provider=image_provider, record=True,
+        max_age_days=max_age_days or cfg.max_age_days,
+        max_per_source=max_per_source or cfg.max_per_source)
     typer.echo(json.dumps(stats, ensure_ascii=False))
 
 

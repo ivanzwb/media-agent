@@ -75,6 +75,15 @@ def test_set_draft_cover(tmp_path):
     assert store.read_draft_body(draft.id)["cover_image"] == "cover-x.png"
 
 
+def test_settings_get_set(tmp_path):
+    store = make_store(tmp_path)
+    assert store.get_setting("schedule_cron", "none") == "none"
+    store.set_setting("schedule_cron", "0 8 * * *")
+    assert store.get_setting("schedule_cron") == "0 8 * * *"
+    store.set_setting("schedule_cron", "0 9 * * *")
+    assert store.get_setting("schedule_cron") == "0 9 * * *"
+
+
 def test_runs_and_dashboard_stats(tmp_path):
     store = make_store(tmp_path)
     art = store.save_article(sample_article())
