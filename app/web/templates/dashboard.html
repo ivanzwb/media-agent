@@ -8,6 +8,25 @@
   <div class="card"><div class="num">{{ stats.runs }}</div><div>运行次数</div></div>
 </div>
 
+{% if request.query_params.get('cleared_runs') %}
+<p class="warn">已清空 {{ request.query_params.cleared_runs }} 条运行记录。</p>
+{% endif %}
+
+<div class="clear-actions">
+  <form method="post" action="/clear/articles"
+        onsubmit="return confirm('确定要清空所有归档文章吗？此操作不可撤销。')" style="display:inline">
+    <button type="submit" class="btn small danger">清空归档</button>
+  </form>
+  <form method="post" action="/clear/drafts"
+        onsubmit="return confirm('确定要清空所有草稿吗？此操作不可撤销。')" style="display:inline">
+    <button type="submit" class="btn small danger">清空草稿</button>
+  </form>
+  <form method="post" action="/clear/runs"
+        onsubmit="return confirm('确定要清空运行记录吗？')" style="display:inline">
+    <button type="submit" class="btn small danger">清空运行记录</button>
+  </form>
+</div>
+
 <h2>最近运行</h2>
 {% if runs %}
 <table>

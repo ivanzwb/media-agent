@@ -236,3 +236,36 @@ class Store:
     def delete_setting(self, key: str) -> None:
         self.conn.execute("DELETE FROM settings WHERE key=?", (key,))
         self.conn.commit()
+
+    # ----- clear helpers -----
+
+    def clear_articles(self) -> int:
+        """Delete all articles from DB and remove archive files."""
+        import shutil
+        count = self.conn.execute("SELECT COUNT(*) AS c FROM articles").fetchone()["c"]
+        self.conn.execute("DELETE FROM articles")
+        self.conn.commit()
+        archive = self.config.data_dir / "archive"
+        if archive.exists():
+            shutil.rmtree(str(archive))
+            archive.mkdir(parents=True, exist_ok=True)
+        return count
+
+    def clear_drafts(self) -> int:
+        """Delete all drafts from DB and remove draft files."""
+        import shutil
+        count = self.conn.execute("SELECT COUNT(*) AS c FROM drafts").fetchone()["c"]
+        self.conn.execute("DELETE FROM drafts")
+        self.conn.commit()
+        drafts_dir = self.config.data_dir / "drafts"
+        if drafts_dir.exists():
+            shutil.rmtree(str(drafts_dir))
+            drafts_dir.mkdir(parents=True, exist_ok=True)
+        return count
+
+    def clear_runs(self) -> int:
+        """Delete all run history records."""
+        count = self.conn.execute("SELECT COUNT(*) AS c FROM runs").fetchone()["c"]
+        self.conn.execute("DELETE FROM runs")
+        self.conn.commit()
+        return count

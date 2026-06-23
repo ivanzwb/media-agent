@@ -251,6 +251,26 @@ def create_app(config: Config | None = None,
         run_now()
         return RedirectResponse(url="/", status_code=303)
 
+    # ---- clear data ----
+
+    @app.post("/clear/articles")
+    def clear_articles():
+        store = get_store()
+        n = store.clear_articles()
+        return RedirectResponse(url="/archive?cleared=" + str(n), status_code=303)
+
+    @app.post("/clear/drafts")
+    def clear_drafts():
+        store = get_store()
+        n = store.clear_drafts()
+        return RedirectResponse(url="/drafts?cleared=" + str(n), status_code=303)
+
+    @app.post("/clear/runs")
+    def clear_runs():
+        store = get_store()
+        n = store.clear_runs()
+        return RedirectResponse(url="/?cleared_runs=" + str(n), status_code=303)
+
     @app.post("/drafts/{draft_id}/adapt")
     def draft_adapt(draft_id: int, platform: str = Form(...)):
         store = get_store()

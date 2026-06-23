@@ -149,3 +149,7 @@ textarea, input, select {
 .disabled-row td { opacity: 0.45; text-decoration: line-through; }
 .disabled-row td.actions,
 .disabled-row td:last-child { text-decoration: none; opacity: 1; }
+/* ---- clear actions ---- */
+.clear-actions {
+  display: flex; gap: 8px; margin: 12px 0 8px;
+}
