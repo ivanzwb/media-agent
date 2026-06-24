@@ -52,8 +52,131 @@
   {% endfor %}
 </div>
 
+<h2>讲解视频（分镜脚本 + 配音）</h2>
+<p class="muted">基于正文自动生成口播分镜脚本，并用配置的 TTS 逐段配音（可在「设置」里配 TTS）。视频合成为后续步骤。</p>
+<div class="adapt-row">
+  <button type="button" class="btn primary" id="nar-btn"
+          onclick="startNarration({{ draft.id }})">
+    {{ '重新生成讲解脚本+配音' if narration else '生成讲解脚本+配音' }}
+  </button>
+  <span id="nar-status" class="muted"></span>
+</div>
+<pre id="nar-logs" class="run-logs" style="display:none; max-height:200px; margin-top:10px"></pre>
+
+{% if narration and narration.scenes %}
+<table class="scene-table">
+  <thead><tr><th style="width:40px">#</th><th>旁白</th><th>画面/素材</th><th style="width:220px">配音</th></tr></thead>
+  <tbody>
+  {% for sc in narration.scenes %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{{ sc.narration }}</td>
+      <td class="muted">{{ sc.visual }}{% if sc.media and sc.media != 'none' %} · {{ sc.media }}{% endif %}</td>
+      <td>
+        {% if sc.audio %}
+        <audio controls preload="none" src="/videos/draft-{{ draft.id }}/{{ sc.audio }}"></audio>
+        {% else %}
+        <span class="muted">（无配音{% if sc.audio_error %}：失败{% endif %}）</span>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<div class="adapt-row" style="margin-top:14px">
+  <button type="button" class="btn primary" id="vid-btn"
+          onclick="startVideo({{ draft.id }})">
+    {{ '重新合成讲解视频' if has_video else '合成讲解视频（mp4）' }}
+  </button>
+  <span id="vid-status" class="muted"></span>
+</div>
+<p class="muted" style="margin:6px 0 0">需先「生成讲解脚本+配音」，并本地安装 ffmpeg。</p>
+<pre id="vid-logs" class="run-logs" style="display:none; max-height:200px; margin-top:10px"></pre>
+{% if has_video %}
+<video controls preload="metadata" class="explainer-video"
+       src="/videos/draft-{{ draft.id }}/video.mp4"></video>
+<p><a class="btn small" href="/videos/draft-{{ draft.id }}/video.mp4" download>下载 mp4</a></p>
+{% endif %}
+
 <script>
   var easyMDE = new EasyMDE({ element: document.getElementById('editor'),
     spellChecker: false, autoDownloadFontAwesome: true });
+
+  let narTimer = null;
+  async function pollNarration(draftId) {
+    try {
+      const s = await (await fetch('/api/narration-status?draft_id=' + draftId)).json();
+      const logs = document.getElementById('nar-logs');
+      logs.style.display = 'block';
+      logs.textContent = (s.logs || []).join('\n');
+      logs.scrollTop = logs.scrollHeight;
+      if (s.running) {
+        narTimer = setTimeout(function () { pollNarration(draftId); }, 1200);
+      } else {
+        const btn = document.getElementById('nar-btn');
+        btn.disabled = false;
+        if (s.error) {
+          document.getElementById('nar-status').textContent = '生成失败：' + s.error;
+        } else {
+          document.getElementById('nar-status').textContent = '完成，刷新查看分镜与配音';
+          window.location.reload();
+        }
+      }
+    } catch (e) {
+      narTimer = setTimeout(function () { pollNarration(draftId); }, 2000);
+    }
+  }
+
+  async function startNarration(draftId) {
+    const btn = document.getElementById('nar-btn');
+    btn.disabled = true;
+    document.getElementById('nar-status').textContent = '⏳ 生成中…';
+    try {
+      const data = await (await fetch('/drafts/' + draftId + '/narration', {method: 'POST'})).json();
+      if (data.started === false) {
+        document.getElementById('nar-status').textContent = data.message || '已有任务在进行';
+      }
+    } catch (e) { /* poll will reflect state */ }
+    pollNarration(draftId);
+  }
+
+  let vidTimer = null;
+  async function pollVideo(draftId) {
+    try {
+      const s = await (await fetch('/api/video-status?draft_id=' + draftId)).json();
+      const logs = document.getElementById('vid-logs');
+      logs.style.display = 'block';
+      logs.textContent = (s.logs || []).join('\n');
+      logs.scrollTop = logs.scrollHeight;
+      if (s.running) {
+        vidTimer = setTimeout(function () { pollVideo(draftId); }, 1500);
+      } else {
+        document.getElementById('vid-btn').disabled = false;
+        if (s.error) {
+          document.getElementById('vid-status').textContent = '合成失败：' + s.error;
+        } else {
+          document.getElementById('vid-status').textContent = '完成，刷新查看视频';
+          window.location.reload();
+        }
+      }
+    } catch (e) {
+      vidTimer = setTimeout(function () { pollVideo(draftId); }, 2000);
+    }
+  }
+
+  async function startVideo(draftId) {
+    const btn = document.getElementById('vid-btn');
+    btn.disabled = true;
+    document.getElementById('vid-status').textContent = '⏳ 合成中…';
+    try {
+      const data = await (await fetch('/drafts/' + draftId + '/video', {method: 'POST'})).json();
+      if (data.started === false) {
+        document.getElementById('vid-status').textContent = data.message || '已有任务在进行';
+      }
+    } catch (e) { /* poll will reflect state */ }
+    pollVideo(draftId);
+  }
 </script>
 {% endblock %}

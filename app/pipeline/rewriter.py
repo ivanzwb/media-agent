@@ -29,6 +29,99 @@ CHECK_INSTRUCTION = (
 )
 
 
+_MAX_IMG = 12
+_MAX_VID = 8
+_PLACEHOLDER_RE = re.compile(r"\[{1,2}\s*(IMG|VID)\s*(\d+)\s*\]{1,2}", re.I)
+
+
+def _unique(items: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for it in items:
+        if it and it not in seen:
+            seen.add(it)
+            out.append(it)
+    return out
+
+
+def _hint(url: str) -> str:
+    """A short, human-readable hint for an asset (its file name)."""
+    tail = url.rstrip("/").split("/")[-1].split("?")[0]
+    return (tail or url)[:60]
+
+
+def _video_embed(url: str) -> str:
+    return (f'<iframe src="{url}" width="100%" height="420" '
+            'frameborder="0" allowfullscreen></iframe>\n'
+            f'[▶ 视频链接]({url})')
+
+
+def _build_manifest(images: list[str], videos: list[str]):
+    """Return (manifest_text, media_map) for placeholder-based insertion.
+
+    media_map maps a token like "IMG1" -> ("img"|"vid", url).
+    """
+    imgs = _unique(images or [])[:_MAX_IMG]
+    vids = _unique(videos or [])[:_MAX_VID]
+    media_map: dict[str, tuple[str, str]] = {}
+    lines: list[str] = []
+    if imgs:
+        lines.append(
+            "【可用配图】请在 body_md 中与内容相关的段落之间插入下列占位符"
+            "（每个独占一行，最多用一次，内容不相关就不要插入）：")
+        for i, u in enumerate(imgs, 1):
+            tok = f"IMG{i}"
+            media_map[tok] = ("img", u)
+            lines.append(f"[[{tok}]] - {_hint(u)}")
+    if vids:
+        lines.append("【可用视频】同理用下列占位符：")
+        for i, u in enumerate(vids, 1):
+            tok = f"VID{i}"
+            media_map[tok] = ("vid", u)
+            lines.append(f"[[{tok}]] - {_hint(u)}")
+    if media_map:
+        lines.append(
+            "规则：原样保留占位符文字（如 [[IMG1]]），不要编造不存在的图片/"
+            "视频；未使用的会自动附在文末。")
+    return "\n".join(lines), media_map
+
+
+def _apply_placeholders(body: str, media_map: dict[str, tuple[str, str]]) -> str:
+    """Replace [[IMG1]]/[[VID1]] placeholders with real markdown/embeds.
+
+    Unknown or leftover placeholders are removed.
+    """
+    def repl(m: re.Match) -> str:
+        tok = f"{m.group(1).upper()}{m.group(2)}"
+        item = media_map.get(tok)
+        if not item:
+            return ""
+        kind, url = item
+        if kind == "img":
+            return f"\n\n![]({url})\n\n"
+        return f"\n\n{_video_embed(url)}\n\n"
+
+    return _PLACEHOLDER_RE.sub(repl, body)
+
+
+def _media_block(images: list[str], videos: list[str], existing: str) -> str:
+    """Append original images/videos so they survive the rewrite.
+
+    Skips media whose URL already appears in the rewritten body to avoid
+    duplicates.
+    """
+    imgs = [u for u in _unique(images or []) if u not in existing][:_MAX_IMG]
+    vids = [u for u in _unique(videos or []) if u not in existing][:_MAX_VID]
+    parts: list[str] = []
+    if imgs:
+        parts.append("\n\n## 配图（来自原文）\n")
+        parts.extend(f"![]({u})" for u in imgs)
+    if vids:
+        parts.append("\n\n## 视频（来自原文）\n")
+        parts.extend(_video_embed(u) for u in vids)
+    return "\n".join(parts)
+
+
 def _extract_json(text: str) -> dict | None:
     try:
         return json.loads(text)
@@ -44,9 +137,14 @@ def _extract_json(text: str) -> dict | None:
 
 def rewrite(article: Article, provider: LLMProvider,
             platform: str = "master") -> Draft:
+    videos = getattr(article, "videos", []) or []
+    manifest_text, media_map = _build_manifest(article.images, videos)
+
     rewrite_prompt = REWRITE_INSTRUCTION.format(
         title=article.title, source=article.source_name,
         content=article.content_md[:6000])
+    if manifest_text:
+        rewrite_prompt += "\n\n" + manifest_text
     raw = provider.chat([
         Message(role="system", content=REWRITE_SYSTEM),
         Message(role="user", content=rewrite_prompt),
@@ -59,13 +157,21 @@ def rewrite(article: Article, provider: LLMProvider,
         title_candidates = [article.title]
         body_md = raw
 
+    # Fact-check on the plain rewritten text (strip placeholders so injected
+    # media doesn't confuse the checker).
+    check_text = _PLACEHOLDER_RE.sub("", body_md)
+
+    # Backfill placeholders the LLM inserted with real images/videos, then
+    # append any remaining (unused) media at the end so nothing is lost.
+    body_md = _apply_placeholders(body_md, media_map)
+    media = _media_block(article.images, videos, body_md)
     body_with_source = (
-        f"{body_md}\n\n---\n**信息来源**："
+        f"{body_md}{media}\n\n---\n**信息来源**："
         f"[{article.source_name}]({article.url})\n"
     )
 
     check_prompt = CHECK_INSTRUCTION.format(
-        source_content=article.content_md[:6000], draft=body_md)
+        source_content=article.content_md[:6000], draft=check_text)
     check_raw = provider.chat([Message(role="user", content=check_prompt)])
     check_parsed = _extract_json(check_raw) or {}
     flagged = check_parsed.get("flagged_claims", []) or []

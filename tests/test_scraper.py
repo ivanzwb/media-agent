@@ -26,6 +26,35 @@ def test_discover_links_filters_same_domain_and_pattern():
     assert all("/about" not in l for l in links)
 
 
+NAV_HTML = """
+<html><body>
+<a href="/news/gpt-5-mystery">GPT-5 mystery</a>
+<a href="/news/another-story">Another</a>
+<a href="/policy">Policy</a>
+<a href="/about">About</a>
+<a href="/careers">Careers</a>
+<a href="/pricing">Pricing</a>
+<a href="/files/report.pdf">Report</a>
+</body></html>
+"""
+
+
+def test_discover_links_skips_non_article_pages():
+    # No include_pattern: built-in denylist should still drop junk pages.
+    links = discover_links(NAV_HTML, base_url="https://www.anthropic.com/")
+    assert "https://www.anthropic.com/news/gpt-5-mystery" in links
+    assert "https://www.anthropic.com/news/another-story" in links
+    for junk in ("/policy", "/about", "/careers", "/pricing", "report.pdf"):
+        assert all(junk not in l for l in links), junk
+
+
+def test_discover_links_exclude_pattern():
+    links = discover_links(NAV_HTML, base_url="https://www.anthropic.com/",
+                           exclude_pattern="another")
+    assert "https://www.anthropic.com/news/gpt-5-mystery" in links
+    assert all("another" not in l for l in links)
+
+
 def test_scrape_single_builds_article(monkeypatch):
     def fake_get(url, **kwargs):
         class R:

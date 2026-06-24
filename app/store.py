@@ -52,6 +52,7 @@ class Store:
             "topic": topic,
             "published_at": _iso(article.published_at),
             "images": article.images,
+            "videos": getattr(article, "videos", []) or [],
         })
         abs_path.write_text(frontmatter.dumps(post), encoding="utf-8")
         article.archive_path = str(rel).replace("\\", "/")
@@ -123,6 +124,63 @@ class Store:
     def get_article(self, article_id: int):
         return self.conn.execute(
             "SELECT * FROM articles WHERE id=?", (article_id,)).fetchone()
+
+    def read_article_body(self, article_id: int) -> dict:
+        """Read the archived markdown (front-matter + content) for an article."""
+        row = self.get_article(article_id)
+        if not row or not row["archive_path"]:
+            return {}
+        abs_path = self.config.data_dir / row["archive_path"]
+        if not abs_path.exists():
+            return {}
+        post = frontmatter.load(str(abs_path))
+        meta = dict(post.metadata)
+        meta["content_md"] = post.content
+        return meta
+
+    def update_article_archive(self, article_id: int, content_md: str,
+                               images: list[str], videos: list[str]) -> None:
+        """Rewrite an archive's body + front-matter images/videos (after
+        localizing media to local paths)."""
+        row = self.get_article(article_id)
+        if not row or not row["archive_path"]:
+            return
+        abs_path = self.config.data_dir / row["archive_path"]
+        if not abs_path.exists():
+            return
+        post = frontmatter.load(str(abs_path))
+        post["images"] = images
+        post["videos"] = videos
+        post.content = content_md
+        abs_path.write_text(frontmatter.dumps(post), encoding="utf-8")
+
+    def drafts_by_article(self) -> dict[int, int]:
+        """Map article_id -> a draft id (preferring the master draft)."""
+        rows = self.conn.execute(
+            "SELECT id, article_id, platform FROM drafts ORDER BY id").fetchall()
+        out: dict[int, int] = {}
+        for r in rows:
+            aid = r["article_id"]
+            if aid not in out or r["platform"] == "master":
+                out[aid] = r["id"]
+        return out
+
+    def get_master_draft_for_article(self, article_id: int):
+        return self.conn.execute(
+            "SELECT * FROM drafts WHERE article_id=? AND platform='master' "
+            "ORDER BY id DESC LIMIT 1", (article_id,)).fetchone()
+
+    def delete_draft(self, draft_id: int) -> None:
+        row = self.get_draft(draft_id)
+        if row and row["draft_path"]:
+            abs_path = self.config.data_dir / row["draft_path"]
+            try:
+                if abs_path.exists():
+                    abs_path.unlink()
+            except OSError:
+                pass
+        self.conn.execute("DELETE FROM drafts WHERE id=?", (draft_id,))
+        self.conn.commit()
 
     def list_topics(self):
         rows = self.conn.execute(

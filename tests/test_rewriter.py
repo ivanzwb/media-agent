@@ -48,3 +48,70 @@ def test_rewrite_handles_non_json_gracefully():
     draft = rewrite(sample_article(), provider)
     assert draft.title_candidates
     assert draft.body_md
+
+
+def test_rewrite_preserves_images_and_videos():
+    art = Article(
+        title="New AI Model", content_md="正文",
+        url="https://x.com/a", source_name="X Blog", source_type="scrape",
+        published_at=None, images=["https://x.com/pic1.png"],
+        raw_summary=None, fetched_at=datetime.now(timezone.utc), topic="AI",
+        videos=["https://www.youtube.com/embed/abc123"])
+    rewrite_json = json.dumps({
+        "title_candidates": ["标题"], "body_md": "## 改写正文\n不含图片"})
+    provider = MockProvider(responses=[rewrite_json, json.dumps({"flagged_claims": []})])
+    draft = rewrite(art, provider)
+    assert "https://x.com/pic1.png" in draft.body_md
+    assert "配图（来自原文）" in draft.body_md
+    assert "youtube.com/embed/abc123" in draft.body_md
+    assert "视频（来自原文）" in draft.body_md
+
+
+def test_rewrite_backfills_placeholders_in_body():
+    art = Article(
+        title="t", content_md="c", url="https://x.com/a", source_name="X",
+        source_type="scrape", published_at=None,
+        images=["https://x.com/pic1.png", "https://x.com/pic2.png"],
+        raw_summary=None, fetched_at=datetime.now(timezone.utc), topic="AI",
+        videos=["https://www.youtube.com/embed/abc"])
+    # LLM places IMG1 mid-article and VID1; IMG2 left unused.
+    body = "## 段落一\n讲了背景\n\n[[IMG1]]\n\n## 段落二\n演示视频：\n\n[[VID1]]\n"
+    rewrite_json = json.dumps({"title_candidates": ["标题"], "body_md": body})
+    provider = MockProvider(responses=[rewrite_json, json.dumps({"flagged_claims": []})])
+    draft = rewrite(art, provider)
+    b = draft.body_md
+    # placeholder gone, replaced with real markdown image inline (before 段落二)
+    assert "[[IMG1]]" not in b and "[[VID1]]" not in b
+    assert "![](https://x.com/pic1.png)" in b
+    assert b.index("pic1.png") < b.index("段落二")
+    assert "youtube.com/embed/abc" in b
+    # unused IMG2 still appended at the end under the fallback section
+    assert "pic2.png" in b
+    assert "配图（来自原文）" in b
+
+
+def test_rewrite_drops_unknown_placeholders():
+    art = Article(
+        title="t", content_md="c", url="https://x.com/a", source_name="X",
+        source_type="scrape", published_at=None, images=[], raw_summary=None,
+        fetched_at=datetime.now(timezone.utc), topic="AI")
+    body = "正文 [[IMG9]] 残留占位符应被清除"
+    rewrite_json = json.dumps({"title_candidates": ["标题"], "body_md": body})
+    provider = MockProvider(responses=[rewrite_json, json.dumps({"flagged_claims": []})])
+    draft = rewrite(art, provider)
+    assert "[[IMG9]]" not in draft.body_md
+
+
+def test_rewrite_skips_media_already_in_body():
+    art = Article(
+        title="t", content_md="c", url="https://x.com/a", source_name="X",
+        source_type="scrape", published_at=None,
+        images=["https://x.com/pic1.png"], raw_summary=None,
+        fetched_at=datetime.now(timezone.utc), topic="AI")
+    # body already contains the image -> should not be appended again
+    body = "正文 ![](https://x.com/pic1.png)"
+    rewrite_json = json.dumps({"title_candidates": ["标题"], "body_md": body})
+    provider = MockProvider(responses=[rewrite_json, json.dumps({"flagged_claims": []})])
+    draft = rewrite(art, provider)
+    assert draft.body_md.count("https://x.com/pic1.png") == 1
+    assert "配图（来自原文）" not in draft.body_md

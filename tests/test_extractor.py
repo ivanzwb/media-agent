@@ -17,3 +17,18 @@ def test_extract_collects_images():
     html = FIXTURE.read_text(encoding="utf-8")
     result = extract_from_html(html, url="https://example.com/post")
     assert any("figure1.png" in img for img in result["images"])
+
+
+def test_extract_collects_videos():
+    html = (
+        '<html><body>'
+        '<iframe src="https://www.youtube.com/embed/xyz"></iframe>'
+        '<iframe src="https://ads.example.com/banner"></iframe>'  # not a video
+        '<video><source src="/media/clip.mp4"/></video>'
+        '</body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    vids = result["videos"]
+    assert "https://www.youtube.com/embed/xyz" in vids
+    assert any("clip.mp4" in v for v in vids)  # relative -> absolute
+    assert all("ads.example.com" not in v for v in vids)

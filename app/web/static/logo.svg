@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Media Agent">
+  <defs>
+    <linearGradient id="maGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7c3aed"/>
+      <stop offset="0.5" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#06d6c4"/>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="32" width="448" height="448" rx="112" fill="url(#maGrad)"/>
+  <g fill="none" stroke="#ffffff" stroke-width="22" stroke-linecap="round" stroke-linejoin="round">
+    <!-- speech bubble -->
+    <path d="M168 360
+             C112 360 96 318 96 268
+             C96 196 150 156 232 156
+             C322 156 376 200 376 264
+             C376 322 326 360 248 360
+             L210 360
+             L168 404 Z"/>
+    <!-- broadcast waves -->
+    <path d="M168 232 a40 40 0 0 0 0 64"/>
+    <path d="M150 214 a66 66 0 0 0 0 100"/>
+  </g>
+  <g fill="#ffffff">
+    <!-- broadcast origin dot -->
+    <circle cx="196" cy="264" r="15"/>
+    <!-- neural / molecule nodes -->
+    <circle cx="276" cy="232" r="16"/>
+    <circle cx="338" cy="208" r="14"/>
+    <circle cx="350" cy="280" r="14"/>
+    <circle cx="288" cy="312" r="14"/>
+  </g>
+  <g stroke="#ffffff" stroke-width="14" stroke-linecap="round">
+    <line x1="276" y1="232" x2="338" y2="208"/>
+    <line x1="276" y1="232" x2="350" y2="280"/>
+    <line x1="276" y1="232" x2="288" y2="312"/>
+  </g>
+  <!-- sparkle -->
+  <path d="M372 150
+           C374 168 384 178 402 180
+           C384 182 374 192 372 210
+           C370 192 360 182 342 180
+           C360 178 370 168 372 150 Z" fill="#ffffff"/>
+</svg>

@@ -13,31 +13,40 @@ from app.sources.scraper import scrape_list, scrape_single
 from app.store import Store
 from app.pipeline.classifier import classify
 from app.pipeline.images import attach_cover, inject_image_prompt
+from app.pipeline.localize import localize_article
 from app.pipeline.rewriter import rewrite
 
 
 def collect_sources(feeds: FeedsConfig,
-                    max_per_source: int | None = None) -> list[Article]:
+                    max_per_source: int | None = None,
+                    progress=None) -> list[Article]:
     articles: list[Article] = []
     for src in feeds.sources:
         if not src.enabled:
             continue
+        if progress:
+            progress(f"抓取来源：{src.name}")
         try:
             if src.type == "rss":
                 items = fetch_feed(src.url, src.name)
             elif src.type == "scrape":
                 if src.mode == "list":
                     items = scrape_list(
-                        src.url, src.name, include_pattern=src.include_pattern)
+                        src.url, src.name, include_pattern=src.include_pattern,
+                        exclude_pattern=src.exclude_pattern)
                 else:
                     art = scrape_single(src.url, src.name)
                     items = [art] if art else []
             else:
                 items = []
-        except Exception:
+        except Exception as e:
+            if progress:
+                progress(f"  来源失败：{src.name}（{type(e).__name__}）")
             continue
         if max_per_source:
             items = items[:max_per_source]
+        if progress:
+            progress(f"  {src.name} 获取 {len(items)} 篇")
         articles.extend(items)
     return articles
 
@@ -71,45 +80,72 @@ def _append_prompt(draft: Draft, store: Store) -> None:
     store.update_draft_body(draft.id, titles, body + prompt_block)
 
 
+def _noop(*_args, **_kwargs) -> None:
+    pass
+
+
 def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
                  max_drafts: int = 10,
                  image_provider: ImageProvider | None = None,
                  record: bool = False,
                  max_age_days: int | None = None,
-                 max_per_source: int | None = None) -> dict:
+                 max_per_source: int | None = None,
+                 download_media: bool = False,
+                 progress=None) -> dict:
+    emit = progress or _noop
     stats = {"fetched": 0, "archived": 0, "classified": 0, "drafted": 0}
     run_id = store.record_run() if record else None
 
     try:
-        articles = collect_sources(feeds, max_per_source=max_per_source)
+        emit("开始抓取来源…", stats)
+        articles = collect_sources(feeds, max_per_source=max_per_source,
+                                   progress=lambda m: emit(m, stats))
+        emit(f"抓取完成，共 {len(articles)} 篇，去重中…", stats)
         articles = filter_by_age(articles, max_age_days)
         articles = dedup(articles)
         stats["fetched"] = len(articles)
+        emit(f"去重后 {len(articles)} 篇，开始归档分类…", stats)
 
         new_articles: list[Article] = []
         for art in articles:
             if store.exists(art.fingerprint()):
                 continue
             art.topic = classify(art, feeds.topics, provider)
+            if download_media:
+                emit(f"下载媒体到本地：{art.title[:40]}", stats)
+                try:
+                    localize_article(art, store.config,
+                                     progress=lambda m: emit(m, stats))
+                except Exception as e:  # noqa: BLE001
+                    emit(f"  媒体本地化失败（保留远程链接）：{e}", stats)
             saved = store.save_article(art)
             stats["archived"] += 1
             stats["classified"] += 1
             new_articles.append(saved)
+            emit(f"归档[{art.topic}]：{art.title[:50]}", stats)
 
-        for art in new_articles[:max_drafts]:
-            draft = rewrite(art, provider)
-            saved_draft = store.save_draft(draft)
-            stats["drafted"] += 1
-            if image_provider is not None:
-                attach_cover(saved_draft, image_provider, store.config.images_dir)
-                if saved_draft.cover_image:
-                    store.set_draft_cover(saved_draft.id, saved_draft.cover_image)
+        to_draft = new_articles[:max_drafts]
+        emit(f"新归档 {len(new_articles)} 篇，开始改写 {len(to_draft)} 篇…", stats)
+        for art in to_draft:
+            emit(f"改写中：{art.title[:50]}", stats)
+            try:
+                draft = rewrite(art, provider)
+                saved_draft = store.save_draft(draft)
+                stats["drafted"] += 1
+                if image_provider is not None:
+                    attach_cover(saved_draft, image_provider,
+                                 store.config.images_dir)
+                    if saved_draft.cover_image:
+                        store.set_draft_cover(saved_draft.id,
+                                              saved_draft.cover_image)
+                    else:
+                        _append_prompt(saved_draft, store)
                 else:
-                    # Generation failed — inject prompt placeholder in body
                     _append_prompt(saved_draft, store)
-            else:
-                # No image provider configured — inject prompt placeholder
-                _append_prompt(saved_draft, store)
+                emit(f"  已生成草稿：{art.title[:50]}", stats)
+            except Exception as e:
+                emit(f"  改写失败（已跳过）：{art.title[:40]}（{e}）", stats)
+        emit("流水线完成", stats)
     finally:
         if run_id is not None:
             store.finish_run(run_id, json.dumps(stats, ensure_ascii=False))

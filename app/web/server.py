@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
+import re
+import threading
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -11,12 +15,21 @@ from fastapi.templating import Jinja2Templates
 from app.config import Config
 from app.db import connect, init_db
 from app.discovery import discover_from_url, discover_from_keyword
-from app.feeds import load_feeds, save_feeds, SourceConfig, Topic
+from app.feeds import load_feeds, save_feeds, SourceConfig, Topic, FeedsConfig
 from app.images.base import get_image_provider
 from app.llm.base import get_provider
-from app.models import Draft
+from app.models import Article, Draft
 from app.pipeline.adapter import adapt, PLATFORMS
-from app.pipeline.orchestrator import run_pipeline
+from app.pipeline.images import attach_cover
+from app.pipeline.narration import generate_narration, load_narration
+from app.pipeline.orchestrator import run_pipeline, _append_prompt
+from app.pipeline.recommender import (
+    suggest_subtopics, suggest_keywords, suggest_sources)
+from app.pipeline.localize import localize_one
+from app.pipeline.rewriter import rewrite
+from app.pipeline.video import build_explainer_video, video_path
+from app.sources.extractor import _images_from_html, _videos_from_html
+from app.tts.base import get_tts_provider
 from app.scheduler import start_if_enabled
 from app.store import Store
 
@@ -55,7 +68,7 @@ def create_app(config: Config | None = None,
         init_db(conn)
         return Store(conn, config)
 
-    def run_now():
+    def run_now(progress=None):
         store = get_store()
         # Reload config with DB overrides so settings changes take effect
         run_config = Config.load(store=store)
@@ -72,7 +85,25 @@ def create_app(config: Config | None = None,
         return run_pipeline(
             feeds_cfg, store, provider, image_provider=image_provider,
             record=True, max_age_days=run_config.max_age_days,
-            max_per_source=run_config.max_per_source)
+            max_per_source=run_config.max_per_source,
+            download_media=True, progress=progress)
+
+    # ---- background run state (for live progress / logs) ----
+    run_lock = threading.Lock()
+    run_state = {
+        "running": False, "started_at": None, "finished_at": None,
+        "stats": {}, "logs": [], "error": None,
+    }
+
+    def _log(msg, stats=None):
+        line = f"{datetime.now().strftime('%H:%M:%S')} {msg}"
+        with run_lock:
+            run_state["logs"].append(line)
+            # keep only the most recent lines to bound memory
+            if len(run_state["logs"]) > 500:
+                del run_state["logs"][:-500]
+            if stats is not None:
+                run_state["stats"] = dict(stats)
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
@@ -95,7 +126,86 @@ def create_app(config: Config | None = None,
         topics = store.list_topics()
         return templates.TemplateResponse(request, "archive.html", {
             "articles": articles, "topics": topics,
+            "draft_map": store.drafts_by_article(),
             "current_topic": topic, "active": "archive"})
+
+    @app.get("/archive/{article_id}/view", response_class=HTMLResponse)
+    def archive_view(request: Request, article_id: int):
+        store = get_store()
+        row = store.get_article(article_id)
+        if not row:
+            return HTMLResponse("文章不存在", status_code=404)
+        body = store.read_article_body(article_id)
+        return templates.TemplateResponse(request, "article_view.html", {
+            "article": row, "meta": body,
+            "content_md": body.get("content_md", ""),
+            "images": body.get("images", []) or [],
+            "videos": body.get("videos", []) or [],
+            "active": "archive"})
+
+    @app.post("/archive/{article_id}/refetch")
+    def archive_refetch(article_id: int):
+        from app.sources.scraper import scrape_single
+        store = get_store()
+        row = store.get_article(article_id)
+        if not row:
+            return {"ok": False, "error": "文章不存在"}
+        try:
+            art = scrape_single(row["url"], row["source_name"] or "")
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"抓取失败：{e}"}
+        if not art or not art.content_md:
+            return {"ok": False, "error": "未抓到正文（可能需要登录/JS 渲染）"}
+        store.update_article_archive(article_id, art.content_md, art.images,
+                                     art.videos)
+        return {"ok": True, "images": len(art.images),
+                "videos": len(art.videos)}
+
+    @app.post("/archive/{article_id}/rewrite")
+    def archive_rewrite(article_id: int):
+        store = get_store()
+        row = store.get_article(article_id)
+        if not row:
+            return {"ok": False, "error": "文章不存在"}
+        body = store.read_article_body(article_id)
+        content_md = body.get("content_md", "")
+        images = body.get("images") or _images_from_html(content_md)
+        videos = body.get("videos") or _videos_from_html(
+            content_md, base_url=row["url"])
+
+        art = Article(
+            title=row["title"], content_md=content_md, url=row["url"],
+            source_name=row["source_name"], source_type=row["source_type"],
+            published_at=None, images=images or [], raw_summary=None,
+            fetched_at=datetime.now(tz=timezone.utc), topic=row["topic"],
+            archive_path=row["archive_path"], id=row["id"], videos=videos)
+
+        run_config = Config.load(store=store)
+        provider = get_provider(run_config.llm_provider,
+                                run_config.llm_api_key, run_config.llm_model,
+                                base_url=run_config.llm_api_base)
+        image_provider = get_image_provider(
+            run_config.image_provider,
+            run_config.image_api_key or run_config.llm_api_key,
+            model=run_config.image_model,
+            base_url=run_config.image_api_base or run_config.llm_api_base)
+
+        # Overwrite semantics: replace any existing master draft.
+        old = store.get_master_draft_for_article(article_id)
+        if old:
+            store.delete_draft(old["id"])
+
+        draft = rewrite(art, provider)
+        saved = store.save_draft(draft)
+        if image_provider is not None:
+            attach_cover(saved, image_provider, store.config.images_dir)
+            if saved.cover_image:
+                store.set_draft_cover(saved.id, saved.cover_image)
+            else:
+                _append_prompt(saved, store)
+        else:
+            _append_prompt(saved, store)
+        return {"ok": True, "draft_id": saved.id}
 
     @app.get("/drafts", response_class=HTMLResponse)
     def drafts_list(request: Request, status: str | None = None):
@@ -117,6 +227,8 @@ def create_app(config: Config | None = None,
             "title_candidates_text": "\n".join(title_candidates),
             "body_md": body.get("body_md", ""),
             "flagged_claims": body.get("flagged_claims", []) or [],
+            "narration": load_narration(draft_id, config),
+            "has_video": video_path(draft_id, config) is not None,
             "statuses": ["drafted", "reviewing", "approved", "published"],
             "active": "drafts"})
 
@@ -135,6 +247,99 @@ def create_app(config: Config | None = None,
             return HTMLResponse("not found", status_code=404)
         return FileResponse(str(path))
 
+    @app.get("/videos/{folder}/{name}")
+    def serve_video_asset(folder: str, name: str):
+        # Serve audio/video/script assets from data/videos/<folder>/<name>.
+        base = config.videos_dir.resolve()
+        path = (base / folder / name).resolve()
+        if base not in path.parents or not path.exists():
+            return HTMLResponse("not found", status_code=404)
+        return FileResponse(str(path))
+
+    @app.get("/media/{folder}/{name}")
+    def serve_media_asset(folder: str, name: str):
+        # Serve localized article images/videos from data/media/<folder>/<name>.
+        base = config.media_dir.resolve()
+        path = (base / folder / name).resolve()
+        if base not in path.parents or not path.exists():
+            return HTMLResponse("not found", status_code=404)
+        return FileResponse(str(path))
+
+    # ---- export / import config (sources + settings, no API keys) ----
+    _EXPORT_SETTING_KEYS = [
+        "llm_provider", "llm_model", "llm_api_base",
+        "image_provider", "image_api_base", "image_model",
+        "tts_provider", "tts_api_base", "tts_model", "tts_voice",
+        "max_age_days", "max_per_source", "schedule_cron", "schedule_enabled",
+    ]
+
+    def _source_to_dict(s: SourceConfig) -> dict:
+        entry = {"name": s.name, "type": s.type, "url": s.url,
+                 "topics": s.topics, "enabled": s.enabled}
+        if s.type == "scrape":
+            entry["mode"] = s.mode
+            if s.include_pattern:
+                entry["include_pattern"] = s.include_pattern
+            if s.exclude_pattern:
+                entry["exclude_pattern"] = s.exclude_pattern
+        return entry
+
+    @app.get("/export")
+    def export_config():
+        cfg_feeds = load_feeds(feeds_path) if feeds_path.exists() \
+            else FeedsConfig(topics=[], sources=[])
+        store = get_store()
+        settings = {}
+        for k in _EXPORT_SETTING_KEYS:
+            v = store.get_setting(k)
+            if v is not None and str(v) != "":
+                settings[k] = v
+        payload = {
+            "version": 1,
+            "feeds": {
+                "topics": [{"name": t.name, "keywords": t.keywords}
+                           for t in cfg_feeds.topics],
+                "sources": [_source_to_dict(s) for s in cfg_feeds.sources],
+            },
+            "settings": settings,
+        }
+        data = json.dumps(payload, ensure_ascii=False, indent=2)
+        return Response(
+            content=data, media_type="application/json",
+            headers={"Content-Disposition":
+                     "attachment; filename=media-agent-config.json"})
+
+    @app.post("/import")
+    async def import_config(file: UploadFile = File(...)):
+        try:
+            payload = json.loads((await file.read()).decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return RedirectResponse(url="/settings?import_error=1",
+                                    status_code=303)
+
+        fd = payload.get("feeds") or {}
+        topics = [Topic(name=t.get("name", ""), keywords=t.get("keywords", []))
+                  for t in fd.get("topics", []) if t.get("name")]
+        sources = []
+        for s in fd.get("sources", []):
+            if not s.get("url") or not s.get("name"):
+                continue
+            sources.append(SourceConfig(
+                name=s["name"], type=s.get("type", "rss"), url=s["url"],
+                topics=s.get("topics", []), mode=s.get("mode", "single"),
+                include_pattern=s.get("include_pattern"),
+                exclude_pattern=s.get("exclude_pattern"),
+                enabled=s.get("enabled", True)))
+        if topics or sources:
+            save_feeds(FeedsConfig(topics=topics, sources=sources), feeds_path)
+
+        store = get_store()
+        for k, v in (payload.get("settings") or {}).items():
+            if k.endswith("_api_key") or v is None:  # never import secrets
+                continue
+            store.set_setting(k, str(v))
+        return RedirectResponse(url="/settings?imported=1", status_code=303)
+
     @app.get("/sources", response_class=HTMLResponse)
     def sources_page(request: Request):
         cfg = load_feeds(feeds_path) if feeds_path.exists() else None
@@ -145,12 +350,14 @@ def create_app(config: Config | None = None,
     def sources_add(name: str = Form(...), type: str = Form("rss"),
                     url: str = Form(...), topics: str = Form(""),
                     mode: str = Form("single"),
-                    include_pattern: str = Form("")):
+                    include_pattern: str = Form(""),
+                    exclude_pattern: str = Form("")):
         cfg = load_feeds(feeds_path)
         topic_list = [t.strip() for t in topics.split(",") if t.strip()]
         cfg.sources.append(SourceConfig(
             name=name, type=type, url=url, topics=topic_list, mode=mode,
-            include_pattern=include_pattern or None))
+            include_pattern=include_pattern or None,
+            exclude_pattern=exclude_pattern or None))
         save_feeds(cfg, feeds_path)
         return RedirectResponse(url="/sources", status_code=303)
 
@@ -178,6 +385,44 @@ def create_app(config: Config | None = None,
         topic_list = [t.strip() for t in topics.split(",") if t.strip()]
         _append_sources(discover_from_keyword(keyword, topics=topic_list))
         return RedirectResponse(url="/sources", status_code=303)
+
+    # ---- smart topic recommendation ----
+
+    def _llm_provider():
+        store = get_store()
+        run_config = Config.load(store=store)
+        return get_provider(run_config.llm_provider,
+                            run_config.llm_api_key,
+                            run_config.llm_model,
+                            base_url=run_config.llm_api_base)
+
+    @app.post("/sources/topics/suggest")
+    def topics_suggest(themes: str = Form(...)):
+        theme_list = [t.strip() for t in re.split(r"[,，\n]", themes) if t.strip()]
+        subtopics = suggest_subtopics(theme_list, _llm_provider())
+        return {"themes": theme_list, "subtopics": subtopics}
+
+    @app.post("/sources/topics/keywords")
+    def topics_keywords(subtopic: str = Form(...)):
+        keywords = suggest_keywords(subtopic.strip(), _llm_provider())
+        return {"subtopic": subtopic.strip(), "keywords": keywords}
+
+    @app.post("/sources/suggest-sources")
+    def sources_suggest_frontier(topic: str = Form(...)):
+        candidates = suggest_sources(topic.strip(), _llm_provider())
+        return {"topic": topic.strip(), "candidates": candidates}
+
+    @app.post("/sources/discover-add")
+    def sources_discover_add(url: str = Form(...), topics: str = Form("")):
+        topic_list = [t.strip() for t in topics.split(",") if t.strip()]
+        found = discover_from_url(url, topics=topic_list)
+        if not found:
+            return {"url": url, "added": 0, "found": 0,
+                    "status": "fetch_failed"}
+        added = _append_sources(found)
+        status = "added" if added else "exists"
+        return {"url": url, "added": added, "found": len(found),
+                "status": status}
 
     # ---- topic management ----
 
@@ -215,7 +460,8 @@ def create_app(config: Config | None = None,
     def sources_edit(url: str = Form(...), name: str = Form(...),
                      type: str = Form("rss"), topics: str = Form(""),
                      mode: str = Form("single"),
-                     include_pattern: str = Form("")):
+                     include_pattern: str = Form(""),
+                     exclude_pattern: str = Form("")):
         cfg = load_feeds(feeds_path)
         topic_list = [t.strip() for t in topics.split(",") if t.strip()]
         for s in cfg.sources:
@@ -225,6 +471,7 @@ def create_app(config: Config | None = None,
                 s.topics = topic_list
                 s.mode = mode.strip()
                 s.include_pattern = include_pattern.strip() or None
+                s.exclude_pattern = exclude_pattern.strip() or None
                 break
         save_feeds(cfg, feeds_path)
         return RedirectResponse(url="/sources", status_code=303)
@@ -248,8 +495,208 @@ def create_app(config: Config | None = None,
 
     @app.post("/run")
     def trigger_run():
-        run_now()
-        return RedirectResponse(url="/", status_code=303)
+        with run_lock:
+            if run_state["running"]:
+                return {"started": False, "running": True,
+                        "message": "已有运行正在进行"}
+            run_state.update(running=True, error=None, stats={}, logs=[],
+                             started_at=datetime.now().isoformat(timespec="seconds"),
+                             finished_at=None)
+
+        def worker():
+            try:
+                _log("开始运行流水线")
+                stats = run_now(progress=_log)
+                with run_lock:
+                    if stats:
+                        run_state["stats"] = dict(stats)
+                _log("运行成功结束", run_state["stats"])
+            except Exception as e:  # noqa: BLE001 - surface to UI log
+                with run_lock:
+                    run_state["error"] = str(e)
+                _log(f"运行出错：{e}")
+            finally:
+                with run_lock:
+                    run_state["running"] = False
+                    run_state["finished_at"] = datetime.now().isoformat(
+                        timespec="seconds")
+
+        threading.Thread(target=worker, daemon=True).start()
+        return {"started": True, "running": True}
+
+    @app.get("/api/run-status")
+    def api_run_status():
+        with run_lock:
+            return {
+                "running": run_state["running"],
+                "started_at": run_state["started_at"],
+                "finished_at": run_state["finished_at"],
+                "stats": dict(run_state["stats"]),
+                "logs": list(run_state["logs"]),
+                "error": run_state["error"],
+            }
+
+    # ---- narration / explainer-video generation ----
+    nar_lock = threading.Lock()
+    nar_state = {"running": False, "draft_id": None, "logs": [],
+                 "error": None, "done": False}
+
+    def _nar_log(msg):
+        line = f"{datetime.now().strftime('%H:%M:%S')} {msg}"
+        with nar_lock:
+            nar_state["logs"].append(line)
+            if len(nar_state["logs"]) > 300:
+                del nar_state["logs"][:-300]
+
+    @app.post("/drafts/{draft_id}/narration")
+    def trigger_narration(draft_id: int):
+        with nar_lock:
+            if nar_state["running"]:
+                return {"started": False, "running": True,
+                        "message": "已有生成任务在进行"}
+            nar_state.update(running=True, draft_id=draft_id, logs=[],
+                             error=None, done=False)
+
+        def worker():
+            try:
+                run_config = Config.load(store=get_store())
+                llm = get_provider(run_config.llm_provider,
+                                   run_config.llm_api_key, run_config.llm_model,
+                                   base_url=run_config.llm_api_base)
+                tts = get_tts_provider(
+                    run_config.tts_provider, base_url=run_config.tts_api_base,
+                    api_key=run_config.tts_api_key, model=run_config.tts_model,
+                    voice=run_config.tts_voice)
+                generate_narration(draft_id, get_store(), llm, tts, config,
+                                   progress=_nar_log)
+                with nar_lock:
+                    nar_state["done"] = True
+            except Exception as e:  # noqa: BLE001 - surface to UI
+                with nar_lock:
+                    nar_state["error"] = str(e)
+                _nar_log(f"生成出错：{e}")
+            finally:
+                with nar_lock:
+                    nar_state["running"] = False
+
+        threading.Thread(target=worker, daemon=True).start()
+        return {"started": True, "running": True}
+
+    @app.get("/api/narration-status")
+    def api_narration_status(draft_id: int | None = None):
+        with nar_lock:
+            base = {
+                "running": nar_state["running"],
+                "draft_id": nar_state["draft_id"],
+                "logs": list(nar_state["logs"]),
+                "error": nar_state["error"],
+                "done": nar_state["done"],
+            }
+        if draft_id is not None and not base["running"]:
+            base["script"] = load_narration(draft_id, config)
+        return base
+
+    # ---- localize a single article's media (before transcribing) ----
+    mlz_lock = threading.Lock()
+    mlz_state = {"running": False, "article_id": None, "logs": [],
+                 "error": None, "done": False, "stats": {}}
+
+    def _mlz_log(msg):
+        line = f"{datetime.now().strftime('%H:%M:%S')} {msg}"
+        with mlz_lock:
+            mlz_state["logs"].append(line)
+            if len(mlz_state["logs"]) > 500:
+                del mlz_state["logs"][:-500]
+
+    @app.post("/archive/{article_id}/localize")
+    def trigger_localize(article_id: int):
+        with mlz_lock:
+            if mlz_state["running"]:
+                return {"started": False, "running": True,
+                        "message": "已有本地化任务在进行"}
+            mlz_state.update(running=True, article_id=article_id, logs=[],
+                             error=None, done=False, stats={})
+
+        def worker():
+            try:
+                stats = localize_one(article_id, get_store(), config,
+                                     progress=_mlz_log)
+                with mlz_lock:
+                    mlz_state["stats"] = stats
+                    mlz_state["done"] = True
+            except Exception as e:  # noqa: BLE001
+                with mlz_lock:
+                    mlz_state["error"] = str(e)
+                _mlz_log(f"出错：{e}")
+            finally:
+                with mlz_lock:
+                    mlz_state["running"] = False
+
+        threading.Thread(target=worker, daemon=True).start()
+        return {"started": True, "running": True}
+
+    @app.get("/api/localize-status")
+    def api_localize_status():
+        with mlz_lock:
+            return {
+                "running": mlz_state["running"],
+                "article_id": mlz_state["article_id"],
+                "logs": list(mlz_state["logs"]),
+                "error": mlz_state["error"],
+                "done": mlz_state["done"],
+                "stats": dict(mlz_state["stats"]),
+            }
+
+    # ---- explainer video composition (ffmpeg) ----
+    vid_lock = threading.Lock()
+    vid_state = {"running": False, "draft_id": None, "logs": [],
+                 "error": None, "done": False}
+
+    def _vid_log(msg):
+        line = f"{datetime.now().strftime('%H:%M:%S')} {msg}"
+        with vid_lock:
+            vid_state["logs"].append(line)
+            if len(vid_state["logs"]) > 300:
+                del vid_state["logs"][:-300]
+
+    @app.post("/drafts/{draft_id}/video")
+    def trigger_video(draft_id: int):
+        with vid_lock:
+            if vid_state["running"]:
+                return {"started": False, "running": True,
+                        "message": "已有合成任务在进行"}
+            vid_state.update(running=True, draft_id=draft_id, logs=[],
+                             error=None, done=False)
+
+        def worker():
+            try:
+                build_explainer_video(draft_id, config, progress=_vid_log)
+                with vid_lock:
+                    vid_state["done"] = True
+            except Exception as e:  # noqa: BLE001 - surface to UI
+                with vid_lock:
+                    vid_state["error"] = str(e)
+                _vid_log(f"合成出错：{e}")
+            finally:
+                with vid_lock:
+                    vid_state["running"] = False
+
+        threading.Thread(target=worker, daemon=True).start()
+        return {"started": True, "running": True}
+
+    @app.get("/api/video-status")
+    def api_video_status(draft_id: int | None = None):
+        with vid_lock:
+            base = {
+                "running": vid_state["running"],
+                "draft_id": vid_state["draft_id"],
+                "logs": list(vid_state["logs"]),
+                "error": vid_state["error"],
+                "done": vid_state["done"],
+            }
+        if draft_id is not None:
+            base["has_video"] = video_path(draft_id, config) is not None
+        return base
 
     # ---- clear data ----
 
@@ -310,6 +757,10 @@ def create_app(config: Config | None = None,
         db_image_provider = store.get_setting("image_provider") or ""
         db_image_api_base = store.get_setting("image_api_base") or ""
         db_image_model = store.get_setting("image_model") or ""
+        db_tts_provider = store.get_setting("tts_provider") or ""
+        db_tts_api_base = store.get_setting("tts_api_base") or ""
+        db_tts_model = store.get_setting("tts_model") or ""
+        db_tts_voice = store.get_setting("tts_voice") or ""
         db_max_age_days = store.get_setting("max_age_days") or ""
         db_max_per_source = store.get_setting("max_per_source") or ""
 
@@ -329,6 +780,14 @@ def create_app(config: Config | None = None,
         else:
             img_masked = ""
 
+        # TTS API key mask
+        tts_key_val = store.get_setting("tts_api_key")
+        tts_key_set = bool(tts_key_val and tts_key_val.strip())
+        if tts_key_set:
+            tts_masked = tts_key_val[:4] + "..." + tts_key_val[-4:] if len(tts_key_val) > 8 else "****"
+        else:
+            tts_masked = ""
+
         return templates.TemplateResponse(request, "settings.html", {
             "llm_provider": db_llm_provider or config.llm_provider,
             "llm_model": db_llm_model or (config.llm_model or ""),
@@ -336,6 +795,12 @@ def create_app(config: Config | None = None,
             "image_provider": db_image_provider or (config.image_provider or "mock"),
             "image_api_base": db_image_api_base or (config.image_api_base or ""),
             "image_model": db_image_model or (config.image_model or ""),
+            "tts_provider": db_tts_provider or (config.tts_provider or "kitten"),
+            "tts_api_base": db_tts_api_base or (config.tts_api_base or ""),
+            "tts_model": db_tts_model or (config.tts_model or ""),
+            "tts_voice": db_tts_voice or (config.tts_voice or ""),
+            "tts_key_set": tts_key_set,
+            "tts_key_masked": tts_masked,
             "data_dir": str(config.data_dir),
             "max_age_days": db_max_age_days if db_max_age_days and db_max_age_days != "0" else (
                 str(config.max_age_days) if config.max_age_days is not None and config.max_age_days > 0 else ""),
@@ -358,6 +823,11 @@ def create_app(config: Config | None = None,
                       image_api_key: str = Form(""),
                       image_api_base: str = Form(""),
                       image_model: str = Form(""),
+                      tts_provider: str = Form(""),
+                      tts_api_key: str = Form(""),
+                      tts_api_base: str = Form(""),
+                      tts_model: str = Form(""),
+                      tts_voice: str = Form(""),
                       max_age_days: str = Form(""),
                       max_per_source: str = Form(""),
                       schedule_cron: str = Form(""),
@@ -372,6 +842,10 @@ def create_app(config: Config | None = None,
             "image_provider": image_provider.strip(),
             "image_api_base": image_api_base.strip(),
             "image_model": image_model.strip(),
+            "tts_provider": tts_provider.strip(),
+            "tts_api_base": tts_api_base.strip(),
+            "tts_model": tts_model.strip(),
+            "tts_voice": tts_voice.strip(),
         }
         for db_key, value in str_fields.items():
             if value:
@@ -389,6 +863,11 @@ def create_app(config: Config | None = None,
         img_api_key = image_api_key.strip()
         if img_api_key:
             store.set_setting("image_api_key", img_api_key)
+
+        # TTS API key: only save if explicitly provided
+        tts_api_key = tts_api_key.strip()
+        if tts_api_key:
+            store.set_setting("tts_api_key", tts_api_key)
 
         # Integer fields: only save if explicitly provided
         if max_age_days.strip():

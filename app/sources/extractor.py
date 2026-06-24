@@ -1,12 +1,40 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urljoin
 
 import trafilatura
+
+# Hints that an <iframe> embeds a video (vs. ads / widgets).
+_VIDEO_HINTS = (
+    "youtube.com/embed", "youtube-nocookie.com", "youtu.be",
+    "player.vimeo.com", "vimeo.com/video", "bilibili.com", "player.bilibili",
+    "youku.com", "dailymotion.com/embed", "/embed/", "wistia",
+    "brightcove", "ixigua.com", "v.qq.com",
+)
 
 
 def _images_from_html(html: str) -> list[str]:
     return re.findall(r'<img[^>]+src="([^"]+)"', html)
+
+
+def _videos_from_html(html: str, base_url: str | None = None) -> list[str]:
+    found: list[str] = []
+    for m in re.finditer(r'<iframe[^>]+src=["\']([^"\']+)["\']', html, re.I):
+        src = m.group(1)
+        if any(h in src.lower() for h in _VIDEO_HINTS):
+            found.append(src)
+    for m in re.finditer(r'<(?:video|source)[^>]+src=["\']([^"\']+)["\']',
+                         html, re.I):
+        found.append(m.group(1))
+    out: list[str] = []
+    seen: set[str] = set()
+    for u in found:
+        full = urljoin(base_url, u) if base_url else u
+        if full and full not in seen:
+            seen.add(full)
+            out.append(full)
+    return out
 
 
 def _strip_tags(s: str) -> str:
@@ -38,8 +66,10 @@ def extract_from_html(html: str, url: str) -> dict:
         include_links=True, url=url) or ""
     if not content_md.strip():
         content_md = _content_fallback(html)
+    images = [urljoin(url, u) for u in _images_from_html(html)]
     return {
         "title": _title_from_html(html),
         "content_md": content_md,
-        "images": _images_from_html(html),
+        "images": images,
+        "videos": _videos_from_html(html, base_url=url),
     }

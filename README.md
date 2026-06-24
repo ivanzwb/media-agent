@@ -8,18 +8,23 @@
 
 - **多来源抓取**：RSS 订阅 + 网页爬取（列表页自动发现链接 / 单页抓取），统一为标准文章结构。
 - **去重归档**：URL 规范化 + 标题指纹去重，跨轮次持久化；原文以 Markdown（带 front-matter）落盘，按主题分目录。
+- **媒体本地化**：抓取归档时把文章里的图片（httpx）与视频（yt-dlp）**全部下载到本地** `data/media/<hash>/`，front-matter 记录本地路径 `/media/<hash>/<file>`；后续转写与讲解视频合成直接用本地文件，避免远程防盗链/失效。归档页每篇文章在转写前可点「本地化媒体」按钮单独补下载（已本地化的会跳过）。
 - **主题分类**：关键词优先命中，模糊时用 LLM 零样本分类到既定主题集合。
 - **保真改写**：原文为唯一事实来源，强约束不编造数据/引用/结论；产出候选标题 + 钩子 + 正文 + 来源标注；改写后做事实校验并标红存疑内容。
 - **配图**：原文配图下载 + AI 生成封面（provider 可切换，离线用占位图）。
 - **平台适配**：一键从主稿生成公众号 / 小红书 / 知乎风格的新草稿。
+- **讲解视频（实验）**：从草稿自动生成口播分镜脚本（LLM）→ 用**内置 TTS（默认 `kitten`，中文走 edge-tts，免 API key）**逐段配音 → **ffmpeg 合成图片轮播 + 中文字幕 + 配音的 mp4**，分镜引用到原文视频时用 **yt-dlp 下载原视频片段**作画面（循环铺满、去原声、叠加字幕），在草稿页试听/播放/下载。中文字幕用 PIL 生成画面帧/叠层（规避 ffmpeg 中文字体问题）。合成需本地安装 **ffmpeg**，原视频片段需 **yt-dlp**。
+
+> 版权提示：把第三方视频片段剪入自己的成片并发布可能涉及版权，请自行注明出处或取得授权。
 - **运行控制**：按时间窗（`max_age_days`）与每源条数（`max_per_source`）限制抓取量。
 - **定时调度**：APScheduler cron 定时自动运行。
 - **本地 Web 界面**：仪表盘、归档浏览、草稿 Markdown 编辑审核、来源配置、设置、立即运行。
 - **可切换大模型**：业务代码不绑定厂商；内置 `mock`（离线跑通全链路）与 `openai`，易扩展 DeepSpeed/Claude/本地模型等。
+- **配置导出/导入**：在「设置」页可把来源（主题+来源）与配置导出为 JSON 文件分享/备份，导入可恢复；**导出不含 API Key**，导入也不会写入密钥。
 
 ## 安装
 
-需要 Python 3.11+（已在 3.12 验证）。
+需要 Python 3.11+（已在 3.12 验证）。讲解视频合成需额外安装 [ffmpeg](https://ffmpeg.org)（须在 PATH 中）；中文字幕字体可用 `MEDIA_AGENT_FONT` 指定（默认自动探测微软雅黑/黑体/Noto CJK）。
 
 ```bash
 python -m venv .venv
@@ -71,6 +76,11 @@ sources:
 | `MEDIA_AGENT_LLM_API_KEY` | 大模型 API Key | 无 |
 | `MEDIA_AGENT_LLM_MODEL` | 模型名（如 `gpt-4o-mini`） | provider 默认 |
 | `MEDIA_AGENT_IMAGE_PROVIDER` | `mock` \| `openai` | `mock` |
+| `MEDIA_AGENT_TTS_PROVIDER` | `kitten`（内置，中文走 edge-tts）\| `mock` \| `kitten_http`（外部 Kitten 服务）\| `openai`（兼容） | `kitten` |
+| `MEDIA_AGENT_TTS_API_BASE` | 外部 TTS 服务地址（仅 `kitten_http`/`openai` 需要） | 无 |
+| `MEDIA_AGENT_TTS_API_KEY` | TTS API Key（内置/本地服务可留空） | 无 |
+| `MEDIA_AGENT_TTS_MODEL` | TTS 模型名（openai 兼容用） | `tts-1` |
+| `MEDIA_AGENT_TTS_VOICE` | 音色/风格：`female`/`child`/`male`… 或具体音色名 | `assistant` |
 | `MEDIA_AGENT_MAX_AGE_DAYS` | 只保留 N 天内的文章（空=不限） | 不限 |
 | `MEDIA_AGENT_MAX_PER_SOURCE` | 每个来源最多抓取条数（空=不限） | 不限 |
 

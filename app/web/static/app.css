@@ -21,7 +21,9 @@ body {
   padding: 12px 24px; background: var(--panel);
   border-bottom: 1px solid #2c3a4d; position: sticky; top: 0; z-index: 10;
 }
-.brand { font-weight: 700; font-size: 18px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; color: var(--text); text-decoration: none; }
+.brand-logo { width: 30px; height: 30px; display: block; border-radius: 7px; }
+.brand-name { background: linear-gradient(90deg, #a78bfa, #38bdf8, #06d6c4); -webkit-background-clip: text; background-clip: text; color: transparent; letter-spacing: .2px; }
 .topbar nav { display: flex; gap: 16px; flex: 1; }
 .topbar nav a { color: var(--muted); text-decoration: none; padding: 6px 4px; }
 .topbar nav a.on, .topbar nav a:hover { color: var(--text); border-bottom: 2px solid var(--accent); }
@@ -129,8 +131,80 @@ textarea, input, select {
 .add-form input, .add-form select { flex: 1; min-width: 140px; }
 .draft-list { list-style: none; padding: 0; }
 .draft-list li { padding: 8px 0; border-bottom: 1px solid #2c3a4d; }
-.editor-toolbar a { color: var(--muted) !important; }
-.EasyMDEContainer .CodeMirror { background: var(--panel); color: var(--text); border-color: #3a4a60; }
+/* ---- Markdown editor (EasyMDE) dark theme ---- */
+.EasyMDEContainer .CodeMirror {
+  background: var(--panel); color: var(--text);
+  border-color: var(--border);
+}
+.EasyMDEContainer .CodeMirror-cursor { border-left-color: var(--text); }
+.EasyMDEContainer .CodeMirror-selected { background: #2d3b52 !important; }
+.EasyMDEContainer .editor-toolbar {
+  background: var(--panel2);
+  border-color: var(--border);
+  border-top-left-radius: 6px; border-top-right-radius: 6px;
+  opacity: 1;
+}
+/* toolbar buttons render as <button> (EasyMDE) or <a> (older) */
+.EasyMDEContainer .editor-toolbar button,
+.EasyMDEContainer .editor-toolbar a {
+  color: var(--text) !important;
+  border: 1px solid transparent;
+}
+.EasyMDEContainer .editor-toolbar button:hover,
+.EasyMDEContainer .editor-toolbar a:hover,
+.EasyMDEContainer .editor-toolbar button.active,
+.EasyMDEContainer .editor-toolbar a.active {
+  background: var(--panel);
+  border-color: var(--border);
+  color: #fff !important;
+}
+.EasyMDEContainer .editor-toolbar i.separator {
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--bg);
+}
+.EasyMDEContainer .editor-statusbar { color: var(--muted); }
+.EasyMDEContainer .editor-preview,
+.EasyMDEContainer .editor-preview-side {
+  background: var(--panel); color: var(--text);
+}
+.EasyMDEContainer .editor-preview pre,
+.EasyMDEContainer .editor-preview code {
+  background: var(--panel2);
+}
+/* split preview pane */
+.EasyMDEContainer .editor-preview-side {
+  border-color: var(--border);
+}
+.EasyMDEContainer .CodeMirror-fullscreen,
+.EasyMDEContainer .editor-preview-side {
+  background: var(--panel);
+}
+/* fullscreen mode: toolbar, editor and preview */
+.EasyMDEContainer .editor-toolbar.fullscreen {
+  background: var(--panel2);
+  border-bottom: 1px solid var(--border);
+}
+.EasyMDEContainer .editor-toolbar.fullscreen::before,
+.EasyMDEContainer .editor-toolbar.fullscreen::after {
+  background: none;
+}
+.editor-preview-active-side,
+.editor-preview-side {
+  background: var(--panel) !important; color: var(--text);
+}
+/* links/headings inside preview stay readable on dark bg */
+.EasyMDEContainer .editor-preview a,
+.EasyMDEContainer .editor-preview-side a { color: var(--accent); }
+.EasyMDEContainer .editor-preview h1,
+.EasyMDEContainer .editor-preview h2,
+.EasyMDEContainer .editor-preview h3,
+.EasyMDEContainer .editor-preview-side h1,
+.EasyMDEContainer .editor-preview-side h2,
+.EasyMDEContainer .editor-preview-side h3 { color: var(--text); }
+.EasyMDEContainer .editor-preview blockquote,
+.EasyMDEContainer .editor-preview-side blockquote {
+  color: var(--muted); border-left: 3px solid var(--border);
+}
 /* ---- sources management ---- */
 .actions { white-space: nowrap; }
 .actions .btn { margin-right: 4px; }
@@ -152,4 +226,83 @@ textarea, input, select {
 /* ---- clear actions ---- */
 .clear-actions {
   display: flex; gap: 8px; margin: 12px 0 8px;
+}
+/* ---- smart recommendation ---- */
+.reco {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 16px 18px; margin: 16px 0 24px;
+}
+.reco h2 { margin-top: 0; }
+.reco-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.reco-label { margin: 14px 0 8px; color: var(--muted); font-size: 13px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  cursor: pointer; user-select: none;
+  padding: 5px 12px; border-radius: 999px; font-size: 13px;
+  background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+  transition: all .12s ease;
+}
+.chip:hover { border-color: var(--accent); }
+.chip.on {
+  background: linear-gradient(90deg, #6d28d9, #2563eb);
+  border-color: transparent; color: #fff;
+}
+.reco-group {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 14px; margin-top: 12px; background: var(--panel2);
+}
+.reco-group-head {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin-bottom: 10px;
+}
+.reco-group-head .reco-name { max-width: 220px; }
+.reco-badge { font-size: 12px; }
+.reco-badge.added { color: var(--accent2); }
+.chip.done { opacity: 0.55; cursor: default; border-style: dashed; }
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 12px; background: var(--panel2); color: var(--muted);
+  border: 1px solid var(--border); margin-right: 4px;
+}
+.badge.ok { color: var(--accent2); border-color: var(--accent2); }
+.scene-table { margin-top: 12px; }
+.scene-table td { vertical-align: top; }
+.scene-table audio { width: 210px; height: 32px; }
+.explainer-video { max-width: 100%; margin-top: 12px; border-radius: 8px; border: 1px solid var(--border); }
+/* ---- article (original) preview ---- */
+.article-head { display: flex; gap: 8px; margin-bottom: 12px; }
+.article-body { line-height: 1.75; font-size: 16px; }
+.article-body img { max-width: 100%; height: auto; border-radius: 6px; margin: 12px 0; }
+.article-body h1, .article-body h2, .article-body h3 { margin-top: 24px; }
+.article-body pre, .article-body code { background: var(--panel2); border-radius: 4px; }
+.article-body pre { padding: 12px; overflow-x: auto; }
+.article-body a { color: var(--accent); }
+.article-body blockquote { border-left: 3px solid var(--border); margin: 12px 0; padding-left: 12px; color: var(--muted); }
+.article-video { max-width: 100%; margin: 8px 0; border-radius: 8px; border: 1px solid var(--border); }
+/* ---- live run panel ---- */
+.run-panel {
+  position: fixed; right: 20px; bottom: 20px; z-index: 50;
+  width: min(520px, calc(100vw - 40px)); max-height: 50vh;
+  flex-direction: column;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.45);
+  overflow: hidden;
+}
+.run-panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.run-panel-head > div { display: flex; align-items: center; gap: 12px; }
+.run-stats { color: var(--muted); font-weight: 400; font-size: 13px; }
+.run-close {
+  background: none; border: none; color: var(--muted);
+  font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px;
+}
+.run-close:hover { color: var(--text); }
+.run-logs {
+  margin: 0; padding: 10px 14px; overflow-y: auto; flex: 1;
+  font-size: 12px; line-height: 1.5; white-space: pre-wrap;
+  color: var(--text); background: var(--bg);
+  font-family: "SFMono-Regular", Consolas, monospace;
 }

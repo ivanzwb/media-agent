@@ -20,6 +20,7 @@ class SourceConfig:
     topics: list[str] = field(default_factory=list)
     mode: str = "single"  # for scrape: "list" | "single"
     include_pattern: str | None = None
+    exclude_pattern: str | None = None
     enabled: bool = True
 
 
@@ -42,6 +43,7 @@ def load_feeds(path: Path | str) -> FeedsConfig:
             name=s["name"], type=s["type"], url=s["url"],
             topics=s.get("topics", []), mode=mode,
             include_pattern=s.get("include_pattern"),
+            exclude_pattern=s.get("exclude_pattern"),
             enabled=s.get("enabled", True),
         ))
     return FeedsConfig(topics=topics, sources=sources)
@@ -60,6 +62,8 @@ def save_feeds(config: FeedsConfig, path: Path | str) -> None:
             entry["mode"] = s.mode
             if s.include_pattern:
                 entry["include_pattern"] = s.include_pattern
+            if s.exclude_pattern:
+                entry["exclude_pattern"] = s.exclude_pattern
         data["sources"].append(entry)
     Path(path).write_text(
         yaml.safe_dump(data, allow_unicode=True, sort_keys=False),

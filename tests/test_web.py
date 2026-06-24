@@ -103,10 +103,119 @@ def test_sources_view_and_add(tmp_path):
 
 
 def test_trigger_run(tmp_path):
+    import time
     client, store, _ = make_client(tmp_path)
-    r = client.post("/run", follow_redirects=False)
-    assert r.status_code == 303
+    r = client.post("/run")
+    assert r.status_code == 200
+    assert r.json()["started"] is True
+
+    # Run executes in a background thread; wait for it to finish.
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        status = client.get("/api/run-status").json()
+        if not status["running"] and status["finished_at"]:
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError("run did not finish in time")
+
+    assert status["error"] is None
     assert len(store.list_runs()) == 1
+
+
+def test_archive_shows_rewrite_state(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    art, _draft = seed(store)
+    r = client.get("/archive")
+    assert r.status_code == 200
+    assert "已转写" in r.text  # seeded article already has a draft
+
+
+def test_archive_view_renders_original(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    art, _draft = seed(store)
+    r = client.get(f"/archive/{art.id}/view")
+    assert r.status_code == 200
+    assert "GPT-5 breakthrough" in r.text       # title
+    assert "返回归档" in r.text                   # view chrome
+    assert "article-body" in r.text
+
+
+def test_archive_refetch(tmp_path, monkeypatch):
+    client, store, _ = make_client(tmp_path)
+    art, _draft = seed(store)
+    import app.sources.scraper as scr
+    monkeypatch.setattr(scr, "scrape_single", lambda url, name, **k: Article(
+        title="t2", content_md="# New body\nrefetched", url=url,
+        source_name=name, source_type="scrape", published_at=None,
+        images=["https://i/a.png"], raw_summary=None,
+        fetched_at=datetime.now(timezone.utc), videos=["https://v/b.mp4"]))
+    r = client.post(f"/archive/{art.id}/refetch")
+    assert r.status_code == 200
+    d = r.json()
+    assert d["ok"] is True and d["images"] == 1 and d["videos"] == 1
+    body = store.read_article_body(art.id)
+    assert "New body" in body["content_md"]
+    assert body["videos"] == ["https://v/b.mp4"]
+
+
+def test_archive_rewrite_article(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    art = store.save_article(Article(
+        title="No draft yet", content_md="# Body\nsome facts here",
+        url="https://x.com/b", source_name="OpenAI", source_type="rss",
+        published_at=datetime(2026, 1, 1, tzinfo=timezone.utc), images=[],
+        raw_summary=None, fetched_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        topic="AI"))
+    assert store.get_master_draft_for_article(art.id) is None
+
+    r = client.post(f"/archive/{art.id}/rewrite")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert data["draft_id"]
+    # now there is a master draft for this article
+    assert store.get_master_draft_for_article(art.id) is not None
+    # rewrite again should overwrite (still exactly one master draft)
+    r2 = client.post(f"/archive/{art.id}/rewrite")
+    assert r2.json()["ok"] is True
+    masters = [d for d in store.list_drafts()
+               if d["article_id"] == art.id and d["platform"] == "master"]
+    assert len(masters) == 1
+
+
+def test_export_config(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    r = client.get("/export")
+    assert r.status_code == 200
+    data = r.json()
+    assert "feeds" in data and "settings" in data
+    assert any(t["name"] == "AI" for t in data["feeds"]["topics"])
+
+
+def test_import_config_applies_feeds_and_skips_secrets(tmp_path):
+    import json as _json
+    client, store, feeds = make_client(tmp_path)
+    payload = {
+        "version": 1,
+        "feeds": {
+            "topics": [{"name": "Tech", "keywords": ["x"]}],
+            "sources": [{"name": "S", "type": "rss", "url": "http://s/feed",
+                         "topics": ["Tech"]}],
+        },
+        "settings": {"llm_provider": "openai", "llm_api_key": "sk-secret"},
+    }
+    files = {"file": ("c.json", _json.dumps(payload).encode(), "application/json")}
+    r = client.post("/import", files=files, follow_redirects=False)
+    assert r.status_code == 303
+
+    from app.feeds import load_feeds
+    cfg = load_feeds(feeds)
+    assert any(t.name == "Tech" for t in cfg.topics)
+    assert any(s.url == "http://s/feed" for s in cfg.sources)
+    # non-secret setting imported, API key skipped
+    assert store.get_setting("llm_provider") == "openai"
+    assert not store.get_setting("llm_api_key")
 
 
 def test_settings_ok(tmp_path):

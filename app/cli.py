@@ -56,7 +56,8 @@ def run(feeds: str = typer.Option("feeds.yaml", help="Path to feeds.yaml"),
         feeds_cfg, store, provider, max_drafts=max_drafts,
         image_provider=image_provider, record=True,
         max_age_days=max_age_days or cfg.max_age_days,
-        max_per_source=max_per_source or cfg.max_per_source)
+        max_per_source=max_per_source or cfg.max_per_source,
+        download_media=True)
     typer.echo(json.dumps(stats, ensure_ascii=False))
 
 

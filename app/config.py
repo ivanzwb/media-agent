@@ -40,6 +40,11 @@ class Config:
     image_api_key: str | None = None
     image_api_base: str | None = None
     image_model: str | None = None
+    tts_provider: str | None = None
+    tts_api_base: str | None = None
+    tts_api_key: str | None = None
+    tts_model: str | None = None
+    tts_voice: str | None = None
     max_age_days: int | None = None
     max_per_source: int | None = None
 
@@ -54,6 +59,14 @@ class Config:
     @property
     def images_dir(self) -> Path:
         return self.data_dir / "images"
+
+    @property
+    def videos_dir(self) -> Path:
+        return self.data_dir / "videos"
+
+    @property
+    def media_dir(self) -> Path:
+        return self.data_dir / "media"
 
     @property
     def db_path(self) -> Path:
@@ -72,6 +85,11 @@ class Config:
             image_api_key=os.environ.get("MEDIA_AGENT_IMAGE_API_KEY"),
             image_api_base=os.environ.get("MEDIA_AGENT_IMAGE_API_BASE"),
             image_model=os.environ.get("MEDIA_AGENT_IMAGE_MODEL"),
+            tts_provider=os.environ.get("MEDIA_AGENT_TTS_PROVIDER"),
+            tts_api_base=os.environ.get("MEDIA_AGENT_TTS_API_BASE"),
+            tts_api_key=os.environ.get("MEDIA_AGENT_TTS_API_KEY"),
+            tts_model=os.environ.get("MEDIA_AGENT_TTS_MODEL"),
+            tts_voice=os.environ.get("MEDIA_AGENT_TTS_VOICE"),
             max_age_days=_int_env("MEDIA_AGENT_MAX_AGE_DAYS"),
             max_per_source=_int_env("MEDIA_AGENT_MAX_PER_SOURCE"),
         )
@@ -90,6 +108,11 @@ class Config:
             "image_api_key": "image_api_key",
             "image_api_base": "image_api_base",
             "image_model": "image_model",
+            "tts_provider": "tts_provider",
+            "tts_api_base": "tts_api_base",
+            "tts_api_key": "tts_api_key",
+            "tts_model": "tts_model",
+            "tts_voice": "tts_voice",
         }
         for attr, db_key in str_overrides.items():
             val = store.get_setting(db_key)
@@ -110,5 +133,6 @@ class Config:
                 self.max_per_source = parsed
 
     def ensure_dirs(self) -> None:
-        for d in (self.archive_dir, self.drafts_dir, self.images_dir):
+        for d in (self.archive_dir, self.drafts_dir, self.images_dir,
+                  self.videos_dir, self.media_dir):
             d.mkdir(parents=True, exist_ok=True)

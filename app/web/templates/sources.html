@@ -3,10 +3,32 @@
 {% block content %}
 <h1>来源与主题</h1>
 
+<!-- ====== SMART RECOMMENDATION ====== -->
+<section class="reco">
+  <h2>智能推荐主题</h2>
+  <p class="muted">输入一个或多个大主题（逗号分隔）→ 推荐子主题（可多选）→ 每个子主题分别推荐关键词 → 逐个加为主题，添加后可继续添加其它已推荐的。</p>
+
+  <div class="reco-row">
+    <input id="reco-themes" placeholder="如：科技, 财经" style="max-width:320px"/>
+    <button type="button" class="btn primary" onclick="recoSubtopics()">推荐子主题</button>
+    <label class="muted" style="display:flex;align-items:center;gap:6px">
+      <input type="checkbox" id="reco-discover"/> 添加时同时发现来源
+    </label>
+    <span id="reco-status" class="muted"></span>
+  </div>
+
+  <div id="reco-subtopics-wrap" style="display:none">
+    <div class="reco-label">① 选择子主题（可多选，选中即推荐其关键词）：</div>
+    <div id="reco-subtopics" class="chips"></div>
+  </div>
+
+  <div id="reco-groups"></div>
+</section>
+
 {% if feeds %}
 <!-- ====== TOPICS ====== -->
 <h2>主题</h2>
-<table>
+<table id="topics-table">
   <thead><tr><th>名称</th><th>关键词</th><th style="width:120px">操作</th></tr></thead>
   <tbody>
   {% for t in feeds.topics %}
@@ -15,6 +37,7 @@
       <td class="muted">{{ t.keywords | join(", ") }}</td>
       <td class="actions">
         <button class="btn small" onclick="toggleEdit('topic-edit-{{ loop.index }}')">编辑</button>
+        <button class="btn small" onclick="toggleEdit('topic-src-{{ loop.index }}')">发现来源</button>
         <form method="post" action="/sources/topics/delete" style="display:inline"
               onsubmit="return confirm('确定要删除主题「{{ t.name }}」吗？')">
           <input type="hidden" name="name" value="{{ t.name }}"/>
@@ -33,22 +56,30 @@
         </form>
       </td>
     </tr>
+    <tr id="topic-src-{{ loop.index }}" class="inline-edit" style="display:none">
+      <td colspan="3">
+        <div class="reco-row">
+          <strong>{{ t.name }}</strong> · 前沿来源（公司 / 机构）
+          <button type="button" class="btn primary small"
+                  onclick="topicDiscover('{{ t.name }}', {{ loop.index }})">推荐前沿来源</button>
+          <span id="tsrc-status-{{ loop.index }}" class="muted"></span>
+        </div>
+        <div id="tsrc-cands-{{ loop.index }}" class="chips" style="margin-top:8px"></div>
+        <div class="reco-row" id="tsrc-add-{{ loop.index }}" style="margin-top:8px; display:none">
+          <button type="button" class="btn primary small"
+                  onclick="topicAddSources('{{ t.name }}', {{ loop.index }})">添加选中来源</button>
+        </div>
+      </td>
+    </tr>
   {% endfor %}
   </tbody>
 </table>
 
-<details class="add-section">
-  <summary>＋ 添加主题</summary>
-  <form method="post" action="/sources/topics/add" class="inline-form">
-    <input name="name" placeholder="主题名称（如 AI、物理AI）" required style="max-width:160px"/>
-    <input name="keywords" placeholder="关键词（逗号分隔，如 AI, LLM, GPT）" required style="max-width:320px"/>
-    <button type="submit" class="btn primary small">添加</button>
-  </form>
-</details>
+<p class="muted" style="margin-top:10px">主题通过上方「智能推荐主题」添加；每个主题可在「操作」里一键发现前沿来源。</p>
 
 <!-- ====== SOURCES ====== -->
 <h2>来源</h2>
-<table>
+<table id="sources-table">
   <thead><tr><th>名称</th><th>类型</th><th>URL</th><th>主题</th><th>模式</th><th>状态</th><th style="width:140px">操作</th></tr></thead>
   <tbody>
   {% for s in feeds.sources %}
@@ -91,9 +122,11 @@
             <option value="list" {{ 'selected' if s.mode=='list' else '' }}>list</option>
           </select>
           <input name="include_pattern" value="{{ s.include_pattern or '' }}" placeholder="include_pattern" style="max-width:160px"/>
+          <input name="exclude_pattern" value="{{ s.exclude_pattern or '' }}" placeholder="exclude_pattern" style="max-width:160px"/>
           {% else %}
           <input type="hidden" name="mode" value="single"/>
           <input type="hidden" name="include_pattern" value=""/>
+          <input type="hidden" name="exclude_pattern" value=""/>
           {% endif %}
           <button type="submit" class="btn primary small">保存</button>
           <button type="button" class="btn small" onclick="toggleEdit('src-edit-{{ loop.index }}')">取消</button>
@@ -108,41 +141,207 @@
 {% endif %}
 
 <!-- ====== DISCOVERY ====== -->
-<h2>自动发现来源</h2>
+<h2>手动发现来源</h2>
 <p class="muted">给一个网站地址，自动发现它的 RSS 订阅；找不到则加为网页爬取源。</p>
 <form method="post" action="/sources/discover" class="add-form">
   <input name="url" placeholder="网站/栏目 URL（如 https://openai.com/blog）" required/>
-  <input name="topics" placeholder="主题（逗号分隔）"/>
+  <select name="topics">
+    <option value="">归类到主题…</option>
+    {% for t in feeds.topics %}
+    <option value="{{ t.name }}">{{ t.name }}</option>
+    {% endfor %}
+  </select>
   <button type="submit" class="btn primary">从网址发现</button>
 </form>
 <p class="muted">或按关键词联网搜索相关站点并自动添加（使用 DuckDuckGo，无需 API key）。</p>
 <form method="post" action="/sources/search" class="add-form">
   <input name="keyword" placeholder="关键词（如 physical AI robotics blog）" required/>
-  <input name="topics" placeholder="主题（逗号分隔）"/>
+  <select name="topics">
+    <option value="">归类到主题…</option>
+    {% for t in feeds.topics %}
+    <option value="{{ t.name }}">{{ t.name }}</option>
+    {% endfor %}
+  </select>
   <button type="submit" class="btn primary">按关键词发现</button>
-</form>
-
-<h2>手动新增来源</h2>
-<form method="post" action="/sources/add" class="add-form">
-  <input name="name" placeholder="名称" required/>
-  <select name="type">
-    <option value="rss">rss</option>
-    <option value="scrape">scrape</option>
-  </select>
-  <input name="url" placeholder="URL" required/>
-  <input name="topics" placeholder="主题（逗号分隔）"/>
-  <select name="mode">
-    <option value="single">single</option>
-    <option value="list">list</option>
-  </select>
-  <input name="include_pattern" placeholder="include_pattern（爬取列表用，可选）"/>
-  <button type="submit" class="btn primary">添加</button>
 </form>
 
 <script>
 function toggleEdit(id) {
   var el = document.getElementById(id);
   if (el) el.style.display = el.style.display === 'none' ? 'table-row' : 'none';
+}
+
+async function postForm(url, data) {
+  const body = new URLSearchParams(data);
+  return fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: body,
+  });
+}
+
+function setStatus(msg) { document.getElementById('reco-status').textContent = msg || ''; }
+function escapeAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                  .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+let recoSeq = 0;
+
+async function recoSubtopics() {
+  const themes = document.getElementById('reco-themes').value.trim();
+  if (!themes) { setStatus('请先输入主题'); return; }
+  setStatus('推荐中…');
+  try {
+    const data = await (await postForm('/sources/topics/suggest', {themes})).json();
+    const wrap = document.getElementById('reco-subtopics');
+    wrap.innerHTML = '';
+    document.getElementById('reco-groups').innerHTML = '';
+    (data.subtopics || []).forEach(function (st) {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = st;
+      chip.onclick = function () { toggleSubtopic(chip, st); };
+      wrap.appendChild(chip);
+    });
+    document.getElementById('reco-subtopics-wrap').style.display = 'block';
+    setStatus(data.subtopics && data.subtopics.length ? '' : '没有推荐结果');
+  } catch (e) { setStatus('推荐失败'); }
+}
+
+function toggleSubtopic(chip, subtopic) {
+  chip.classList.toggle('on');
+  if (chip.classList.contains('on')) {
+    addKeywordGroup(subtopic, chip);
+  } else if (chip._group) {
+    chip._group.remove();
+    chip._group = null;
+  }
+}
+
+async function addKeywordGroup(subtopic, chip) {
+  const card = document.createElement('div');
+  card.className = 'reco-group';
+  card.id = 'reco-group-' + (recoSeq++);
+  card.innerHTML =
+    '<div class="reco-group-head">' +
+      '<input class="reco-name" value="' + escapeAttr(subtopic) + '"/>' +
+      '<button type="button" class="btn primary small">＋ 加为主题</button>' +
+      '<span class="reco-badge muted"></span>' +
+    '</div>' +
+    '<div class="chips reco-kw"><span class="muted">加载关键词中…</span></div>';
+  document.getElementById('reco-groups').appendChild(card);
+  if (chip) chip._group = card;
+  card.querySelector('button').onclick = function () { addTopicFromGroup(card); };
+  try {
+    const data = await (await postForm('/sources/topics/keywords', {subtopic})).json();
+    const kwWrap = card.querySelector('.reco-kw');
+    kwWrap.innerHTML = '';
+    (data.keywords || []).forEach(function (kw) {
+      const c = document.createElement('span');
+      c.className = 'chip on';
+      c.textContent = kw;
+      c.onclick = function () { c.classList.toggle('on'); };
+      kwWrap.appendChild(c);
+    });
+  } catch (e) {
+    card.querySelector('.reco-kw').innerHTML = '<span class="muted">关键词推荐失败</span>';
+  }
+}
+
+async function addTopicFromGroup(card) {
+  const name = card.querySelector('.reco-name').value.trim();
+  const badge = card.querySelector('.reco-badge');
+  if (!name) { badge.textContent = '请填写名称'; return; }
+  const keywords = Array.from(card.querySelectorAll('.reco-kw .chip.on'))
+    .map(function (c) { return c.textContent; }).join(', ');
+  badge.textContent = '添加中…';
+  try {
+    await postForm('/sources/topics/add', {name, keywords});
+    if (document.getElementById('reco-discover').checked) {
+      await postForm('/sources/search', {keyword: name, topics: name});
+    }
+    badge.className = 'reco-badge added';
+    badge.textContent = '✓ 已添加';
+    refreshTopicsTable();
+  } catch (e) { badge.textContent = '添加失败'; }
+}
+
+async function refreshTopicsTable() {
+  try {
+    const html = await (await fetch('/sources')).text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const fresh = doc.getElementById('topics-table');
+    const cur = document.getElementById('topics-table');
+    if (fresh && cur) cur.replaceWith(fresh);
+  } catch (e) { /* table refresh is best-effort */ }
+}
+
+// ---- frontier source discovery per topic ----
+function addLabel(data) {
+  if (data.status === 'added') {
+    return '✓ 新增 ' + data.added + (data.found > data.added ? '（其余已存在）' : '');
+  }
+  if (data.status === 'exists') return '· 已存在';
+  if (data.status === 'fetch_failed') return '✗ 抓取失败';
+  return data.added ? ('✓ 新增 ' + data.added) : '✗ 未成功';
+}
+
+async function topicDiscover(topic, idx) {
+  const status = document.getElementById('tsrc-status-' + idx);
+  status.textContent = '推荐中…';
+  try {
+    const data = await (await postForm('/sources/suggest-sources', {topic})).json();
+    const wrap = document.getElementById('tsrc-cands-' + idx);
+    wrap.innerHTML = '';
+    (data.candidates || []).forEach(function (c) {
+      const chip = document.createElement('span');
+      chip.className = 'chip on';
+      chip.textContent = c.name;
+      chip.title = c.url;
+      chip.dataset.url = c.url;
+      chip.onclick = function () { chip.classList.toggle('on'); };
+      wrap.appendChild(chip);
+    });
+    const has = data.candidates && data.candidates.length;
+    document.getElementById('tsrc-add-' + idx).style.display = has ? 'flex' : 'none';
+    status.textContent = has ? '' : '没有推荐结果，可改用下方「按关键词发现」';
+  } catch (e) { status.textContent = '推荐失败'; }
+}
+
+async function topicAddSources(topic, idx) {
+  const status = document.getElementById('tsrc-status-' + idx);
+  const chips = Array.from(
+    document.querySelectorAll('#tsrc-cands-' + idx + ' .chip.on'));
+  if (!chips.length) { status.textContent = '请先选择来源'; return; }
+  let added = 0, done = 0;
+  status.textContent = '添加中… 0/' + chips.length;
+  for (const chip of chips) {
+    try {
+      const data = await (await postForm('/sources/discover-add',
+        {url: chip.dataset.url, topics: topic})).json();
+      added += data.added || 0;
+      chip.classList.remove('on');
+      chip.classList.add('done');
+      chip.textContent = chip.textContent + ' ' + addLabel(data);
+    } catch (e) {
+      chip.textContent = chip.textContent + ' ✗ 请求失败';
+    }
+    done++;
+    status.textContent = '添加中… ' + done + '/' + chips.length;
+  }
+  status.textContent = '完成，共新增 ' + added + ' 个来源';
+  refreshSourcesTable();
+}
+
+async function refreshSourcesTable() {
+  try {
+    const html = await (await fetch('/sources')).text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const fresh = doc.getElementById('sources-table');
+    const cur = document.getElementById('sources-table');
+    if (fresh && cur) cur.replaceWith(fresh);
+  } catch (e) { /* best-effort */ }
 }
 </script>
 {% endblock %}

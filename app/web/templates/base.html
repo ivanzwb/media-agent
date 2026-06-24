@@ -4,12 +4,16 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>{% block title %}Media Agent{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="/static/logo.svg"/>
   <link rel="stylesheet" href="/static/app.css"/>
   {% block head %}{% endblock %}
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">📰 Media Agent</div>
+    <a class="brand" href="/">
+      <img class="brand-logo" src="/static/logo.svg" alt="Media Agent"/>
+      <span class="brand-name">Media Agent</span>
+    </a>
     <nav>
       <a href="/" class="{{ 'on' if active=='dashboard' else '' }}">仪表盘</a>
       <a href="/archive" class="{{ 'on' if active=='archive' else '' }}">归档</a>
@@ -17,12 +21,88 @@
       <a href="/sources" class="{{ 'on' if active=='sources' else '' }}">来源</a>
       <a href="/settings" class="{{ 'on' if active=='settings' else '' }}">设置</a>
     </nav>
-    <form method="post" action="/run" class="run-form">
-      <button type="submit" class="btn primary">▶ 立即运行</button>
-    </form>
+    <div class="run-form">
+      <button id="run-btn" type="button" class="btn primary" onclick="startRun()">▶ 立即运行</button>
+    </div>
   </header>
   <main class="container">
     {% block content %}{% endblock %}
   </main>
+
+  <!-- live run progress / logs -->
+  <div id="run-panel" class="run-panel" style="display:none">
+    <div class="run-panel-head">
+      <span id="run-title">运行中…</span>
+      <div>
+        <span id="run-stats" class="run-stats"></span>
+        <button type="button" class="run-close" onclick="hideRunPanel()">×</button>
+      </div>
+    </div>
+    <pre id="run-logs" class="run-logs"></pre>
+  </div>
+
+  <script>
+  let runPollTimer = null;
+
+  function showRunPanel() { document.getElementById('run-panel').style.display = 'flex'; }
+  function hideRunPanel() { document.getElementById('run-panel').style.display = 'none'; }
+
+  function renderRun(s) {
+    const st = s.stats || {};
+    document.getElementById('run-stats').textContent =
+      '抓取 ' + (st.fetched || 0) + ' · 归档 ' + (st.archived || 0) +
+      ' · 草稿 ' + (st.drafted || 0);
+    const logs = document.getElementById('run-logs');
+    const atBottom = logs.scrollTop + logs.clientHeight >= logs.scrollHeight - 20;
+    logs.textContent = (s.logs || []).join('\n');
+    if (atBottom) logs.scrollTop = logs.scrollHeight;
+
+    const btn = document.getElementById('run-btn');
+    const title = document.getElementById('run-title');
+    if (s.running) {
+      btn.disabled = true;
+      btn.textContent = '⏳ 运行中…';
+      title.textContent = '运行中…';
+    } else {
+      btn.disabled = false;
+      btn.textContent = '▶ 立即运行';
+      title.textContent = s.error ? ('运行失败：' + s.error) : '运行完成';
+    }
+  }
+
+  async function pollRun() {
+    try {
+      const s = await (await fetch('/api/run-status')).json();
+      renderRun(s);
+      if (s.running) {
+        runPollTimer = setTimeout(pollRun, 1200);
+      }
+    } catch (e) {
+      runPollTimer = setTimeout(pollRun, 2000);
+    }
+  }
+
+  async function startRun() {
+    const btn = document.getElementById('run-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ 启动中…';
+    showRunPanel();
+    try {
+      const data = await (await fetch('/run', {method: 'POST'})).json();
+      if (data.started === false) {
+        document.getElementById('run-title').textContent = data.message || '已有运行在进行';
+      }
+    } catch (e) { /* ignore, poll will reflect state */ }
+    pollRun();
+  }
+
+  // On page load, resume the panel if a run is in progress.
+  document.addEventListener('DOMContentLoaded', async function () {
+    try {
+      const s = await (await fetch('/api/run-status')).json();
+      if (s.running) { showRunPanel(); renderRun(s); pollRun(); }
+    } catch (e) { /* ignore */ }
+  });
+  </script>
 </body>
 </html>

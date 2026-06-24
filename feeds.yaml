@@ -1,17 +1,391 @@
 topics:
-  - name: AI
-    keywords: [AI, LLM, AGI, foundation model, GPT, model]
-  - name: 物理AI
-    keywords: [robotics, embodied, world model, physical AI, manipulation]
-
+- name: 人工智能
+  keywords:
+  - 人工智能
+  - Artificial Intelligence
+  - AI
+  - 机器学习
+  - Machine Learning
+  - 深度学习
+  - Deep Learning
+  - 自然语言处理
+  - NLP
+  - 计算机视觉
+  - 生成式AI
+  - Generative AI
+  - AIGC
+  - 大语言模型
+  - LLM
+- name: 大语言模型
+  keywords:
+  - 大语言模型
+  - Large Language Model
+  - LLM
+  - 基础模型
+  - Foundation Model
+  - Transformer
+  - 注意力机制
+  - Attention Mechanism
+  - 提示工程
+  - Prompt Engineering
+  - 思维链
+  - Chain of Thought
+  - CoT
+  - 检索增强生成
+  - RAG
+- name: 具身智能
+  keywords:
+  - 具身智能
+  - Embodied AI
+  - Embodied Intelligence
+  - 人形机器人
+  - Humanoid robot
+  - 物理AI
+  - Physical AI
+  - 空间智能
+  - Spatial Intelligence
+  - 视觉语言动作模型
+  - Vision-Language-Action model
+  - VLA
+  - 强化学习
+  - Reinforcement Learning
+  - 模仿学习
+- name: 脑机接口
+  keywords:
+  - 脑机接口
+  - Brain-Computer Interface
+  - BCI
+  - 神经接口
+  - Neural Interface
+  - 侵入式脑机接口
+  - Invasive BCI
+  - 非侵入式脑机接口
+  - Non-invasive BCI
+  - 半侵入式
+  - 脑电信号
+  - EEG
+  - ECoG
+  - fNIRS
+  - 神经解码
+- name: 半导体芯片
+  keywords:
+  - 半导体
+  - 芯片
+  - 集成电路
+  - 晶圆
+  - 光刻
+  - 先进封装
+  - 制程
+  - 摩尔定律
+  - SoC
+  - GPU
+  - CPU
+  - ASIC
+  - FPGA
+  - 台积电
+  - TSMC
+- name: 虚拟现实
+  keywords:
+  - 虚拟现实
+  - Virtual Reality
+  - VR
+  - VR头显
+  - HMD
+  - 空间计算
+  - Spatial Computing
+  - 元宇宙
+  - Metaverse
+  - Apple Vision Pro
+  - Meta Quest
+  - Pico
+  - PSVR2
+  - HTC Vive
+  - Pancake光学
+- name: 增强现实
+  keywords:
+  - 增强现实
+  - Augmented Reality
+  - AR
+  - 混合现实
+  - Mixed Reality
+  - MR
+  - 扩展现实
+  - XR
+  - 空间计算
+  - Spatial Computing
+  - 智能眼镜
+  - Smart Glasses
+  - AR眼镜
+  - AR头显
+  - SLAM
+- name: 机器人技术
+  keywords:
+  - 机器人技术
+  - Robotics
+  - 具身智能
+  - Embodied AI
+  - 人形机器人
+  - Humanoid Robot
+  - 波士顿动力
+  - Boston Dynamics
+  - 特斯拉擎天柱
+  - Tesla Optimus
+  - 宇树科技
+  - Unitree
+  - Figure AI
+  - 优必选
+  - UBTECH
+- name: 6G通信
+  keywords:
+  - 6G
+  - 第六代移动通信
+  - 6G communication
+  - 6G network
+  - 太赫兹通信
+  - Terahertz communication
+  - THz
+  - 空天地一体化
+  - Space-air-ground integrated network
+  - SAGIN
+  - 通感一体化
+  - ISAC
+  - Integrated Sensing and Communication
+  - 智能超表面
+  - RIS
 sources:
-  - name: OpenAI Blog
-    type: rss
-    url: https://openai.com/blog/rss.xml
-    topics: [AI]
-  - name: Google DeepMind Blog
-    type: scrape
-    mode: list
-    url: https://deepmind.google/discover/blog/
-    include_pattern: /discover/blog/
-    topics: [AI, 物理AI]
+- name: Physical Intelligence (π) – Blog
+  type: scrape
+  url: https://www.physicalintelligence.company/blog
+  topics:
+  - 具身智能
+  enabled: true
+  mode: list
+- name: News | Figure
+  type: scrape
+  url: https://www.figure.ai/news
+  topics:
+  - 具身智能
+  enabled: true
+  mode: list
+- name: Blogs | Boston Dynamics
+  type: scrape
+  url: https://bostondynamics.com/blog/
+  topics:
+  - 具身智能
+  enabled: true
+  mode: list
+- name: News — Synchron
+  type: scrape
+  url: https://www.synchron.com/news
+  topics:
+  - 脑机接口
+  enabled: true
+  mode: list
+- name: Press Releases | Agility
+  type: scrape
+  url: https://agilityrobotics.com/news/
+  topics:
+  - 具身智能
+  enabled: true
+  mode: list
+- name: News — Google DeepMind
+  type: scrape
+  url: https://deepmind.google/discover/blog/
+  topics:
+  - 人工智能
+  enabled: true
+  mode: list
+- name: News | Blackrock Neurotech
+  type: scrape
+  url: https://blackrockneurotech.com/news/
+  topics:
+  - 脑机接口
+  enabled: true
+  mode: list
+- name: Newsroom - Apple
+  type: rss
+  url: https://www.apple.com/newsroom/rss-feed.rss
+  topics:
+  - 增强现实
+  enabled: true
+- name: Newsroom \ Anthropic
+  type: scrape
+  url: https://www.anthropic.com/news
+  topics:
+  - 大语言模型
+  enabled: true
+  mode: list
+- name: Sanctuary AI
+  type: rss
+  url: https://sanctuary.ai/feed/
+  topics: &id001
+  - 具身智能
+  enabled: true
+- name: Sanctuary AI
+  type: rss
+  url: https://sanctuary.ai/comments/feed/
+  topics: *id001
+  enabled: true
+- name: NVIDIA Blog
+  type: rss
+  url: https://blogs.nvidia.com/feed/
+  topics: &id002
+  - 半导体芯片
+  enabled: true
+- name: NVIDIA Blog
+  type: rss
+  url: https://blogs.nvidia.com/comments/feed/
+  topics: *id002
+  enabled: true
+- name: Microsoft Research Blog - Microsoft Research
+  type: rss
+  url: https://www.microsoft.com/en-us/research/feed/
+  topics:
+  - 人工智能
+  enabled: true
+- name: PlayStation.Blog &#8211; Official PlayStation Blog for news and video updates
+    on
+  type: rss
+  url: http://feeds.feedburner.com/psblog
+  topics:
+  - 虚拟现实
+  enabled: true
+- name: News | ASML - Supplying the semiconductor industry
+  type: scrape
+  url: https://www.asml.com/en/news
+  topics:
+  - 半导体芯片
+  enabled: true
+  mode: list
+- name: HTC Vive博客 | VR虚拟现实设备 | HTC Vive中国 - 新鲜VR虚拟现实现实设备资讯尽在HTC Vive中国 博客栏目。
+  type: scrape
+  url: https://blog.htcvive.com/
+  topics:
+  - 虚拟现实
+  enabled: true
+  mode: list
+- name: Intel Newsroom Home
+  type: rss
+  url: https://newsroom.intel.com/feed
+  topics: &id003
+  - 半导体芯片
+  enabled: true
+- name: Intel Newsroom Home
+  type: rss
+  url: https://newsroom.intel.com/comments/feed
+  topics: *id003
+  enabled: true
+- name: Valve Corporation
+  type: scrape
+  url: https://www.valvesoftware.com/en/news
+  topics:
+  - 虚拟现实
+  enabled: true
+  mode: list
+- name: News | Stanford HAI
+  type: scrape
+  url: https://hai.stanford.edu/news
+  topics:
+  - 人工智能
+  enabled: true
+  mode: list
+- name: 最新消息與活動 – Niantic Labs
+  type: scrape
+  url: https://nianticlabs.com/news/
+  topics:
+  - 增强现实
+  enabled: true
+  mode: list
+- name: Qualcomm Technology News &amp; Trends | Qualcomm
+  type: scrape
+  url: https://www.qualcomm.com/news
+  topics:
+  - 虚拟现实
+  enabled: true
+  mode: list
+- name: The Berkeley Artificial Intelligence Research Blog
+  type: rss
+  url: https://bair.berkeley.edu/blog/feed.xml
+  topics:
+  - 人工智能
+  enabled: true
+- name: www.picoxr.com
+  type: scrape
+  url: https://www.picoxr.com/global/news
+  topics:
+  - 虚拟现实
+  enabled: true
+  mode: list
+- name: Newsroom | Magic Leap | Augmented Reality Optics News
+  type: scrape
+  url: https://www.magicleap.com/news
+  topics:
+  - 增强现实
+  enabled: true
+  mode: list
+- name: XREAL News | News and Announcements
+  type: scrape
+  url: https://xreal.com/news/
+  topics:
+  - 增强现实
+  enabled: true
+  mode: list
+- name: News - BrainGate
+  type: rss
+  url: https://www.braingate.org/feed/
+  topics:
+  - 脑机接口
+  enabled: true
+- name: News - Wyss Center for Bio and Neuroengineering
+  type: scrape
+  url: https://wysscenter.ch/news/
+  topics:
+  - 脑机接口
+  enabled: true
+  mode: list
+- name: News Archive - Arm Newsroom
+  type: rss
+  url: https://newsroom.arm.com/news/feed/
+  topics:
+  - 半导体芯片
+  enabled: true
+- name: Blog - IBM Research
+  type: rss
+  url: https://research.ibm.com/rss
+  topics:
+  - 半导体芯片
+  enabled: true
+- name: Newsroom - Huawei
+  type: scrape
+  url: https://www.huawei.com/en/news
+  topics:
+  - 6G通信
+  enabled: true
+  mode: list
+- name: News | Boston Dynamics
+  type: scrape
+  url: https://www.bostondynamics.com/news
+  topics:
+  - 机器人技术
+  enabled: true
+  mode: list
+- name: News Center - Unitree Robotics
+  type: scrape
+  url: https://www.unitree.com/news
+  topics:
+  - 机器人技术
+  enabled: true
+  mode: list
+- name: '- Archives Page 1 | NVIDIA Blog'
+  type: rss
+  url: https://blogs.nvidia.com/blog/category/robotics/feed/
+  topics:
+  - 机器人技术
+  enabled: true
+- name: Press - ZTE Press Release - ZTE Offical Website
+  type: scrape
+  url: https://www.zte.com.cn/global/about/news.html
+  topics:
+  - 6G通信
+  enabled: true
+  mode: list

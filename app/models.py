@@ -44,6 +44,7 @@ class Article:
     topic: str | None = None
     archive_path: str | None = None
     id: int | None = None
+    videos: list[str] = field(default_factory=list)
 
     def normalized_url(self) -> str:
         parts = urlparse(self.url)

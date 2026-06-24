@@ -88,6 +88,56 @@
   </fieldset>
 
   <fieldset>
+    <legend>语音合成（TTS · 用于讲解视频配音）</legend>
+
+    <div class="field">
+      <label for="tts_provider">TTS Provider <span class="env-hint">MEDIA_AGENT_TTS_PROVIDER</span></label>
+      <select name="tts_provider" id="tts_provider">
+        <option value="kitten" {{ 'selected' if tts_provider in ['kitten','local'] or not tts_provider else '' }}>kitten（内置·中文 edge-tts，默认，无需外部服务）</option>
+        <option value="mock" {{ 'selected' if tts_provider == 'mock' else '' }}>mock（离线占位静音）</option>
+        <option value="kitten_http" {{ 'selected' if tts_provider == 'kitten_http' else '' }}>kitten_http（连接外部 Kitten 服务）</option>
+        <option value="openai" {{ 'selected' if tts_provider in ['openai','http','openai_compatible'] else '' }}>openai 兼容 / 本地 HTTP</option>
+      </select>
+      <span class="field-desc">默认 kitten 已内置进程内合成（中文走 edge-tts，需联网、无需 API key）；kitten_http 连外部 3003 服务；openai 兼容请求 <code>{base}/audio/speech</code></span>
+    </div>
+
+    <div class="field">
+      <label for="tts_api_base">TTS API Endpoint <span class="env-hint">MEDIA_AGENT_TTS_API_BASE</span></label>
+      <input type="text" name="tts_api_base" id="tts_api_base"
+             value="{{ tts_api_base }}" placeholder="仅 kitten_http / openai 兼容需要，如 http://127.0.0.1:3003"/>
+      <span class="field-desc">内置 kitten 无需填此项；连外部服务时填其根地址</span>
+    </div>
+
+    <div class="field">
+      <label for="tts_api_key">TTS API Key <span class="env-hint">MEDIA_AGENT_TTS_API_KEY</span></label>
+      <div class="api-key-row">
+        <input type="password" name="tts_api_key" id="tts_api_key"
+               placeholder="{% if tts_key_set %}留空则不修改{% else %}本地服务可留空{% endif %}"
+               autocomplete="off"/>
+        {% if tts_key_set %}
+        <span class="key-badge set">已设置</span>
+        <code class="key-masked">{{ tts_key_masked }}</code>
+        {% else %}
+        <span class="key-badge unset">未设置</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="tts_model">TTS Model <span class="env-hint">MEDIA_AGENT_TTS_MODEL</span></label>
+      <input type="text" name="tts_model" id="tts_model"
+             value="{{ tts_model }}" placeholder="openai 兼容用，如 tts-1（kitten 可留空）"/>
+    </div>
+
+    <div class="field">
+      <label for="tts_voice">TTS Voice / Profile <span class="env-hint">MEDIA_AGENT_TTS_VOICE</span></label>
+      <input type="text" name="tts_voice" id="tts_voice"
+             value="{{ tts_voice }}" placeholder="kitten 风格：child/female/female_warm/male/male_deep/assistant，或具体音色名"/>
+      <span class="field-desc">Kitten：填风格 profile（如 female）或具体音色名（如 Luna）；openai 兼容：填 voice（如 alloy）</span>
+    </div>
+  </fieldset>
+
+  <fieldset>
     <legend>采集限制</legend>
 
     <div class="field">
@@ -141,4 +191,24 @@
     <span class="muted" style="margin-left:12px">大部分设置在下次运行或重启服务时生效</span>
   </div>
 </form>
+
+<fieldset class="settings-form" style="margin-top:24px">
+  <legend>导出 / 导入配置</legend>
+  <p class="field-desc">导出来源（主题与来源）与配置为一个 JSON 文件，便于分享或备份。
+    <strong>不含 API Key</strong>，导入时也不会写入密钥。</p>
+  {% if request.query_params.get('imported') %}
+  <p class="badge ok">✓ 导入成功（定时设置需重启服务生效）</p>
+  {% elif request.query_params.get('import_error') %}
+  <p class="badge" style="color:#fca5a5;border-color:#991b1b">✗ 导入失败：文件格式不正确</p>
+  {% endif %}
+  <div class="adapt-row">
+    <a class="btn" href="/export">导出配置</a>
+    <form method="post" action="/import" enctype="multipart/form-data"
+          style="display:flex; gap:8px; align-items:center; margin:0">
+      <input type="file" name="file" accept="application/json,.json" required/>
+      <button type="submit" class="btn primary"
+              onclick="return confirm('导入会覆盖现有来源与配置，确定吗？')">导入</button>
+    </form>
+  </div>
+</fieldset>
 {% endblock %}

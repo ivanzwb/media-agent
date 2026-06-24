@@ -6,7 +6,10 @@ from time import mktime
 import feedparser
 import httpx
 
+from urllib.parse import urljoin
+
 from app.models import Article
+from app.sources.extractor import _images_from_html, _videos_from_html
 
 
 def _to_dt(entry) -> datetime | None:
@@ -26,16 +29,19 @@ def parse_feed(xml: str, source_name: str) -> list[Article]:
         content_md = ""
         if getattr(entry, "content", None):
             content_md = entry.content[0].get("value", "")
+        body_html = content_md or summary or ""
+        link = getattr(entry, "link", "")
         articles.append(Article(
             title=getattr(entry, "title", "").strip(),
-            content_md=content_md or summary or "",
-            url=getattr(entry, "link", ""),
+            content_md=body_html,
+            url=link,
             source_name=source_name,
             source_type="rss",
             published_at=_to_dt(entry),
-            images=[],
+            images=[urljoin(link, u) for u in _images_from_html(body_html)],
             raw_summary=summary,
             fetched_at=now,
+            videos=_videos_from_html(body_html, base_url=link),
         ))
     return articles
 

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}原文 · {{ article.title }}{% endblock %}
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+{% endblock %}
+{% block content %}
+<div class="article-head">
+  <a class="btn small" href="/archive">← 返回归档</a>
+  <a class="btn small" href="{{ article.url }}" target="_blank" rel="noopener">原始链接 ↗</a>
+</div>
+
+<h1>{{ article.title }}</h1>
+<p class="muted">
+  来源：{{ article.source_name }} · 主题：{{ article.topic }} ·
+  {{ article.published_at or article.fetched_at }}
+</p>
+
+<article id="article-body" class="article-body"></article>
+
+{% if videos %}
+<h2>视频</h2>
+<div class="article-videos">
+  {% for v in videos %}
+    {% if v.startswith('/media/') or v.endswith('.mp4') or v.endswith('.webm') or v.endswith('.mov') %}
+    <video controls preload="metadata" src="{{ v }}" class="article-video"></video>
+    {% else %}
+    <p><a href="{{ v }}" target="_blank" rel="noopener">▶ 视频链接：{{ v }}</a></p>
+    {% endif %}
+  {% endfor %}
+</div>
+{% endif %}
+
+<script>
+  var md = {{ content_md | tojson }};
+  document.getElementById('article-body').innerHTML =
+    (window.marked ? marked.parse(md) : md.replace(/\n/g, '<br>'));
+</script>
+{% endblock %}
