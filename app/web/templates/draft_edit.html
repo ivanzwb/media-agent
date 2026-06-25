@@ -3,6 +3,7 @@
 {% block head %}
 <link rel="stylesheet" href="https://unpkg.com/easymde/dist/easymde.min.css"/>
 <script src="https://unpkg.com/easymde/dist/easymde.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 {% endblock %}
 {% block content %}
 <h1>编辑草稿 #{{ draft.id }}</h1>
@@ -101,8 +102,35 @@
 {% endif %}
 
 <script>
-  var easyMDE = new EasyMDE({ element: document.getElementById('editor'),
-    spellChecker: false, autoDownloadFontAwesome: true });
+  if (window.marked && marked.setOptions) {
+    marked.setOptions({ gfm: true, breaks: false });
+  }
+
+  // Render markdown for the live preview, matching the article view styling.
+  function renderDraftPreview(plainText) {
+    // Turn :::image-prompt ... ::: custom blocks into a readable callout so
+    // they don't break the preview.
+    var text = (plainText || '').replace(
+      /:::image-prompt\s*\n([\s\S]*?)\n:::/g,
+      function (_m, inner) { return '> 🎨 **配图提示**：' + inner.trim() + '\n'; }
+    );
+    var html = window.marked ? marked.parse(text)
+      : text.replace(/\n/g, '<br>');
+    return '<div class="article-body">' + html + '</div>';
+  }
+
+  var easyMDE = new EasyMDE({
+    element: document.getElementById('editor'),
+    spellChecker: false,
+    autoDownloadFontAwesome: true,
+    sideBySideFullscreen: false,
+    renderingConfig: { singleLineBreaks: false, codeSyntaxHighlighting: false },
+    previewRender: function (plainText) { return renderDraftPreview(plainText); },
+  });
+  // Open side-by-side live preview by default.
+  try {
+    if (!easyMDE.isSideBySideActive()) { easyMDE.toggleSideBySide(); }
+  } catch (e) { /* ignore */ }
 
   let narTimer = null;
   async function pollNarration(draftId) {
