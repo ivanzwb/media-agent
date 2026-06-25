@@ -147,7 +147,7 @@ def build_explainer_video(draft_id: int, config: Config, progress=None) -> Path:
 
     out = work / "video.mp4"
     build_video(script, work, image_map, out, progress=emit,
-                video_map=video_map)
+                video_map=video_map, fit=(config.video_fit or "fit"))
     return out
 
 

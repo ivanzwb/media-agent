@@ -48,6 +48,7 @@ class Config:
     max_age_days: int | None = None
     max_per_source: int | None = None
     download_workers: int | None = None
+    video_fit: str | None = None  # fit | crop | blur
 
     @property
     def archive_dir(self) -> Path:
@@ -101,6 +102,7 @@ class Config:
             max_age_days=_int_env("MEDIA_AGENT_MAX_AGE_DAYS"),
             max_per_source=_int_env("MEDIA_AGENT_MAX_PER_SOURCE"),
             download_workers=_int_env("MEDIA_AGENT_DOWNLOAD_WORKERS"),
+            video_fit=os.environ.get("MEDIA_AGENT_VIDEO_FIT_MODE"),
         )
         if store is not None:
             config._apply_db_overrides(store)
@@ -122,6 +124,7 @@ class Config:
             "tts_api_key": "tts_api_key",
             "tts_model": "tts_model",
             "tts_voice": "tts_voice",
+            "video_fit": "video_fit",
         }
         for attr, db_key in str_overrides.items():
             val = store.get_setting(db_key)

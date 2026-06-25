@@ -163,6 +163,16 @@
              min="1" step="1" style="max-width:200px"/>
       <span class="field-desc">来源抓取与图片/视频下载的并发数。留空默认 CPU 核数（{{ default_workers }}）；遇目标站限流可调小</span>
     </div>
+
+    <div class="field">
+      <label for="video_fit">讲解视频画面适配 <span class="env-hint">MEDIA_AGENT_VIDEO_FIT_MODE</span></label>
+      <select name="video_fit" id="video_fit" style="max-width:240px">
+        <option value="fit" {{ 'selected' if video_fit == 'fit' else '' }}>fit（完整显示，黑边填充）</option>
+        <option value="crop" {{ 'selected' if video_fit == 'crop' else '' }}>crop（铺满裁剪边缘）</option>
+        <option value="blur" {{ 'selected' if video_fit == 'blur' else '' }}>blur（完整显示，模糊背景填充）</option>
+      </select>
+      <span class="field-desc">合成讲解视频时图片/原视频如何放入 16:9 画面。fit 保留完整画面（推荐）；crop 会裁掉非 16:9 素材的边缘</span>
+    </div>
   </fieldset>
 
   <fieldset>

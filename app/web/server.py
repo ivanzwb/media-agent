@@ -271,7 +271,7 @@ def create_app(config: Config | None = None,
         "llm_provider", "llm_model", "llm_api_base",
         "image_provider", "image_api_base", "image_model",
         "tts_provider", "tts_api_base", "tts_model", "tts_voice",
-        "max_age_days", "max_per_source", "download_workers",
+        "max_age_days", "max_per_source", "download_workers", "video_fit",
         "schedule_cron", "schedule_enabled",
     ]
 
@@ -766,6 +766,7 @@ def create_app(config: Config | None = None,
         db_max_age_days = store.get_setting("max_age_days") or ""
         db_max_per_source = store.get_setting("max_per_source") or ""
         db_download_workers = store.get_setting("download_workers") or ""
+        db_video_fit = store.get_setting("video_fit") or ""
 
         # API key: indicate whether set, mask the value
         api_key_val = store.get_setting("llm_api_key")
@@ -812,6 +813,7 @@ def create_app(config: Config | None = None,
             "download_workers": db_download_workers if db_download_workers and db_download_workers != "0" else (
                 str(config.download_workers) if config.download_workers else ""),
             "default_workers": os.cpu_count() or 4,
+            "video_fit": db_video_fit or (config.video_fit or "fit"),
             "api_key_set": api_key_set,
             "api_key_masked": masked,
             "img_key_set": img_key_set,
@@ -837,6 +839,7 @@ def create_app(config: Config | None = None,
                       max_age_days: str = Form(""),
                       max_per_source: str = Form(""),
                       download_workers: str = Form(""),
+                      video_fit: str = Form(""),
                       schedule_cron: str = Form(""),
                       schedule_enabled: str = Form("0")):
         store = get_store()
@@ -853,6 +856,7 @@ def create_app(config: Config | None = None,
             "tts_api_base": tts_api_base.strip(),
             "tts_model": tts_model.strip(),
             "tts_voice": tts_voice.strip(),
+            "video_fit": video_fit.strip(),
         }
         for db_key, value in str_fields.items():
             if value:

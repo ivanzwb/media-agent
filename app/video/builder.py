@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 W, H = 1280, 720
 _BG = (15, 20, 28)
@@ -77,10 +77,43 @@ def _draw_subtitle(canvas: Image.Image, text: str, max_lines: int = 6) -> None:
         y += line_h
 
 
+def _cover(im: Image.Image) -> Image.Image:
+    """Scale to cover 1280x720 then center-crop (may lose edges)."""
+    scale = max(W / im.width, H / im.height)
+    im = im.resize((max(1, int(im.width * scale)),
+                    max(1, int(im.height * scale))))
+    left = (im.width - W) // 2
+    top = (im.height - H) // 2
+    return im.crop((left, top, left + W, top + H))
+
+
+def _contain(im: Image.Image) -> Image.Image:
+    """Scale to fit inside 1280x720 (whole image visible)."""
+    scale = min(W / im.width, H / im.height)
+    return im.resize((max(1, int(im.width * scale)),
+                      max(1, int(im.height * scale))))
+
+
+def _fit_image(im: Image.Image, fit: str) -> Image.Image:
+    """Place `im` onto a 1280x720 canvas per fit mode (crop|fit|blur)."""
+    if fit == "crop":
+        return _cover(im)
+    if fit == "blur":
+        bg = _cover(im).filter(ImageFilter.GaussianBlur(20))
+        fg = _contain(im)
+        bg.paste(fg, ((W - fg.width) // 2, (H - fg.height) // 2))
+        return bg
+    # fit (default): whole image centered, letterboxed on a dark canvas
+    canvas = Image.new("RGB", (W, H), _BG)
+    fg = _contain(im)
+    canvas.paste(fg, ((W - fg.width) // 2, (H - fg.height) // 2))
+    return canvas
+
+
 def render_frame(text: str, out_png: Path, bg_image: Path | None = None,
-                 max_lines: int = 6) -> Path:
-    """Render one 1280x720 caption frame: optional background image (center-
-    cropped) + a translucent bottom band with the narration text."""
+                 max_lines: int = 6, fit: str = "fit") -> Path:
+    """Render one 1280x720 caption frame: optional background image (placed by
+    `fit` mode) + a translucent bottom band with the narration text."""
     out_png = Path(out_png)
     out_png.parent.mkdir(parents=True, exist_ok=True)
     canvas = Image.new("RGB", (W, H), _BG)
@@ -88,12 +121,7 @@ def render_frame(text: str, out_png: Path, bg_image: Path | None = None,
     if bg_image and Path(bg_image).exists():
         try:
             im = Image.open(bg_image).convert("RGB")
-            scale = max(W / im.width, H / im.height)
-            im = im.resize((max(1, int(im.width * scale)),
-                            max(1, int(im.height * scale))))
-            left = (im.width - W) // 2
-            top = (im.height - H) // 2
-            canvas.paste(im.crop((left, top, left + W, top + H)), (0, 0))
+            canvas = _fit_image(im, fit)
         except OSError:
             pass
 
@@ -153,14 +181,31 @@ def _make_clip(frame_png: Path, audio: Path | None, duration: float,
               "-ac", "2", str(out_mp4)])
 
 
+def _video_bg_filter(fit: str) -> str:
+    """Build the ffmpeg filter for the looped source video background, ending
+    in [bg], honoring the fit mode (crop|fit|blur)."""
+    if fit == "crop":
+        return ("[0:v]scale=1280:720:force_original_aspect_ratio=increase,"
+                "crop=1280:720,setsar=1,fps=30[bg]")
+    if fit == "blur":
+        return ("[0:v]split=2[a][b];"
+                "[a]scale=1280:720:force_original_aspect_ratio=increase,"
+                "crop=1280:720,boxblur=20:5[bgb];"
+                "[b]scale=1280:720:force_original_aspect_ratio=decrease[fg];"
+                "[bgb][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30[bg]")
+    # fit (default): whole frame visible, letterboxed
+    return ("[0:v]scale=1280:720:force_original_aspect_ratio=decrease,"
+            "pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black,"
+            "setsar=1,fps=30[bg]")
+
+
 def _make_video_clip(src_video: Path, overlay_png: Path, audio: Path | None,
-                     duration: float, out_mp4: Path) -> None:
-    """Use a (looped) source video clip as the background, scaled/cropped to
-    1280x720, original audio dropped, our subtitle overlaid, and our narration
-    audio as the soundtrack."""
+                     duration: float, out_mp4: Path, fit: str = "fit") -> None:
+    """Use a (looped) source video clip as the background (placed per `fit`),
+    original audio dropped, our subtitle overlaid, and our narration audio as
+    the soundtrack."""
     dur = f"{max(1.0, duration):.2f}"
-    vf = ("[0:v]scale=1280:720:force_original_aspect_ratio=increase,"
-          "crop=1280:720,setsar=1,fps=30[bg];[bg][1:v]overlay=0:0[v]")
+    vf = _video_bg_filter(fit) + ";[bg][1:v]overlay=0:0[v]"
     common = ["-r", str(_FPS), "-c:v", "libx264", "-pix_fmt", "yuv420p"]
     if audio and Path(audio).exists():
         _run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(src_video),
@@ -180,11 +225,13 @@ def _make_video_clip(src_video: Path, overlay_png: Path, audio: Path | None,
 
 def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
                 out_mp4: Path, progress=None,
-                video_map: dict[int, Path] | None = None) -> Path:
+                video_map: dict[int, Path] | None = None,
+                fit: str = "fit") -> Path:
     """Compose a narrated video from a narration script.
 
     image_map: 1-based index -> local image path (for media "image:N").
     video_map: 1-based index -> local video path (for media "video:N").
+    fit: how to place media into 1280x720 — fit (letterbox) | crop | blur.
     """
     emit = progress or (lambda *_: None)
     video_map = video_map or {}
@@ -229,7 +276,7 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
         if src_video and Path(src_video).exists():
             overlay = render_subtitle_overlay(
                 sc.get("narration", ""), work_dir / f"ov-{i}.png")
-            _make_video_clip(src_video, overlay, audio, duration, clip)
+            _make_video_clip(src_video, overlay, audio, duration, clip, fit=fit)
         else:
             iidx = _idx(media, "image:")
             bg = image_map.get(iidx) if iidx else None
@@ -237,7 +284,8 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
                 bg = img_pool[auto % len(img_pool)]
                 auto += 1
             frame = render_frame(sc.get("narration", ""),
-                                 work_dir / f"frame-{i}.png", bg_image=bg)
+                                 work_dir / f"frame-{i}.png", bg_image=bg,
+                                 fit=fit)
             _make_clip(frame, audio, duration, clip)
         clips.append(clip)
 

@@ -85,6 +85,7 @@ sources:
 | `MEDIA_AGENT_MAX_AGE_DAYS` | 只保留 N 天内的文章（空=不限） | 不限 |
 | `MEDIA_AGENT_MAX_PER_SOURCE` | 每个来源最多抓取条数（空=不限） | 不限 |
 | `MEDIA_AGENT_DOWNLOAD_WORKERS` | 来源抓取 / 图片视频下载的并发线程数（空=CPU 核数） | CPU 核数 |
+| `MEDIA_AGENT_VIDEO_FIT_MODE` | 讲解视频画面适配：`fit`（完整+黑边）\| `crop`（铺满裁剪）\| `blur`（完整+模糊背景） | `fit` |
 
 > 不配置任何真实模型时默认走 `mock`，可在无 API Key 的情况下跑通整条流水线（改写内容为占位文本），便于先验证流程。
 
