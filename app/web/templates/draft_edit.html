@@ -64,27 +64,8 @@
 </div>
 <pre id="nar-logs" class="run-logs" style="display:none; max-height:200px; margin-top:10px"></pre>
 
-{% if narration and narration.scenes %}
-<table class="scene-table">
-  <thead><tr><th style="width:40px">#</th><th>旁白</th><th>画面/素材</th><th style="width:220px">配音</th></tr></thead>
-  <tbody>
-  {% for sc in narration.scenes %}
-    <tr>
-      <td>{{ loop.index }}</td>
-      <td>{{ sc.narration }}</td>
-      <td class="muted">{{ sc.visual }}{% if sc.media and sc.media != 'none' %} · {{ sc.media }}{% endif %}</td>
-      <td>
-        {% if sc.audio %}
-        <audio controls preload="none" src="/videos/draft-{{ draft.id }}/{{ sc.audio }}"></audio>
-        {% else %}
-        <span class="muted">（无配音{% if sc.audio_error %}：失败{% endif %}）</span>
-        {% endif %}
-      </td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-{% endif %}
+<div id="scene-editor" data-draft="{{ draft.id }}"
+     data-has="{{ '1' if narration and narration.scenes else '' }}"></div>
 
 <div class="adapt-row" style="margin-top:14px">
   <button type="button" class="btn primary" id="vid-btn"
@@ -206,5 +187,135 @@
     } catch (e) { /* poll will reflect state */ }
     pollVideo(draftId);
   }
+
+  // ---- editable narration scene editor (issue #6) ----
+  const SCENE_DRAFT = {{ draft.id }};
+  let sceneState = { scenes: [], images: [], videos: [], orig: [] };
+
+  function se_esc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function se_attr(s) { return se_esc(s).replace(/"/g, '&quot;'); }
+  function se_base(u) {
+    try { return decodeURIComponent(String(u).split('/').pop().split('?')[0]); }
+    catch (e) { return String(u); }
+  }
+
+  function se_mediaOptions(selected) {
+    let o = '<option value="none"' + (selected === 'none' ? ' selected' : '') +
+      '>none（纯色/自动配图）</option>';
+    sceneState.images.forEach(function (u, i) {
+      const v = 'image:' + (i + 1);
+      o += '<option value="' + v + '"' + (selected === v ? ' selected' : '') +
+        '>🖼 ' + v + '（' + se_esc(se_base(u)) + '）</option>';
+    });
+    sceneState.videos.forEach(function (u, i) {
+      const v = 'video:' + (i + 1);
+      o += '<option value="' + v + '"' + (selected === v ? ' selected' : '') +
+        '>▶ ' + v + '（' + se_esc(se_base(u)) + '）</option>';
+    });
+    return o;
+  }
+  function se_thumb(media) {
+    let m = /^image:(\d+)$/.exec(media || '');
+    if (m && sceneState.images[+m[1] - 1]) {
+      return '<img class="scene-thumb" src="' + sceneState.images[+m[1] - 1] + '"/>';
+    }
+    m = /^video:(\d+)$/.exec(media || '');
+    if (m && sceneState.videos[+m[1] - 1]) {
+      return '<span class="muted">▶ ' + se_esc(se_base(sceneState.videos[+m[1] - 1])) + '</span>';
+    }
+    return '<span class="muted">（无背景，合成时用纯色/自动配图）</span>';
+  }
+
+  function se_render() {
+    const wrap = document.getElementById('scene-editor');
+    if (!wrap) return;
+    let h = '';
+    sceneState.scenes.forEach(function (sc, i) {
+      h += '<div class="scene-card">' +
+        '<div class="scene-card-head"><strong>分镜 ' + (i + 1) + '</strong>' +
+        '<span class="scene-ops">' +
+        '<button type="button" class="btn small" onclick="se_move(' + i + ',-1)">↑</button>' +
+        '<button type="button" class="btn small" onclick="se_move(' + i + ',1)">↓</button>' +
+        '<button type="button" class="btn small danger" onclick="se_del(' + i + ')">删除</button>' +
+        '</span></div>' +
+        '<label class="muted">旁白</label>' +
+        '<textarea rows="2" oninput="se_set(' + i + ',\'narration\',this.value)">' +
+        se_esc(sc.narration || '') + '</textarea>' +
+        '<label class="muted">画面描述</label>' +
+        '<input value="' + se_attr(sc.visual || '') + '" oninput="se_set(' + i + ',\'visual\',this.value)"/>' +
+        '<label class="muted">背景素材</label>' +
+        '<div class="scene-media"><select onchange="se_media(' + i + ',this.value)">' +
+        se_mediaOptions(sc.media || 'none') + '</select> ' + se_thumb(sc.media || 'none') + '</div>' +
+        '<div class="scene-audio">' + (sc.audio ?
+          '<audio controls preload="none" src="/videos/draft-' + SCENE_DRAFT + '/' + sc.audio + '"></audio>' :
+          '<span class="muted">（无配音' + (sc.audio_error ? '：失败' : '') + '）</span>') +
+        '</div></div>';
+    });
+    h += '<div class="adapt-row" style="margin-top:10px">' +
+      '<button type="button" class="btn small" onclick="se_add()">＋ 新增分镜</button>' +
+      '<button type="button" class="btn primary" onclick="se_save(false)">保存脚本</button>' +
+      '<button type="button" class="btn primary" onclick="se_save(true)">保存并重配改动的配音</button>' +
+      '<span id="scene-status" class="muted"></span></div>';
+    wrap.innerHTML = h;
+  }
+
+  function se_set(i, f, v) { sceneState.scenes[i][f] = v; }
+  function se_media(i, v) { sceneState.scenes[i].media = v; se_render(); }
+  function se_move(i, d) {
+    const j = i + d, a = sceneState.scenes, o = sceneState.orig;
+    if (j < 0 || j >= a.length) return;
+    [a[i], a[j]] = [a[j], a[i]]; [o[i], o[j]] = [o[j], o[i]]; se_render();
+  }
+  function se_del(i) {
+    sceneState.scenes.splice(i, 1); sceneState.orig.splice(i, 1); se_render();
+  }
+  function se_add() {
+    sceneState.scenes.push({ narration: '新分镜旁白', visual: '', media: 'none', audio: null });
+    sceneState.orig.push(null); se_render();
+  }
+
+  async function se_save(resynth) {
+    const st = document.getElementById('scene-status');
+    st.textContent = '保存中…';
+    const changed = [];
+    sceneState.scenes.forEach(function (sc, i) {
+      if (resynth && (sc.narration !== sceneState.orig[i] || !sc.audio)) changed.push(i);
+    });
+    try {
+      if (resynth) {
+        const data = await (await fetch('/api/script/' + SCENE_DRAFT + '/resynth', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scenes: sceneState.scenes, indices: changed })
+        })).json();
+        if (data.started === false) { st.textContent = data.message || '已有任务在进行'; return; }
+        st.textContent = '重配音中…（' + changed.length + ' 段）';
+        pollNarration(SCENE_DRAFT);  // reuses poll → reloads page when done
+      } else {
+        await fetch('/api/script/' + SCENE_DRAFT, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scenes: sceneState.scenes })
+        });
+        sceneState.orig = sceneState.scenes.map(function (x) { return x.narration; });
+        st.textContent = '已保存';
+      }
+    } catch (e) { st.textContent = '保存失败'; }
+  }
+
+  async function se_load() {
+    const wrap = document.getElementById('scene-editor');
+    if (!wrap || !wrap.dataset.has) return;
+    try {
+      const s = await (await fetch('/api/script/' + SCENE_DRAFT)).json();
+      sceneState.scenes = (s.scenes || []).map(function (x) { return Object.assign({}, x); });
+      sceneState.images = s.images || [];
+      sceneState.videos = s.videos || [];
+      sceneState.orig = sceneState.scenes.map(function (x) { return x.narration; });
+      se_render();
+    } catch (e) { /* ignore */ }
+  }
+  se_load();
 </script>
 {% endblock %}

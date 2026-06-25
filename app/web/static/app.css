@@ -268,6 +268,23 @@ textarea, input, select {
 .scene-table { margin-top: 12px; }
 .scene-table td { vertical-align: top; }
 .scene-table audio { width: 210px; height: 32px; }
+/* editable scene editor (issue #6) */
+.scene-card {
+  border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;
+  margin: 10px 0; background: var(--panel2);
+}
+.scene-card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 6px;
+}
+.scene-ops { display: flex; gap: 4px; }
+.scene-card label { display: block; margin: 8px 0 2px; font-size: 12px; }
+.scene-card textarea, .scene-card input, .scene-card select { width: 100%; }
+.scene-media { display: flex; align-items: center; gap: 10px; }
+.scene-media select { max-width: 360px; }
+.scene-thumb { height: 48px; border-radius: 4px; border: 1px solid var(--border); }
+.scene-audio { margin-top: 8px; }
+.scene-audio audio { width: 280px; height: 32px; }
 .explainer-video { max-width: 100%; margin-top: 12px; border-radius: 8px; border: 1px solid var(--border); }
 /* ---- article (original) preview ---- */
 .article-head { display: flex; gap: 8px; margin-bottom: 12px; }

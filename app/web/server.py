@@ -22,7 +22,8 @@ from app.llm.base import get_provider
 from app.models import Article, Draft
 from app.pipeline.adapter import adapt, PLATFORMS
 from app.pipeline.images import attach_cover
-from app.pipeline.narration import generate_narration, load_narration
+from app.pipeline.narration import (
+    generate_narration, load_narration, save_scenes, resynth_scenes)
 from app.pipeline.orchestrator import run_pipeline, _append_prompt
 from app.pipeline.recommender import (
     suggest_subtopics, suggest_keywords, suggest_sources)
@@ -597,6 +598,53 @@ def create_app(config: Config | None = None,
         if draft_id is not None and not base["running"]:
             base["script"] = load_narration(draft_id, config)
         return base
+
+    @app.get("/api/script/{draft_id}")
+    def api_get_script(draft_id: int):
+        return load_narration(draft_id, config) or {
+            "scenes": [], "images": [], "videos": []}
+
+    @app.post("/api/script/{draft_id}")
+    async def api_save_script(draft_id: int, request: Request):
+        data = await request.json()
+        script = save_scenes(draft_id, data.get("scenes", []), config)
+        return {"ok": True, "scenes": script.get("scenes", [])}
+
+    @app.post("/api/script/{draft_id}/resynth")
+    async def api_resynth_script(draft_id: int, request: Request):
+        data = await request.json()
+        indices = [int(i) for i in (data.get("indices") or [])]
+        # optionally persist edits sent alongside before re-synth
+        if data.get("scenes"):
+            save_scenes(draft_id, data["scenes"], config)
+        with nar_lock:
+            if nar_state["running"]:
+                return {"started": False, "running": True,
+                        "message": "已有任务在进行"}
+            nar_state.update(running=True, draft_id=draft_id, logs=[],
+                             error=None, done=False)
+
+        def worker():
+            try:
+                run_config = Config.load(store=get_store())
+                tts = get_tts_provider(
+                    run_config.tts_provider, base_url=run_config.tts_api_base,
+                    api_key=run_config.tts_api_key, model=run_config.tts_model,
+                    voice=run_config.tts_voice)
+                resynth_scenes(draft_id, indices, tts, config,
+                               progress=_nar_log)
+                with nar_lock:
+                    nar_state["done"] = True
+            except Exception as e:  # noqa: BLE001
+                with nar_lock:
+                    nar_state["error"] = str(e)
+                _nar_log(f"出错：{e}")
+            finally:
+                with nar_lock:
+                    nar_state["running"] = False
+
+        threading.Thread(target=worker, daemon=True).start()
+        return {"started": True, "running": True}
 
     # ---- localize a single article's media (before transcribing) ----
     mlz_lock = threading.Lock()

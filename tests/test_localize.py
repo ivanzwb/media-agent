@@ -100,6 +100,42 @@ def test_localize_keeps_remote_on_failure(tmp_path, monkeypatch):
     assert art.images == ["https://img.cdn/a.png", "https://img.cdn/b.jpg"]
 
 
+def test_save_scenes_and_resynth(tmp_path, monkeypatch):
+    import json
+    from app.pipeline import narration as nar
+    from app.pipeline.narration import save_scenes, resynth_scenes, load_narration
+    from app.tts.providers.mock import MockTTSProvider
+
+    cfg = Config(data_dir=tmp_path)
+    cfg.ensure_dirs()
+    out_dir = cfg.videos_dir / "draft-7"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "script.json").write_text(json.dumps({
+        "scenes": [{"narration": "old", "visual": "", "media": "none",
+                    "audio": "scene-0.wav"}],
+        "images": ["/media/x/img-1.png"], "videos": [],
+    }), encoding="utf-8")
+
+    # edit scenes: change narration, add a scene, set media; invalid media -> none
+    edited = save_scenes("7", [
+        {"narration": "new text", "visual": "v", "media": "image:1",
+         "audio": "scene-0.wav"},
+        {"narration": "second", "visual": "", "media": "bogus"},
+        {"narration": "   "},  # empty -> dropped
+    ], cfg)
+    assert len(edited["scenes"]) == 2
+    assert edited["scenes"][0]["media"] == "image:1"
+    assert edited["scenes"][1]["media"] == "none"
+    assert edited["images"] == ["/media/x/img-1.png"]  # preserved
+
+    # resynth only scene 0
+    script = resynth_scenes("7", [0], MockTTSProvider(), cfg)
+    assert script["scenes"][0]["audio"].endswith(".wav")
+    # persisted
+    again = load_narration("7", cfg)
+    assert again["scenes"][0]["audio"] == script["scenes"][0]["audio"]
+
+
 def test_local_media_file_rejects_outside_paths(tmp_path):
     cfg = Config(data_dir=tmp_path)
     cfg.ensure_dirs()
