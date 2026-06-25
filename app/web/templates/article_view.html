@@ -17,22 +17,37 @@
 
 <article id="article-body" class="article-body"></article>
 
-{% if videos %}
-<h2>视频</h2>
-<div class="article-videos">
-  {% for v in videos %}
-    {% if v.startswith('/media/') or v.endswith('.mp4') or v.endswith('.webm') or v.endswith('.mov') %}
-    <video controls preload="metadata" src="{{ v }}" class="article-video"></video>
-    {% else %}
-    <p><a href="{{ v }}" target="_blank" rel="noopener">▶ 视频链接：{{ v }}</a></p>
-    {% endif %}
-  {% endfor %}
-</div>
-{% endif %}
+<div id="extra-videos" class="article-videos"></div>
 
 <script>
   var md = {{ content_md | tojson }};
-  document.getElementById('article-body').innerHTML =
-    (window.marked ? marked.parse(md) : md.replace(/\n/g, '<br>'));
+  var videos = {{ videos | tojson }};
+
+  function videoHtml(u) {
+    var isFile = /^\/media\//.test(u) || /\.(mp4|webm|mov|m4v|ogg|ogv)(\?|$)/i.test(u);
+    if (isFile) {
+      return '<video controls preload="metadata" class="article-video" src="' +
+        u + '"></video>';
+    }
+    return '<div class="article-embed"><iframe src="' + u +
+      '" frameborder="0" allowfullscreen></iframe></div>';
+  }
+
+  var html = window.marked ? marked.parse(md) : md.replace(/\n/g, '<br>');
+  var used = {};
+  // Put each video back at its original position (the [[VIDEO:N]] placeholder).
+  html = html.replace(/\[\[VIDEO:(\d+)\]\]/g, function (_m, n) {
+    var i = parseInt(n, 10);
+    if (i >= 0 && i < videos.length) { used[i] = true; return videoHtml(videos[i]); }
+    return '';
+  });
+  document.getElementById('article-body').innerHTML = html;
+
+  // Any videos not referenced in the body get appended at the bottom.
+  var extra = videos.filter(function (_u, i) { return !used[i]; });
+  if (extra.length) {
+    document.getElementById('extra-videos').innerHTML =
+      '<h2>视频</h2>' + extra.map(videoHtml).join('');
+  }
 </script>
 {% endblock %}
