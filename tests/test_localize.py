@@ -59,6 +59,33 @@ def test_localize_downloads_images_to_local(tmp_path, monkeypatch):
         assert p is not None and p.exists()
 
 
+def test_config_workers_default_and_override():
+    import os
+    cfg = Config(data_dir="x")
+    assert cfg.workers == (os.cpu_count() or 4)
+    assert Config(data_dir="x", download_workers=3).workers == 3
+    # non-positive falls back to cpu count
+    assert Config(data_dir="x", download_workers=0).workers == (os.cpu_count() or 4)
+
+
+def test_localize_concurrent_preserves_order(tmp_path, monkeypatch):
+    cfg = Config(data_dir=tmp_path, download_workers=4)
+    cfg.ensure_dirs()
+    monkeypatch.setattr(loc.httpx, "get", lambda *a, **k: _Resp())
+    art = Article(
+        title="t", content_md="c", url="https://x.com/a", source_name="X",
+        source_type="scrape", published_at=None,
+        images=[f"https://img.cdn/{i}.png" for i in range(8)],
+        raw_summary=None, fetched_at=datetime.now(timezone.utc), topic="AI",
+        videos=[])
+    localize_article(art, cfg, download_videos=False)
+    assert len(art.images) == 8
+    assert all(u.startswith("/media/") for u in art.images)
+    # order preserved: img-1 maps to first url, etc.
+    assert art.images[0].endswith("img-1.png")
+    assert art.images[7].endswith("img-8.png")
+
+
 def test_localize_keeps_remote_on_failure(tmp_path, monkeypatch):
     cfg = Config(data_dir=tmp_path)
     cfg.ensure_dirs()

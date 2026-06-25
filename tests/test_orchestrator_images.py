@@ -33,7 +33,7 @@ def test_run_pipeline_attaches_cover_and_records(tmp_path, monkeypatch):
         sources=[SourceConfig(name="X", type="rss", url="https://x.com/feed",
                               topics=["AI"])])
     monkeypatch.setattr("app.pipeline.orchestrator.collect_sources",
-                        lambda feeds_cfg, max_per_source=None, progress=None: fake_articles())
+                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None: fake_articles())
     provider = MockProvider(responses=[
         json.dumps({"title_candidates": ["爆款标题"], "body_md": "## 钩子\n正文"}),
         json.dumps({"flagged_claims": []})])

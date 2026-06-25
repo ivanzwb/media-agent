@@ -47,6 +47,7 @@ class Config:
     tts_voice: str | None = None
     max_age_days: int | None = None
     max_per_source: int | None = None
+    download_workers: int | None = None
 
     @property
     def archive_dir(self) -> Path:
@@ -72,6 +73,13 @@ class Config:
     def db_path(self) -> Path:
         return self.data_dir / "media.db"
 
+    @property
+    def workers(self) -> int:
+        """Concurrency for downloads/fetching (default: CPU count)."""
+        if self.download_workers and self.download_workers > 0:
+            return self.download_workers
+        return os.cpu_count() or 4
+
     @classmethod
     def load(cls, store: "Store | None" = None) -> "Config":
         data_dir = Path(os.environ.get("MEDIA_AGENT_DATA_DIR", "data")).resolve()
@@ -92,6 +100,7 @@ class Config:
             tts_voice=os.environ.get("MEDIA_AGENT_TTS_VOICE"),
             max_age_days=_int_env("MEDIA_AGENT_MAX_AGE_DAYS"),
             max_per_source=_int_env("MEDIA_AGENT_MAX_PER_SOURCE"),
+            download_workers=_int_env("MEDIA_AGENT_DOWNLOAD_WORKERS"),
         )
         if store is not None:
             config._apply_db_overrides(store)
@@ -131,6 +140,12 @@ class Config:
             parsed = _int_str(per_src)
             if parsed is not None:
                 self.max_per_source = parsed
+
+        workers = store.get_setting("download_workers")
+        if workers is not None:
+            parsed = _int_str(workers)
+            if parsed is not None:
+                self.download_workers = parsed
 
     def ensure_dirs(self) -> None:
         for d in (self.archive_dir, self.drafts_dir, self.images_dir,

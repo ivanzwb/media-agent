@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from app.feeds import FeedsConfig
@@ -17,37 +19,47 @@ from app.pipeline.localize import localize_article
 from app.pipeline.rewriter import rewrite
 
 
+def _fetch_source(src) -> list[Article]:
+    if src.type == "rss":
+        return fetch_feed(src.url, src.name)
+    if src.type == "scrape":
+        if src.mode == "list":
+            return scrape_list(
+                src.url, src.name, include_pattern=src.include_pattern,
+                exclude_pattern=src.exclude_pattern)
+        art = scrape_single(src.url, src.name)
+        return [art] if art else []
+    return []
+
+
 def collect_sources(feeds: FeedsConfig,
                     max_per_source: int | None = None,
-                    progress=None) -> list[Article]:
-    articles: list[Article] = []
-    for src in feeds.sources:
-        if not src.enabled:
-            continue
+                    progress=None, workers: int | None = None) -> list[Article]:
+    enabled = [s for s in feeds.sources if s.enabled]
+    if not enabled:
+        return []
+    workers = max(1, workers or (os.cpu_count() or 4))
+
+    def fetch_one(src):
         if progress:
             progress(f"抓取来源：{src.name}")
         try:
-            if src.type == "rss":
-                items = fetch_feed(src.url, src.name)
-            elif src.type == "scrape":
-                if src.mode == "list":
-                    items = scrape_list(
-                        src.url, src.name, include_pattern=src.include_pattern,
-                        exclude_pattern=src.exclude_pattern)
-                else:
-                    art = scrape_single(src.url, src.name)
-                    items = [art] if art else []
-            else:
-                items = []
-        except Exception as e:
+            items = _fetch_source(src)
+        except Exception as e:  # noqa: BLE001
             if progress:
                 progress(f"  来源失败：{src.name}（{type(e).__name__}）")
-            continue
+            return []
         if max_per_source:
             items = items[:max_per_source]
         if progress:
             progress(f"  {src.name} 获取 {len(items)} 篇")
-        articles.extend(items)
+        return items
+
+    articles: list[Article] = []
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        # ex.map preserves input order so results are deterministic.
+        for items in ex.map(fetch_one, enabled):
+            articles.extend(items)
     return articles
 
 
@@ -99,7 +111,8 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
     try:
         emit("开始抓取来源…", stats)
         articles = collect_sources(feeds, max_per_source=max_per_source,
-                                   progress=lambda m: emit(m, stats))
+                                   progress=lambda m: emit(m, stats),
+                                   workers=store.config.workers)
         emit(f"抓取完成，共 {len(articles)} 篇，去重中…", stats)
         articles = filter_by_age(articles, max_age_days)
         articles = dedup(articles)

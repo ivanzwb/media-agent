@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import html
 import mimetypes
+import os
 import re
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlparse, urlsplit, urlunsplit
@@ -177,40 +179,56 @@ def _download_video(url: str, dest: Path, idx: int, emit,
     return None
 
 
+def _download_set(urls, dest: Path, folder: str, fn, workers: int,
+                  emit) -> list[str]:
+    """Download `urls` concurrently via `fn(url, dest, idx, emit)`, preserving
+    order. Local (/media/) URLs pass through; failures keep the original URL."""
+    results: dict[int, Path | None] = {}
+    todo = [(i, u) for i, u in enumerate(urls, 1) if not _is_local(u)]
+    if todo:
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+            futs = {ex.submit(fn, u, dest, i, emit): i for i, u in todo}
+            for f in as_completed(futs):
+                i = futs[f]
+                try:
+                    results[i] = f.result()
+                except Exception as e:  # noqa: BLE001
+                    emit(f"    下载失败 #{i}：{e}")
+                    results[i] = None
+    out: list[str] = []
+    for i, u in enumerate(urls, 1):
+        if _is_local(u):
+            out.append(u)
+        else:
+            p = results.get(i)
+            out.append(f"/media/{folder}/{p.name}" if p else u)
+    return out
+
+
 def localize_article(article: Article, config: Config, progress=None,
                      download_videos: bool = True,
                      max_images: int = 20) -> Article:
     """Download an article's images and videos into data/media/<hash>/ and
     rewrite article.images / article.videos to local web paths
-    (/media/<hash>/<file>). Remote URLs that fail are kept as-is (fallback)."""
+    (/media/<hash>/<file>). Downloads run concurrently (config.workers).
+    Remote URLs that fail are kept as-is (fallback)."""
     emit = progress or _noop
     folder = article.fingerprint()[:16]
     dest = config.media_dir / folder
     dest.mkdir(parents=True, exist_ok=True)
+    workers = config.workers
 
     imgs = (article.images or [])[:max_images]
-    emit(f"图片 {len(imgs)} 张，视频 {len(article.videos or [])} 个")
-    local_images: list[str] = []
-    for i, url in enumerate(imgs, 1):
-        if _is_local(url):
-            local_images.append(url)
-            continue
-        emit(f"  下载图片 #{i}/{len(imgs)}…")
-        p = _download_image(url, dest, i, emit)
-        local_images.append(f"/media/{folder}/{p.name}" if p else url)
-    article.images = local_images
+    emit(f"图片 {len(imgs)} 张，视频 {len(article.videos or [])} 个"
+         f"（并发 {workers}）")
+    article.images = _download_set(imgs, dest, folder, _download_image,
+                                   workers, emit)
 
     if download_videos and article.videos:
-        local_videos: list[str] = []
-        vids = article.videos
-        for i, url in enumerate(vids, 1):
-            if _is_local(url):
-                local_videos.append(url)
-                continue
-            emit(f"  下载视频 #{i}/{len(vids)}…")
-            p = _download_video(url, dest, i, emit)
-            local_videos.append(f"/media/{folder}/{p.name}" if p else url)
-        article.videos = local_videos
+        # yt-dlp spawns subprocesses — cap video concurrency lower.
+        vworkers = max(1, min(workers, 2))
+        article.videos = _download_set(article.videos, dest, folder,
+                                       _download_video, vworkers, emit)
 
     return article
 

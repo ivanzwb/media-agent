@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 from contextlib import asynccontextmanager
@@ -270,7 +271,8 @@ def create_app(config: Config | None = None,
         "llm_provider", "llm_model", "llm_api_base",
         "image_provider", "image_api_base", "image_model",
         "tts_provider", "tts_api_base", "tts_model", "tts_voice",
-        "max_age_days", "max_per_source", "schedule_cron", "schedule_enabled",
+        "max_age_days", "max_per_source", "download_workers",
+        "schedule_cron", "schedule_enabled",
     ]
 
     def _source_to_dict(s: SourceConfig) -> dict:
@@ -763,6 +765,7 @@ def create_app(config: Config | None = None,
         db_tts_voice = store.get_setting("tts_voice") or ""
         db_max_age_days = store.get_setting("max_age_days") or ""
         db_max_per_source = store.get_setting("max_per_source") or ""
+        db_download_workers = store.get_setting("download_workers") or ""
 
         # API key: indicate whether set, mask the value
         api_key_val = store.get_setting("llm_api_key")
@@ -806,6 +809,9 @@ def create_app(config: Config | None = None,
                 str(config.max_age_days) if config.max_age_days is not None and config.max_age_days > 0 else ""),
             "max_per_source": db_max_per_source if db_max_per_source and db_max_per_source != "0" else (
                 str(config.max_per_source) if config.max_per_source is not None and config.max_per_source > 0 else ""),
+            "download_workers": db_download_workers if db_download_workers and db_download_workers != "0" else (
+                str(config.download_workers) if config.download_workers else ""),
+            "default_workers": os.cpu_count() or 4,
             "api_key_set": api_key_set,
             "api_key_masked": masked,
             "img_key_set": img_key_set,
@@ -830,6 +836,7 @@ def create_app(config: Config | None = None,
                       tts_voice: str = Form(""),
                       max_age_days: str = Form(""),
                       max_per_source: str = Form(""),
+                      download_workers: str = Form(""),
                       schedule_cron: str = Form(""),
                       schedule_enabled: str = Form("0")):
         store = get_store()
@@ -891,6 +898,16 @@ def create_app(config: Config | None = None,
             except ValueError:
                 pass
         # If empty, leave existing value unchanged
+
+        if download_workers.strip():
+            try:
+                int_val = int(download_workers.strip())
+                if int_val > 0:
+                    store.set_setting("download_workers", download_workers.strip())
+                else:
+                    store.delete_setting("download_workers")
+            except ValueError:
+                pass
 
         # Scheduler settings (unchanged)
         store.set_setting("schedule_cron", schedule_cron.strip())

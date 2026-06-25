@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -79,30 +80,43 @@ def _download_images(urls: list[str], dest: Path, config: Config,
     dest.mkdir(parents=True, exist_ok=True)
     out: dict[int, Path] = {}
     headers = {"User-Agent": _UA}
-    for i, url in enumerate(urls, 1):
+
+    def fetch(i: int, url: str) -> Path | None:
         local = local_media_file(url, config)
         if local:
-            out[i] = local
-            continue
+            return local
         safe = normalize_url(url)
         if not safe:
             emit(f"  跳过无效配图地址 #{i}：{(url or '')[:60]}")
-            continue
+            return None
         try:
             data = httpx.get(
                 safe, timeout=20.0, follow_redirects=True,
                 headers={**headers, "Referer": _origin(safe)}).content
         except Exception as e:  # noqa: BLE001
             emit(f"  配图下载失败 #{i}：{e}")
-            continue
+            return None
         if not data:
             emit(f"  配图为空 #{i}")
-            continue
+            return None
         ext = ".jpg" if any(s in url.lower() for s in (".jpg", ".jpeg")) \
             else ".png"
         p = dest / f"img-{i}{ext}"
         p.write_bytes(data)
-        out[i] = p
+        return p
+
+    workers = max(1, config.workers)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(fetch, i, u): i for i, u in enumerate(urls, 1)}
+        for f in as_completed(futs):
+            i = futs[f]
+            try:
+                p = f.result()
+            except Exception as e:  # noqa: BLE001
+                emit(f"  配图下载失败 #{i}：{e}")
+                p = None
+            if p:
+                out[i] = p
     return out
 
 

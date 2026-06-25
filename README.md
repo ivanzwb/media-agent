@@ -17,6 +17,7 @@
 
 > 版权提示：把第三方视频片段剪入自己的成片并发布可能涉及版权，请自行注明出处或取得授权。
 - **运行控制**：按时间窗（`max_age_days`）与每源条数（`max_per_source`）限制抓取量。
+- **并发加速**：多来源抓取、图片/视频下载用线程池并发（`ThreadPoolExecutor`），并发数可配（`MEDIA_AGENT_DOWNLOAD_WORKERS`，默认 CPU 核数；视频因走 yt-dlp 子进程限制更低并发）。
 - **定时调度**：APScheduler cron 定时自动运行。
 - **本地 Web 界面**：仪表盘、归档浏览、草稿 Markdown 编辑审核、来源配置、设置、立即运行。
 - **可切换大模型**：业务代码不绑定厂商；内置 `mock`（离线跑通全链路）与 `openai`，易扩展 DeepSpeed/Claude/本地模型等。
@@ -83,6 +84,7 @@ sources:
 | `MEDIA_AGENT_TTS_VOICE` | 音色/风格：`female`/`child`/`male`… 或具体音色名 | `assistant` |
 | `MEDIA_AGENT_MAX_AGE_DAYS` | 只保留 N 天内的文章（空=不限） | 不限 |
 | `MEDIA_AGENT_MAX_PER_SOURCE` | 每个来源最多抓取条数（空=不限） | 不限 |
+| `MEDIA_AGENT_DOWNLOAD_WORKERS` | 来源抓取 / 图片视频下载的并发线程数（空=CPU 核数） | CPU 核数 |
 
 > 不配置任何真实模型时默认走 `mock`，可在无 API Key 的情况下跑通整条流水线（改写内容为占位文本），便于先验证流程。
 

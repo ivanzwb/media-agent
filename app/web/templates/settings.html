@@ -155,6 +155,14 @@
              min="0" step="1" style="max-width:200px"/>
       <span class="field-desc">每个来源最多采集 N 篇文章，留空或 0 表示不限</span>
     </div>
+
+    <div class="field">
+      <label for="download_workers">并发下载线程数 <span class="env-hint">MEDIA_AGENT_DOWNLOAD_WORKERS</span></label>
+      <input type="number" name="download_workers" id="download_workers"
+             value="{{ download_workers }}" placeholder="留空 = CPU 核数（{{ default_workers }}）"
+             min="1" step="1" style="max-width:200px"/>
+      <span class="field-desc">来源抓取与图片/视频下载的并发数。留空默认 CPU 核数（{{ default_workers }}）；遇目标站限流可调小</span>
+    </div>
   </fieldset>
 
   <fieldset>

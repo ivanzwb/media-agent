@@ -33,7 +33,7 @@ def test_run_pipeline_end_to_end(tmp_path, monkeypatch):
                               topics=["AI"])])
 
     monkeypatch.setattr("app.pipeline.orchestrator.collect_sources",
-                        lambda feeds_cfg, max_per_source=None, progress=None: fake_articles())
+                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None: fake_articles())
 
     rewrite_json = json.dumps({"title_candidates": ["爆款标题"],
                                "body_md": "## 钩子\n正文"})
@@ -55,7 +55,7 @@ def test_run_pipeline_skips_duplicates(tmp_path, monkeypatch):
     cfg, store = build(tmp_path)
     feeds = FeedsConfig(topics=[Topic(name="AI", keywords=["GPT"])], sources=[])
     monkeypatch.setattr("app.pipeline.orchestrator.collect_sources",
-                        lambda feeds_cfg, max_per_source=None, progress=None: fake_articles())
+                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None: fake_articles())
     provider = MockProvider(responses=[
         json.dumps({"title_candidates": ["t"], "body_md": "b"}),
         json.dumps({"flagged_claims": []})])
