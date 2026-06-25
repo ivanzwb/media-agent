@@ -21,6 +21,10 @@ def test_normalize_url_handles_unicode_and_scheme():
     assert normalize_url("") is None
     # already-encoded stays intact (no double-encoding)
     assert normalize_url("https://x.com/a%20b.png") == "https://x.com/a%20b.png"
+    # HTML entities are decoded (issue #1: &amp; -> & to avoid 400)
+    assert normalize_url(
+        "https://images.ctfassets.net/x/image.png?fm=webp&amp;w=3840&amp;q=70"
+    ) == "https://images.ctfassets.net/x/image.png?fm=webp&w=3840&q=70"
 
 
 def _article():

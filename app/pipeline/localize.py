@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import mimetypes
 import re
 import shutil
@@ -59,7 +60,9 @@ def normalize_url(url: str) -> str | None:
     """Make a fetchable absolute http(s) URL: add scheme for //host paths,
     IDNA-encode the host, percent-encode non-ASCII path/query. Returns None
     for relative/unsupported URLs."""
-    u = (url or "").strip()
+    # Decode HTML entities first (e.g. &amp; -> &) so URLs extracted from HTML
+    # (Contentful/WordPress/etc.) aren't sent with literal &amp; -> 400.
+    u = html.unescape((url or "").strip())
     if u.startswith("//"):
         u = "https:" + u
     if not u.startswith(("http://", "https://")):
