@@ -14,8 +14,52 @@ _VIDEO_HINTS = (
 )
 
 
+_IMAGE_EXTS = ("png", "jpg", "jpeg", "webp", "gif", "avif")
+_VIDEO_EXTS = ("mp4", "webm", "mov", "m4v", "ogv")
+
+
+def _attr(tag: str, name: str) -> str | None:
+    m = re.search(name + r'\s*=\s*("([^"]*)"|\'([^\']*)\'|([^\s>]+))',
+                  tag, re.I)
+    if not m:
+        return None
+    return m.group(2) or m.group(3) or m.group(4)
+
+
+def _media_urls_by_ext(html: str, exts: tuple[str, ...]) -> list[str]:
+    """Quoted-string URLs ending in one of `exts` (catches media URLs embedded
+    in <script> JSON, CSS background-image, srcset, etc.)."""
+    pat = re.compile(
+        r'["\']([^"\']+?\.(?:' + "|".join(exts) + r'))(?:\?[^"\']*)?["\']',
+        re.I)
+    return [m.group(1) for m in pat.finditer(html)]
+
+
 def _images_from_html(html: str) -> list[str]:
-    return re.findall(r'<img[^>]+src="([^"]+)"', html)
+    urls: list[str] = []
+    for m in re.finditer(r'<img\b[^>]*>', html, re.I):
+        tag = m.group(0)
+        u = (_attr(tag, "src") or _attr(tag, "data-src")
+             or _attr(tag, "data-original"))
+        if not u:
+            ss = _attr(tag, "srcset") or _attr(tag, "data-srcset")
+            if ss:
+                u = ss.split(",")[0].strip().split(" ")[0]
+        if u:
+            urls.append(u)
+    for m in re.finditer(r'<source\b[^>]*>', html, re.I):
+        ss = _attr(m.group(0), "srcset")
+        if ss:
+            urls.append(ss.split(",")[0].strip().split(" ")[0])
+    # media URLs embedded in scripts / CSS / Next.js data
+    urls.extend(_media_urls_by_ext(html, _IMAGE_EXTS))
+    out: list[str] = []
+    seen: set[str] = set()
+    for u in urls:
+        if u and not u.startswith("data:") and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
 
 
 def _videos_from_html(html: str, base_url: str | None = None) -> list[str]:
@@ -24,9 +68,12 @@ def _videos_from_html(html: str, base_url: str | None = None) -> list[str]:
         src = m.group(1)
         if any(h in src.lower() for h in _VIDEO_HINTS):
             found.append(src)
-    for m in re.finditer(r'<(?:video|source)[^>]+src=["\']([^"\']+)["\']',
-                         html, re.I):
+    for m in re.finditer(
+            r'<(?:video|source)[^>]+(?:src|data-src)=["\']([^"\']+)["\']',
+            html, re.I):
         found.append(m.group(1))
+    # video URLs filled in dynamically by JS (stored in <script> arrays, etc.)
+    found.extend(_media_urls_by_ext(html, _VIDEO_EXTS))
     out: list[str] = []
     seen: set[str] = set()
     for u in found:
@@ -63,13 +110,23 @@ def _videos_with_placeholders(html: str,
 
     def repl_video(m):
         block = m.group(0)
-        sm = re.search(r'src=["\']([^"\']+)["\']', block, re.I)
+        sm = re.search(r'(?:src|data-src)=["\']([^"\']+)["\']', block, re.I)
         if not sm:
-            return ""
+            # JS-filled <video> with no static src — keep the tag (don't drop
+            # it); the URL, if any, is captured from scripts below.
+            return block
         return f"<p>[[VIDEO:{_idx(sm.group(1))}]]</p>"
 
     out = re.sub(r'<video[\s\S]*?</video>|<video[^>]*/?>', repl_video,
                  out, flags=re.I)
+
+    # Append video URLs only present in scripts/JSON (no positioned tag) so
+    # they still get archived/downloaded (rendered at the end as fallback).
+    for u in _media_urls_by_ext(html, _VIDEO_EXTS):
+        full = urljoin(base_url, u) if base_url else u
+        if full and full not in index:
+            index[full] = len(videos)
+            videos.append(full)
     return out, videos
 
 
