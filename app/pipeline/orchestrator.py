@@ -26,8 +26,11 @@ def _fetch_source(src) -> list[Article]:
         if src.mode == "list":
             return scrape_list(
                 src.url, src.name, include_pattern=src.include_pattern,
-                exclude_pattern=src.exclude_pattern)
-        art = scrape_single(src.url, src.name)
+                exclude_pattern=src.exclude_pattern,
+                max_pages=getattr(src, "max_pages", 1) or 1,
+                render_js=getattr(src, "render_js", False))
+        art = scrape_single(src.url, src.name,
+                            render_js=getattr(src, "render_js", False))
         return [art] if art else []
     return []
 

@@ -1,4 +1,6 @@
-from app.sources.scraper import discover_links, scrape_single
+from app.sources.scraper import (
+    discover_links, scrape_single, scrape_list,
+    _is_non_article, _hrefs, _pagination_links)
 
 LIST_HTML = """
 <html><body>
@@ -53,6 +55,74 @@ def test_discover_links_exclude_pattern():
                            exclude_pattern="another")
     assert "https://www.anthropic.com/news/gpt-5-mystery" in links
     assert all("another" not in l for l in links)
+
+
+def test_hrefs_handles_quote_styles():
+    html = ("<a href=\"/d\">d</a>"
+            "<a href='/s'>s</a>"
+            "<a HREF=/u>u</a>"
+            "<A\n  href = \"/nl\" >nl</a>")
+    hrefs = _hrefs(html)
+    assert "/d" in hrefs and "/s" in hrefs and "/u" in hrefs and "/nl" in hrefs
+
+
+def test_discover_links_finds_single_and_unquoted(monkeypatch):
+    html = ("<a href='/posts/x'>x</a>"
+            "<a HREF=/posts/y>y</a>")
+    links = discover_links(html, base_url="https://b.com/", include_pattern="/posts/")
+    assert "https://b.com/posts/x" in links
+    assert "https://b.com/posts/y" in links
+
+
+def test_is_non_article_only_blocks_last_segment():
+    # section landing pages (in the denylist) blocked
+    assert _is_non_article("https://x.com/about")
+    assert _is_non_article("https://x.com/careers")
+    assert _is_non_article("https://x.com/events")       # denylisted section
+    assert _is_non_article("https://x.com/files/a.pdf")  # asset
+    # article-container sections (news/blog/research) are NOT denylisted
+    assert not _is_non_article("https://x.com/news")
+    # deeper article slugs are kept (the bug in issue #7)
+    assert not _is_non_article("https://x.com/news/gpt-5")
+    assert not _is_non_article("https://x.com/events/ai-summit-2026")
+    assert not _is_non_article("https://x.com/blog/download-whitepaper-ai")
+    assert not _is_non_article("https://x.com/research/some-paper")
+
+
+def test_pagination_links_detected():
+    html = ("<a href='/research?page=2'>2</a>"
+            "<a href='/research/page/3'>3</a>"
+            "<a href='/research/some-article'>art</a>")
+    pages = _pagination_links(html, "https://x.com/research")
+    assert "https://x.com/research?page=2" in pages
+    assert "https://x.com/research/page/3" in pages
+    assert all("some-article" not in p for p in pages)
+
+
+def test_scrape_list_follows_pagination(monkeypatch):
+    pages = {
+        "https://x.com/research": (
+            "<a href='/research/a'>a</a><a href='/research?page=2'>next</a>"),
+        "https://x.com/research?page=2": "<a href='/research/b'>b</a>",
+    }
+    monkeypatch.setattr("app.sources.scraper._fetch_html",
+                        lambda url, **k: pages.get(url, ""))
+
+    from app.models import Article
+    from datetime import datetime, timezone
+
+    def fake_single(link, source_name, **k):
+        return Article(title=link, content_md="x", url=link,
+                       source_name=source_name, source_type="scrape",
+                       published_at=None, images=[], raw_summary=None,
+                       fetched_at=datetime.now(timezone.utc))
+    monkeypatch.setattr("app.sources.scraper.scrape_single", fake_single)
+
+    arts = scrape_list("https://x.com/research", "HAI",
+                       max_pages=2, delay=0)
+    urls = {a.url for a in arts}
+    assert "https://x.com/research/a" in urls   # page 1
+    assert "https://x.com/research/b" in urls   # page 2
 
 
 def test_scrape_single_builds_article(monkeypatch):

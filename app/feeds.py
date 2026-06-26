@@ -21,6 +21,8 @@ class SourceConfig:
     mode: str = "single"  # for scrape: "list" | "single"
     include_pattern: str | None = None
     exclude_pattern: str | None = None
+    max_pages: int = 1     # for scrape list: follow N pagination pages
+    render_js: bool = False  # render with Playwright (SPA/SSR sites)
     enabled: bool = True
 
 
@@ -44,6 +46,8 @@ def load_feeds(path: Path | str) -> FeedsConfig:
             topics=s.get("topics", []), mode=mode,
             include_pattern=s.get("include_pattern"),
             exclude_pattern=s.get("exclude_pattern"),
+            max_pages=int(s.get("max_pages", 1) or 1),
+            render_js=bool(s.get("render_js", False)),
             enabled=s.get("enabled", True),
         ))
     return FeedsConfig(topics=topics, sources=sources)
@@ -64,6 +68,10 @@ def save_feeds(config: FeedsConfig, path: Path | str) -> None:
                 entry["include_pattern"] = s.include_pattern
             if s.exclude_pattern:
                 entry["exclude_pattern"] = s.exclude_pattern
+            if s.max_pages and s.max_pages > 1:
+                entry["max_pages"] = s.max_pages
+            if s.render_js:
+                entry["render_js"] = s.render_js
         data["sources"].append(entry)
     Path(path).write_text(
         yaml.safe_dump(data, allow_unicode=True, sort_keys=False),

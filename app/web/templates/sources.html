@@ -123,10 +123,15 @@
           </select>
           <input name="include_pattern" value="{{ s.include_pattern or '' }}" placeholder="include_pattern" style="max-width:160px"/>
           <input name="exclude_pattern" value="{{ s.exclude_pattern or '' }}" placeholder="exclude_pattern" style="max-width:160px"/>
+          <input name="max_pages" type="number" min="1" value="{{ s.max_pages or 1 }}" title="翻页数(list)" style="max-width:90px"/>
+          <label class="muted" style="display:inline-flex;align-items:center;gap:4px">
+            <input type="checkbox" name="render_js" value="1" {{ 'checked' if s.render_js else '' }}/> JS渲染
+          </label>
           {% else %}
           <input type="hidden" name="mode" value="single"/>
           <input type="hidden" name="include_pattern" value=""/>
           <input type="hidden" name="exclude_pattern" value=""/>
+          <input type="hidden" name="max_pages" value="1"/>
           {% endif %}
           <button type="submit" class="btn primary small">保存</button>
           <button type="button" class="btn small" onclick="toggleEdit('src-edit-{{ loop.index }}')">取消</button>

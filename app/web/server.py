@@ -40,6 +40,14 @@ _TEMPLATES = _BASE / "templates"
 _STATIC = _BASE / "static"
 
 
+def _to_int(value: str, default: int) -> int:
+    try:
+        n = int(str(value).strip())
+        return n if n > 0 else default
+    except (ValueError, TypeError):
+        return default
+
+
 def create_app(config: Config | None = None,
                feeds_path: str | Path = "feeds.yaml") -> FastAPI:
     config = config or Config.load()
@@ -354,13 +362,17 @@ def create_app(config: Config | None = None,
                     url: str = Form(...), topics: str = Form(""),
                     mode: str = Form("single"),
                     include_pattern: str = Form(""),
-                    exclude_pattern: str = Form("")):
+                    exclude_pattern: str = Form(""),
+                    max_pages: str = Form("1"),
+                    render_js: str = Form("")):
         cfg = load_feeds(feeds_path)
         topic_list = [t.strip() for t in topics.split(",") if t.strip()]
         cfg.sources.append(SourceConfig(
             name=name, type=type, url=url, topics=topic_list, mode=mode,
             include_pattern=include_pattern or None,
-            exclude_pattern=exclude_pattern or None))
+            exclude_pattern=exclude_pattern or None,
+            max_pages=_to_int(max_pages, 1),
+            render_js=render_js in ("1", "on", "true")))
         save_feeds(cfg, feeds_path)
         return RedirectResponse(url="/sources", status_code=303)
 
@@ -464,7 +476,9 @@ def create_app(config: Config | None = None,
                      type: str = Form("rss"), topics: str = Form(""),
                      mode: str = Form("single"),
                      include_pattern: str = Form(""),
-                     exclude_pattern: str = Form("")):
+                     exclude_pattern: str = Form(""),
+                     max_pages: str = Form("1"),
+                     render_js: str = Form("")):
         cfg = load_feeds(feeds_path)
         topic_list = [t.strip() for t in topics.split(",") if t.strip()]
         for s in cfg.sources:
@@ -475,6 +489,8 @@ def create_app(config: Config | None = None,
                 s.mode = mode.strip()
                 s.include_pattern = include_pattern.strip() or None
                 s.exclude_pattern = exclude_pattern.strip() or None
+                s.max_pages = _to_int(max_pages, 1)
+                s.render_js = render_js in ("1", "on", "true")
                 break
         save_feeds(cfg, feeds_path)
         return RedirectResponse(url="/sources", status_code=303)
