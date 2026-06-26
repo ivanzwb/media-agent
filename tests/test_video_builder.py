@@ -2,7 +2,7 @@ from PIL import Image
 
 from app.video.builder import (
     render_frame, render_subtitle_overlay, _wrap, _font,
-    _contain, _cover, _fit_image, _video_bg_filter)
+    _contain, _cover, _fit_image, _video_bg_filter, _seek_for)
 
 
 def test_render_frame_produces_720p_png(tmp_path):
@@ -71,6 +71,28 @@ def test_video_bg_filter_modes():
     # all end in the [bg] label for chaining with the subtitle overlay
     for m in ("fit", "crop", "blur"):
         assert _video_bg_filter(m).rstrip().endswith("[bg]")
+
+
+def test_video_bg_filter_freeze_adds_tpad():
+    # freeze clones the last frame so a clip can be extended to a duration
+    for m in ("fit", "crop", "blur"):
+        f = _video_bg_filter(m, freeze_to=5.0)
+        assert "tpad=stop_mode=clone:stop_duration=5.00" in f
+        assert f.rstrip().endswith("[bg]")
+    # no freeze -> no tpad
+    assert "tpad" not in _video_bg_filter("fit")
+
+
+def test_seek_for_continues_then_freezes():
+    # 15s video, 5s scenes
+    assert _seek_for(0.0, 15.0) == 0.0      # first scene from start
+    assert _seek_for(5.0, 15.0) == 5.0      # continue
+    assert _seek_for(10.0, 15.0) == 10.0    # continue
+    # exhausted -> clamp near the end (freeze last frame)
+    assert _seek_for(15.0, 15.0) == 14.9
+    assert _seek_for(20.0, 15.0) == 14.9
+    # unknown total -> start from 0
+    assert _seek_for(8.0, 0.0) == 0.0
 
 
 def test_wrap_breaks_long_text():

@@ -181,40 +181,56 @@ def _make_clip(frame_png: Path, audio: Path | None, duration: float,
               "-ac", "2", str(out_mp4)])
 
 
-def _video_bg_filter(fit: str) -> str:
-    """Build the ffmpeg filter for the looped source video background, ending
-    in [bg], honoring the fit mode (crop|fit|blur)."""
+def _seek_for(offset: float, total: float) -> float:
+    """Where to start the next clip on a reused video: continue from `offset`,
+    but clamp near the end (keep the last frame) once the footage is used up."""
+    if total <= 0:
+        return 0.0
+    return min(offset, max(0.0, total - 0.1))
+
+
+def _video_bg_filter(fit: str, freeze_to: float | None = None) -> str:
+    """Build the ffmpeg filter for the source video background, ending in [bg],
+    honoring the fit mode (crop|fit|blur). When `freeze_to` is set, the last
+    frame is cloned (tpad) so the clip can be extended to that duration."""
+    tpad = (f",tpad=stop_mode=clone:stop_duration={freeze_to:.2f}"
+            if freeze_to else "")
     if fit == "crop":
         return ("[0:v]scale=1280:720:force_original_aspect_ratio=increase,"
-                "crop=1280:720,setsar=1,fps=30[bg]")
+                "crop=1280:720,setsar=1" + tpad + ",fps=30[bg]")
     if fit == "blur":
         return ("[0:v]split=2[a][b];"
                 "[a]scale=1280:720:force_original_aspect_ratio=increase,"
                 "crop=1280:720,boxblur=20:5[bgb];"
                 "[b]scale=1280:720:force_original_aspect_ratio=decrease[fg];"
-                "[bgb][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30[bg]")
+                "[bgb][fg]overlay=(W-w)/2:(H-h)/2,setsar=1" + tpad +
+                ",fps=30[bg]")
     # fit (default): whole frame visible, letterboxed
     return ("[0:v]scale=1280:720:force_original_aspect_ratio=decrease,"
             "pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black,"
-            "setsar=1,fps=30[bg]")
+            "setsar=1" + tpad + ",fps=30[bg]")
 
 
 def _make_video_clip(src_video: Path, overlay_png: Path, audio: Path | None,
-                     duration: float, out_mp4: Path, fit: str = "fit") -> None:
-    """Use a (looped) source video clip as the background (placed per `fit`),
-    original audio dropped, our subtitle overlaid, and our narration audio as
-    the soundtrack."""
+                     duration: float, out_mp4: Path, fit: str = "fit",
+                     seek: float = 0.0) -> None:
+    """Use a source video clip as the background (placed per `fit`), starting
+    at `seek` seconds (so consecutive scenes on the same video continue rather
+    than restart). The last frame is frozen (tpad) to fill `duration` if the
+    remaining footage is shorter. Original audio dropped; our subtitle is
+    overlaid and our narration audio is the soundtrack."""
     dur = f"{max(1.0, duration):.2f}"
-    vf = _video_bg_filter(fit) + ";[bg][1:v]overlay=0:0[v]"
+    vf = _video_bg_filter(fit, freeze_to=duration) + ";[bg][1:v]overlay=0:0[v]"
+    seek_args = ["-ss", f"{seek:.2f}"] if seek and seek > 0 else []
     common = ["-r", str(_FPS), "-c:v", "libx264", "-pix_fmt", "yuv420p"]
     if audio and Path(audio).exists():
-        _run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(src_video),
+        _run(["ffmpeg", "-y", *seek_args, "-i", str(src_video),
               "-i", str(overlay_png), "-i", str(audio),
               "-filter_complex", vf, "-map", "[v]", "-map", "2:a",
               *common, "-c:a", "aac", "-b:a", "128k", "-ar", str(_SAMPLE_RATE),
               "-ac", "2", "-t", dur, str(out_mp4)])
     else:
-        _run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(src_video),
+        _run(["ffmpeg", "-y", *seek_args, "-i", str(src_video),
               "-i", str(overlay_png), "-f", "lavfi", "-i",
               f"anullsrc=r={_SAMPLE_RATE}:cl=stereo",
               "-filter_complex", vf, "-map", "[v]", "-map", "2:a",
@@ -255,6 +271,11 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
     # the LLM left as none/invalid — so the video never goes all black.
     img_pool = [image_map[k] for k in sorted(image_map)]
     auto = 0
+    # Track each source video's playback position so consecutive scenes on the
+    # same video continue instead of restarting, and freeze on the last frame
+    # once the footage runs out. Total durations cached to avoid re-probing.
+    video_pos: dict[str, float] = {}
+    video_total: dict[str, float] = {}
 
     clips: list[Path] = []
     for i, sc in enumerate(scenes):
@@ -276,7 +297,15 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
         if src_video and Path(src_video).exists():
             overlay = render_subtitle_overlay(
                 sc.get("narration", ""), work_dir / f"ov-{i}.png")
-            _make_video_clip(src_video, overlay, audio, duration, clip, fit=fit)
+            key = str(src_video)
+            if key not in video_total:
+                video_total[key] = probe_duration(src_video) or 0.0
+            total = video_total[key]
+            offset = video_pos.get(key, 0.0)
+            seek = _seek_for(offset, total)
+            _make_video_clip(src_video, overlay, audio, duration, clip,
+                             fit=fit, seek=seek)
+            video_pos[key] = offset + duration
         else:
             iidx = _idx(media, "image:")
             bg = image_map.get(iidx) if iidx else None
