@@ -12,6 +12,13 @@ from app.config import Config
 from app.pipeline.localize import local_media_file, normalize_url
 from app.pipeline.narration import load_narration
 from app.video.builder import build_video
+from app.media.downloader import MediaDownloader
+from app.media.strategies import (
+    HttpxDirectStrategy,
+    UrlTransformStrategy,
+    HttpxDirectVideoStrategy,
+    YtDlpStrategy,
+)
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -28,8 +35,8 @@ def _origin(url: str) -> str:
 
 def _download_videos(urls: list[str], dest: Path, config: Config,
                      progress=None, max_seconds: int = 40) -> dict[int, Path]:
-    """Download original videos via yt-dlp, keeping their 1-based index (for
-    media 'video:N'). Only the first `max_seconds` are fetched to save time.
+    """Download original videos via the strategy-based fallback chain,
+    keeping their 1-based index (for media 'video:N').
 
     Note: embedding third-party video into your own output may carry copyright
     obligations — cite sources / obtain rights as appropriate.
@@ -37,36 +44,21 @@ def _download_videos(urls: list[str], dest: Path, config: Config,
     emit = progress or _noop
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
+
+    downloader = MediaDownloader("video")
+    downloader.add_strategy(HttpxDirectVideoStrategy())
+    downloader.add_strategy(YtDlpStrategy())
+
     out: dict[int, Path] = {}
-    # Resolve already-localized videos directly; only remote ones need yt-dlp.
-    remote: list[tuple[int, str]] = []
     for i, url in enumerate(urls, 1):
         local = local_media_file(url, config)
         if local:
             out[i] = local
-        else:
-            remote.append((i, url))
-    if remote and not shutil.which("yt-dlp"):
-        emit("  未安装 yt-dlp，跳过远程原视频片段（pip install yt-dlp）")
-        return out
-    for i, url in remote:
+            continue
         emit(f"  下载原视频 #{i}…")
-        template = str(dest / f"vid-{i}.%(ext)s")
-        cmd = ["yt-dlp", "--no-playlist", "--quiet", "--no-warnings",
-               "--download-sections", f"*0-{max_seconds}",
-               "-f", "best[ext=mp4]/best", "--merge-output-format", "mp4",
-               "-o", template, url]
-        try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
-        except (subprocess.SubprocessError, OSError) as e:
-            emit(f"    失败：{e}")
-            continue
-        if r.returncode != 0:
-            emit(f"    下载失败（可能需登录/不支持）：{url[:60]}")
-            continue
-        matches = sorted(dest.glob(f"vid-{i}.*"))
-        if matches:
-            out[i] = matches[0]
+        p = downloader.download(url, dest, i, emit, max_seconds=max_seconds)
+        if p:
+            out[i] = p
     return out
 
 
@@ -74,37 +66,22 @@ def _download_images(urls: list[str], dest: Path, config: Config,
                      progress=None) -> dict[int, Path]:
     """Resolve images to local files (keyed by 1-based index for media
     'image:N'). Local /media/ paths are used directly; remote URLs are
-    downloaded as a fallback for older data."""
+    downloaded via the strategy-based fallback chain."""
     emit = progress or _noop
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
-    out: dict[int, Path] = {}
-    headers = {"User-Agent": _UA}
+
+    downloader = MediaDownloader("image")
+    downloader.add_strategy(HttpxDirectStrategy())
+    downloader.add_strategy(UrlTransformStrategy())
 
     def fetch(i: int, url: str) -> Path | None:
         local = local_media_file(url, config)
         if local:
             return local
-        safe = normalize_url(url)
-        if not safe:
-            emit(f"  跳过无效配图地址 #{i}：{(url or '')[:60]}")
-            return None
-        try:
-            data = httpx.get(
-                safe, timeout=20.0, follow_redirects=True,
-                headers={**headers, "Referer": _origin(safe)}).content
-        except Exception as e:  # noqa: BLE001
-            emit(f"  配图下载失败 #{i}：{e}")
-            return None
-        if not data:
-            emit(f"  配图为空 #{i}")
-            return None
-        ext = ".jpg" if any(s in url.lower() for s in (".jpg", ".jpeg")) \
-            else ".png"
-        p = dest / f"img-{i}{ext}"
-        p.write_bytes(data)
-        return p
+        return downloader.download(url, dest, i, emit)
 
+    out: dict[int, Path] = {}
     workers = max(1, config.workers)
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(fetch, i, u): i for i, u in enumerate(urls, 1)}

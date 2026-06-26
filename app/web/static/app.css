@@ -211,6 +211,7 @@ textarea, input, select {
 .btn.small { padding: 4px 10px; font-size: 12px; }
 .btn.danger { background: #7f1d1d; border-color: #991b1b; color: #fca5a5; }
 .btn.danger:hover { filter: brightness(1.2); }
+.batch-bar { min-height: 32px; margin-bottom: 6px; }
 .btn.warn { background: #78350f; border-color: #92400e; color: #fcd34d; }
 .inline-edit td { padding: 8px 10px; background: var(--panel2); }
 .inline-form { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
@@ -325,8 +326,27 @@ textarea, input, select {
   font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px;
 }
 .run-close:hover { color: var(--text); }
-.run-logs {
-  margin: 0; padding: 10px 14px; overflow-y: auto; flex: 1;
+/* ---- collapsible date groups for archive ---- */
+.archive-toolbar { display: flex; gap: 8px; margin: 12px 0; }
+.date-group { margin-bottom: 8px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--panel); }
+.date-group summary {
+  cursor: pointer; padding: 10px 16px; display: flex; align-items: center;
+  gap: 12px; background: var(--panel2); user-select: none;
+  list-style: none;
+}
+.date-group summary::-webkit-details-marker { display: none; }
+.date-group summary::before {
+  content: "▶"; font-size: 11px; color: var(--muted);
+  transition: transform .15s ease; display: inline-block;
+}
+.date-group[open] summary::before { transform: rotate(90deg); }
+.date-group summary:hover { filter: brightness(1.08); }
+.date-label { font-weight: 700; font-size: 15px; color: var(--text); }
+.date-count { font-size: 12px; color: var(--muted); margin-left: auto; }
+.date-group table { margin-top: 0; border: none; }
+.date-group table th,
+.date-group table td { padding-left: 16px; padding-right: 16px; }
+/* ---- article (original) preview ---- */
   font-size: 12px; line-height: 1.5; white-space: pre-wrap;
   color: var(--text); background: var(--bg);
   font-family: "SFMono-Regular", Consolas, monospace;

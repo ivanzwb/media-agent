@@ -28,9 +28,14 @@ def _hrefs(html: str) -> list[str]:
         out.append(m.group(1) or m.group(2) or m.group(3) or "")
     return out
 
-# Path segments that almost never point to an article. Matched as whole
-# path segments (case-insensitive), so "/news/about-ai" is NOT blocked.
-_NON_ARTICLE_SEGMENTS = {
+# Path segments that almost never point to an article.  ANY segment in this set
+# causes the URL to be rejected — this catches /about-us/achievement-awards
+# (where "about-us" matches) while keeping /blog-releases/release-notes.
+#
+# NOTE: terms like "events", "news", "blog" are deliberately NOT here —
+# /events/ai-summit-2026 and /news/gpt-5 are valid articles.  They live in
+# _NON_ARTICLE_TERMINAL instead, where only shallow index pages are blocked.
+_NON_ARTICLE_SEGMENTS: set[str] = {
     "about", "about-us", "contact", "contact-us", "careers", "career",
     "jobs", "privacy", "terms", "tos", "legal", "policy", "policies",
     "cookie", "cookies", "pricing", "plans", "login", "signin", "sign-in",
@@ -39,8 +44,32 @@ _NON_ARTICLE_SEGMENTS = {
     "author", "authors", "rss", "feed", "feeds", "faq", "faqs", "support",
     "help", "press", "press-kit", "media-kit", "brand", "security",
     "status", "download", "downloads", "products", "product", "solutions",
-    "company", "team", "events", "event", "partners", "investors",
+    "company", "team", "partners", "investors",
     "trust", "compliance", "responsible-disclosure",
+    # Additional common non-article sections
+    "awards", "award", "achievement", "achievements",
+    "leadership", "management", "board", "governance",
+    "affiliates", "services", "service",
+    "locations", "offices", "office",
+    "patents", "trademarks", "licensing",
+    "recognition", "testimonials", "clients",
+    "data-privacy", "gdpr", "ccpa",
+}
+
+# Terms that indicate a blog / news / article INDEX page when they appear
+# as the FINAL path segment AND the path is shallow (≤2 segments).
+# /quantum/blog              → blocked (terminal "blog", depth 2)
+# /quantum/blog/post-slug    → accepted (depth 3)
+# /news                      → blocked (terminal "news", depth 1)
+# /news-events/3gpp-news/release-18 → accepted (depth 3)
+# /events/ai-summit-2026     → accepted (terminal "ai-summit-2026" not in set)
+# /events                    → blocked (terminal "events", depth 1)
+_NON_ARTICLE_TERMINAL: set[str] = {
+    "blog", "news", "events", "event", "updates", "articles", "posts",
+    "insights", "features", "stories", "publications", "bulletins", "digest",
+    "archive", "archives", "media", "resources", "library",
+    "newsroom", "media-center",
+    "press-release", "press-releases",
 }
 
 # File extensions that are clearly not articles.
@@ -52,21 +81,43 @@ _ASSET_EXTS = {
 
 
 def _is_non_article(absolute: str) -> bool:
+    """Return True if *absolute* URL almost certainly does not point to an
+    individual article page.
+
+    Three-tier rejection:
+      1. Asset file extension (*.pdf, *.jpg …).
+      2. ANY path segment matches ``_NON_ARTICLE_SEGMENTS``.
+      3. Terminal segment matches ``_NON_ARTICLE_TERMINAL`` **and** the
+         path is shallow (≤2 segments deep).
+    """
     path = urlparse(absolute).path.lower()
     segments = [s for s in path.split("/") if s]
     if not segments:
-        return True  # bare domain / homepage, not an article
+        return True  # bare domain / homepage
+
     last = segments[-1]
-    # Asset files are never articles.
+
+    # ── Tier 1: asset files ─────────────────────────────────────────
     if "." in last:
         ext = last.rsplit(".", 1)[-1]
         if ext in _ASSET_EXTS:
             return True
-    # Only the LAST path segment decides: this blocks section landing pages
-    # (/about, /careers, /news, /events) while keeping deeper article slugs
-    # (/news/<slug>, /events/ai-summit-2026, /blog/download-whitepaper).
-    if last in _NON_ARTICLE_SEGMENTS:
+
+    # ── Tier 2: any segment matches a non‑article keyword ────────────
+    # cat /about-us/achievement-awards  (about-us matches)
+    # cat /careers/software-engineer    (careers matches)
+    # keep /news-events/3gpp-news/release-18
+    for seg in segments:
+        if seg in _NON_ARTICLE_SEGMENTS:
+            return True
+
+    # ── Tier 3: terminal segment is a container / index page ────────
+    # /quantum/blog               → blocked  (depth 2)
+    # /blog                        → blocked  (depth 1)
+    # /quantum/blog/post-slug      → accepted (depth 3)
+    if last in _NON_ARTICLE_TERMINAL and len(segments) <= 2:
         return True
+
     return False
 
 
@@ -147,11 +198,31 @@ def _pagination_links(html: str, base_url: str) -> list[str]:
     return out
 
 
+def _is_article_content(data: dict) -> bool:
+    """Return False if extracted data looks like a list / landing / thin page
+    rather than a real article.
+
+    Checks:
+      - Minimum content length (300 chars)
+      - At least 3 non‑link text lines (i.e. not just a link index)
+    """
+    md = (data.get("content_md") or "").strip()
+    if len(md) < 300:  # noqa: PLR2004
+        return False
+    lines = md.split("\n")
+    text_lines = [
+        l for l in lines
+        if l.strip() and not l.strip().startswith("http")
+        and not l.startswith("![")
+    ]
+    return len(text_lines) >= 3
+
+
 def scrape_single(url: str, source_name: str, timeout: float = 20.0,
                   render_js: bool = False) -> Article | None:
     html = _fetch_html(url, render_js=render_js, timeout=timeout)
     data = extract_from_html(html, url=url)
-    if not data["content_md"]:
+    if not data["content_md"] or not _is_article_content(data):
         return None
     return Article(
         title=data["title"] or url,
@@ -177,6 +248,7 @@ def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
     seen_links: set[str] = set()
     visited_pages: set[str] = set()
     queue: list[str] = [url]
+    source_normalized = url.rstrip("/")
     pages = 0
     max_pages = max(1, max_pages)
 
@@ -193,9 +265,12 @@ def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
         for link in discover_links(html, base_url=page_url,
                                    include_pattern=include_pattern,
                                    exclude_pattern=exclude_pattern):
-            if link not in seen_links:
-                seen_links.add(link)
-                article_links.append(link)
+            if link in seen_links:
+                continue
+            if link.rstrip("/") == source_normalized:
+                continue  # self-link back to the list page
+            seen_links.add(link)
+            article_links.append(link)
         if pages < max_pages:
             for nxt in _pagination_links(html, page_url):
                 if nxt not in visited_pages and nxt not in queue:

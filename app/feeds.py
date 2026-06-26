@@ -31,6 +31,18 @@ class FeedsConfig:
     topics: list[Topic]
     sources: list[SourceConfig]
 
+    def add_topic(self, topic: Topic) -> Topic | None:
+        if any(t.name == topic.name for t in self.topics):
+            return None
+        self.topics.append(topic)
+        return topic
+
+    def add_source(self, src: SourceConfig) -> SourceConfig | None:
+        if any(s.url == src.url for s in self.sources):
+            return None
+        self.sources.append(src)
+        return src
+
 
 def load_feeds(path: Path | str) -> FeedsConfig:
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}

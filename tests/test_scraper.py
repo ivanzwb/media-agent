@@ -13,7 +13,19 @@ LIST_HTML = """
 
 ARTICLE_HTML = """
 <html><head><title>Post A</title></head><body>
-<article><h1>Post A Title</h1><p>Real content about AI here.</p>
+<article><h1>Post A Title</h1>
+<p>Real content about AI here. This is a longer article with multiple paragraphs
+so that trafilatura extracts enough text to pass the 300-char article content
+check. Artificial intelligence continues to reshape our world in profound and
+unexpected ways. Researchers are pushing the boundaries of what machines can
+learn and accomplish. From natural language processing to computer vision,
+the applications are vast and growing.</p>
+<p>Another paragraph is needed to ensure we have multiple text lines after
+extraction. This second paragraph adds more depth to the article body and
+makes it look like a real article rather than a thin-content page.</p>
+<p>A third paragraph ensures we pass the minimum-text-lines check as well.
+The article content validation function requires at least three non-link
+text lines to consider a page as a genuine article.</p>
 <img src="https://example.com/a.png"/></article>
 </body></html>
 """
@@ -74,19 +86,36 @@ def test_discover_links_finds_single_and_unquoted(monkeypatch):
     assert "https://b.com/posts/y" in links
 
 
-def test_is_non_article_only_blocks_last_segment():
-    # section landing pages (in the denylist) blocked
-    assert _is_non_article("https://x.com/about")
-    assert _is_non_article("https://x.com/careers")
-    assert _is_non_article("https://x.com/events")       # denylisted section
-    assert _is_non_article("https://x.com/files/a.pdf")  # asset
-    # article-container sections (news/blog/research) are NOT denylisted
-    assert not _is_non_article("https://x.com/news")
-    # deeper article slugs are kept (the bug in issue #7)
-    assert not _is_non_article("https://x.com/news/gpt-5")
-    assert not _is_non_article("https://x.com/events/ai-summit-2026")
-    assert not _is_non_article("https://x.com/blog/download-whitepaper-ai")
-    assert not _is_non_article("https://x.com/research/some-paper")
+def test_is_non_article_three_tier():
+    """Verify the three-tier URL rejection logic:
+
+    Tier 1 — asset extensions.
+    Tier 2 — ANY segment matches _NON_ARTICLE_SEGMENTS.
+    Tier 3 — terminal segment in _NON_ARTICLE_TERMINAL AND depth ≤2.
+    """
+    # ── Tier 1: asset files ─────────────────────────────────────────
+    assert _is_non_article("https://x.com/files/a.pdf")
+
+    # ── Tier 2: ANY segment in strict blocklist → reject ────────────
+    assert _is_non_article("https://x.com/about")            # direct
+    assert _is_non_article("https://x.com/careers")          # direct
+    assert _is_non_article("https://x.com/about-us/team")    # middle segment
+    assert _is_non_article("https://x.com/awards/2025")       # add-on term
+    assert _is_non_article(
+        "https://x.com/about-us/achievement-awards")          # the 3gpp case
+
+    # ── Tier 3: container landing pages (terminal + shallow) ───────
+    assert _is_non_article("https://x.com/news")             # depth 1
+    assert _is_non_article("https://x.com/events")            # depth 1
+    assert _is_non_article("https://x.com/quantum/blog")      # depth 2
+
+    # ── Deeper article slugs are always kept ─────────────────────────
+    assert not _is_non_article("https://x.com/news/gpt-5")               # depth 2, terminal not blocked
+    assert not _is_non_article("https://x.com/events/ai-summit-2026")    # depth 2, terminal not blocked
+    assert not _is_non_article("https://x.com/blog/download-whitepaper-ai")  # depth 2, terminal not blocked
+    assert not _is_non_article("https://x.com/research/some-paper")      # depth 2, terminal not blocked
+    assert not _is_non_article("https://x.com/quantum/blog/some-post")   # depth 3
+    assert not _is_non_article("https://x.com/news-events/3gpp-news/release-18")  # depth 3
 
 
 def test_pagination_links_detected():

@@ -11,9 +11,6 @@
   <div class="reco-row">
     <input id="reco-themes" placeholder="如：科技, 财经" style="max-width:320px"/>
     <button type="button" class="btn primary" onclick="recoSubtopics()">推荐子主题</button>
-    <label class="muted" style="display:flex;align-items:center;gap:6px">
-      <input type="checkbox" id="reco-discover"/> 添加时同时发现来源
-    </label>
     <span id="reco-status" class="muted"></span>
   </div>
 
@@ -25,14 +22,68 @@
   <div id="reco-groups"></div>
 </section>
 
+<!-- ====== HOTNESS RANKING ====== -->
+<section class="hotness">
+  <div class="reco-row">
+    <h2 style="margin:0">热度排名</h2>
+    <button type="button" class="btn primary small" id="hotness-refresh-btn" onclick="refreshHotness()">
+      ⟳ 刷新热度
+    </button>
+    <span id="hotness-status" class="muted">
+      {% if hotness_updated %}上次更新：{{ hotness_updated[:19] | replace('T', ' ') }}{% endif %}
+    </span>
+  </div>
+  <div id="hotness-body" style="display:{{ 'block' if hotness else 'none' }}">
+  {% if hotness %}
+  <div class="hotness-grid">
+    <div class="hotness-col">
+      <h3>🔥 主题热度</h3>
+      <ol class="hotness-list">
+      {% for t in hotness.topics[:10] %}
+        <li>
+          <span class="hotness-rank">{{ loop.index }}</span>
+          <span class="hotness-name">{{ t.name }}</span>
+          <span class="hotness-bar"><span style="width:{{ t.score // 2 }}px"></span></span>
+          <span class="hotness-score">{{ t.score }}</span>
+          <span class="muted">{{ t.recent }}篇/周 · {{ t.total }}篇</span>
+        </li>
+      {% endfor %}
+      </ol>
+    </div>
+    <div class="hotness-col">
+      <h3>🔥 来源热度</h3>
+      <ol class="hotness-list">
+      {% for s in hotness.sources[:10] %}
+        <li>
+          <span class="hotness-rank">{{ loop.index }}</span>
+          <span class="hotness-name">{{ s.name }}</span>
+          <span class="hotness-bar"><span style="width:{{ s.score // 2 }}px"></span></span>
+          <span class="hotness-score">{{ s.score }}</span>
+          <span class="muted">{{ s.recent }}篇/周 · {{ s.total }}篇</span>
+        </li>
+      {% endfor %}
+      </ol>
+    </div>
+  </div>
+  {% endif %}
+  </div>
+</section>
+
 {% if feeds %}
 <!-- ====== TOPICS ====== -->
 <h2>主题</h2>
+<div class="batch-bar">
+  <button type="button" class="btn small danger" onclick="batchDelete('topic')" id="topic-batch-del" style="display:none">批量删除</button>
+</div>
 <table id="topics-table">
-  <thead><tr><th>名称</th><th>关键词</th><th style="width:120px">操作</th></tr></thead>
+  <thead><tr>
+    <th style="width:32px"><input type="checkbox" id="topic-select-all" onchange="toggleAll('topic')" title="全选"/></th>
+    <th>名称</th><th>关键词</th><th style="width:120px">操作</th>
+  </tr></thead>
   <tbody>
   {% for t in feeds.topics %}
     <tr id="topic-row-{{ loop.index }}">
+      <td><input type="checkbox" class="topic-cb" value="{{ t.name | e }}" onchange="toggleBatchBtn('topic')"/></td>
       <td><strong>{{ t.name }}</strong></td>
       <td class="muted">{{ t.keywords | join(", ") }}</td>
       <td class="actions">
@@ -46,7 +97,7 @@
       </td>
     </tr>
     <tr id="topic-edit-{{ loop.index }}" class="inline-edit" style="display:none">
-      <td colspan="3">
+      <td></td><td colspan="3">
         <form method="post" action="/sources/topics/edit" class="inline-form">
           <input type="hidden" name="old_name" value="{{ t.name }}"/>
           <input name="name" value="{{ t.name }}" placeholder="主题名称" required style="max-width:140px"/>
@@ -57,7 +108,7 @@
       </td>
     </tr>
     <tr id="topic-src-{{ loop.index }}" class="inline-edit" style="display:none">
-      <td colspan="3">
+      <td></td><td colspan="3">
         <div class="reco-row">
           <strong>{{ t.name }}</strong> · 前沿来源（公司 / 机构）
           <button type="button" class="btn primary small"
@@ -79,11 +130,18 @@
 
 <!-- ====== SOURCES ====== -->
 <h2>来源</h2>
+<div class="batch-bar">
+  <button type="button" class="btn small danger" onclick="batchDelete('source')" id="source-batch-del" style="display:none">批量删除</button>
+</div>
 <table id="sources-table">
-  <thead><tr><th>名称</th><th>类型</th><th>URL</th><th>主题</th><th>模式</th><th>状态</th><th style="width:140px">操作</th></tr></thead>
+  <thead><tr>
+    <th style="width:32px"><input type="checkbox" id="source-select-all" onchange="toggleAll('source')" title="全选"/></th>
+    <th>名称</th><th>类型</th><th>URL</th><th>主题</th><th>模式</th><th>状态</th><th style="width:140px">操作</th>
+  </tr></thead>
   <tbody>
   {% for s in feeds.sources %}
     <tr id="src-row-{{ loop.index }}" class="{{ 'disabled-row' if not s.enabled else '' }}">
+      <td><input type="checkbox" class="source-cb" value="{{ s.url | e }}" onchange="toggleBatchBtn('source')"/></td>
       <td>{{ s.name }}</td>
       <td>{{ s.type }}</td>
       <td class="path">{{ s.url }}</td>
@@ -107,7 +165,7 @@
       </td>
     </tr>
     <tr id="src-edit-{{ loop.index }}" class="inline-edit" style="display:none">
-      <td colspan="7">
+      <td></td><td colspan="7">
         <form method="post" action="/sources/edit" class="inline-form">
           <input type="hidden" name="url" value="{{ s.url }}"/>
           <input name="name" value="{{ s.name }}" placeholder="名称" required style="max-width:140px"/>
@@ -263,9 +321,6 @@ async function addTopicFromGroup(card) {
   badge.textContent = '添加中…';
   try {
     await postForm('/sources/topics/add', {name, keywords});
-    if (document.getElementById('reco-discover').checked) {
-      await postForm('/sources/search', {keyword: name, topics: name});
-    }
     badge.className = 'reco-badge added';
     badge.textContent = '✓ 已添加';
     refreshTopicsTable();
@@ -347,6 +402,36 @@ async function refreshSourcesTable() {
     const cur = document.getElementById('sources-table');
     if (fresh && cur) cur.replaceWith(fresh);
   } catch (e) { /* best-effort */ }
+}
+
+// ---- batch delete ----
+function toggleAll(type) {
+  const checked = document.getElementById(type + '-select-all').checked;
+  document.querySelectorAll('.' + type + '-cb').forEach(function (cb) { cb.checked = checked; });
+  toggleBatchBtn(type);
+}
+
+function toggleBatchBtn(type) {
+  const btn = document.getElementById(type + '-batch-del');
+  const any = document.querySelectorAll('.' + type + '-cb:checked').length > 0;
+  btn.style.display = any ? 'inline-block' : 'none';
+}
+
+function batchDelete(type) {
+  var cbClass = type + '-cb', endpoint, label;
+  if (type === 'topic') { endpoint = '/sources/topics/delete-batch'; label = '主题'; }
+  else { endpoint = '/sources/delete-batch'; label = '来源'; }
+  const items = Array.from(document.querySelectorAll('.' + cbClass + ':checked')).map(function (cb) { return cb.value; });
+  if (!items.length) { alert('请至少选择一个' + label); return; }
+  if (!confirm('确定要删除选中的 ' + items.length + ' 个' + label + '吗？')) return;
+  fetch(endpoint, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({items: items}),
+  }).then(function (r) {
+    if (r.redirected) { window.location.href = r.url; }
+    else { location.reload(); }
+  });
 }
 </script>
 {% endblock %}

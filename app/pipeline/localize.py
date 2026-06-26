@@ -16,6 +16,13 @@ import httpx
 from app.config import Config
 from app.models import Article
 from app.sources.extractor import _videos_from_html
+from app.media.downloader import MediaDownloader
+from app.media.strategies import (
+    HttpxDirectStrategy,
+    UrlTransformStrategy,
+    HttpxDirectVideoStrategy,
+    YtDlpStrategy,
+)
 
 _MD_IMG_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
 _HTML_IMG_RE = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.I)
@@ -47,6 +54,20 @@ def content_videos(content: str) -> list[str]:
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
+
+# ---------------------------------------------------------------------------
+# Strategy-based media downloaders (fallback chain)
+# ---------------------------------------------------------------------------
+
+_image_downloader = MediaDownloader("image")
+_image_downloader.add_strategy(HttpxDirectStrategy())
+_image_downloader.add_strategy(UrlTransformStrategy())
+
+_video_downloader = MediaDownloader("video")
+_video_downloader.add_strategy(HttpxDirectVideoStrategy())
+_video_downloader.add_strategy(YtDlpStrategy())
+
+# ---------------------------------------------------------------------------
 
 
 def _noop(*_a, **_k) -> None:
@@ -102,24 +123,7 @@ def _img_ext(url: str, content_type: str | None) -> str:
 
 
 def _download_image(url: str, dest: Path, idx: int, emit) -> Path | None:
-    safe = normalize_url(url)
-    if not safe:
-        emit(f"    跳过无效图片地址 #{idx}：{(url or '')[:60]}")
-        return None
-    try:
-        resp = httpx.get(safe, timeout=20.0, follow_redirects=True,
-                         headers={"User-Agent": _UA, "Referer": _origin(safe)})
-        resp.raise_for_status()
-        data = resp.content
-    except Exception as e:  # noqa: BLE001
-        emit(f"    图片下载失败 #{idx}：{e}")
-        return None
-    if not data:
-        return None
-    ext = _img_ext(url, resp.headers.get("content-type"))
-    path = dest / f"img-{idx}{ext}"
-    path.write_bytes(data)
-    return path
+    return _image_downloader.download(url, dest, idx, emit)
 
 
 _DIRECT_VIDEO_EXTS = {".mp4", ".webm", ".m4v", ".mov", ".ogv", ".ogg"}
@@ -127,56 +131,8 @@ _DIRECT_VIDEO_EXTS = {".mp4", ".webm", ".m4v", ".mov", ".ogv", ".ogg"}
 
 def _download_video(url: str, dest: Path, idx: int, emit,
                     max_seconds: int = 60) -> Path | None:
-    safe = normalize_url(url)
-    if not safe:
-        emit(f"    跳过无效视频地址 #{idx}：{(url or '')[:80]}")
-        return None
-    ext = Path(urlparse(safe).path).suffix.lower()
-
-    # Direct media files (e.g. figure.ai self-hosted mp4) → download directly.
-    if ext in _DIRECT_VIDEO_EXTS:
-        emit(f"    直链下载视频 #{idx}（{ext}）：{safe[:80]}")
-        path = dest / f"vid-{idx}{ext}"
-        try:
-            with httpx.stream("GET", safe, timeout=120.0,
-                              follow_redirects=True,
-                              headers={"User-Agent": _UA,
-                                       "Referer": _origin(safe)}) as r:
-                r.raise_for_status()
-                with open(path, "wb") as f:
-                    for chunk in r.iter_bytes(chunk_size=65536):
-                        f.write(chunk)
-        except Exception as e:  # noqa: BLE001
-            emit(f"    直链视频下载失败 #{idx}：{e}")
-            return None
-        emit(f"    视频已保存 #{idx}：{path.name}")
-        return path
-
-    # Otherwise treat as a platform embed (YouTube/Bilibili/…) → yt-dlp.
-    if not shutil.which("yt-dlp"):
-        emit(f"    无 yt-dlp，无法下载平台视频 #{idx}：{safe[:80]}")
-        return None
-    emit(f"    yt-dlp 下载视频 #{idx}：{safe[:80]}")
-    template = str(dest / f"vid-{idx}.%(ext)s")
-    cmd = ["yt-dlp", "--no-playlist", "--no-warnings",
-           "--download-sections", f"*0-{max_seconds}",
-           "-f", "best[ext=mp4]/best", "--merge-output-format", "mp4",
-           "-o", template, safe]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    except (subprocess.SubprocessError, OSError) as e:
-        emit(f"    视频下载失败 #{idx}：{e}")
-        return None
-    if r.returncode != 0:
-        tail = (r.stderr or "").strip().splitlines()[-1:] or [""]
-        emit(f"    视频下载失败 #{idx}：{tail[0][:160]}")
-        return None
-    matches = sorted(dest.glob(f"vid-{idx}.*"))
-    if matches:
-        emit(f"    视频已保存 #{idx}：{matches[0].name}")
-        return matches[0]
-    emit(f"    视频下载后未找到文件 #{idx}")
-    return None
+    return _video_downloader.download(url, dest, idx, emit,
+                                      max_seconds=max_seconds)
 
 
 def _download_set(urls, dest: Path, folder: str, fn, workers: int,

@@ -30,7 +30,7 @@ def _media_urls_by_ext(html: str, exts: tuple[str, ...]) -> list[str]:
     """Quoted-string URLs ending in one of `exts` (catches media URLs embedded
     in <script> JSON, CSS background-image, srcset, etc.)."""
     pat = re.compile(
-        r'["\']([^"\']+?\.(?:' + "|".join(exts) + r'))(?:\?[^"\']*)?["\']',
+        r'["\']([^"\']*\.(?:' + "|".join(exts) + r')[^"\']*)["\']',
         re.I)
     return [m.group(1) for m in pat.finditer(html)]
 

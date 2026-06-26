@@ -26,7 +26,7 @@ from app.pipeline.narration import (
     generate_narration, load_narration, save_scenes, resynth_scenes)
 from app.pipeline.orchestrator import run_pipeline, _append_prompt
 from app.pipeline.recommender import (
-    suggest_subtopics, suggest_keywords, suggest_sources)
+    suggest_subtopics, suggest_keywords, suggest_sources, compute_hotness)
 from app.pipeline.localize import localize_one
 from app.pipeline.rewriter import rewrite
 from app.pipeline.video import build_explainer_video, video_path
@@ -134,10 +134,21 @@ def create_app(config: Config | None = None,
         store = get_store()
         articles = store.list_articles(limit=200, topic=topic)
         topics = store.list_topics()
+        # Group articles by date (YYYY-MM-DD) for collapsible date nodes.
+        from collections import OrderedDict
+        groups: list[tuple[str, list]] = []
+        by_date: dict[str, list] = OrderedDict()
+        for a in articles:
+            dt = a["published_at"] or a["fetched_at"]
+            date_key = dt[:10] if dt else "未知日期"
+            by_date.setdefault(date_key, []).append(a)
+        for date_key in sorted(by_date, reverse=True):
+            groups.append((date_key, by_date[date_key]))
         return templates.TemplateResponse(request, "archive.html", {
             "articles": articles, "topics": topics,
             "draft_map": store.drafts_by_article(),
-            "current_topic": topic, "active": "archive"})
+            "current_topic": topic, "active": "archive",
+            "date_groups": groups})
 
     @app.get("/archive/{article_id}/view", response_class=HTMLResponse)
     def archive_view(request: Request, article_id: int):
@@ -354,8 +365,15 @@ def create_app(config: Config | None = None,
     @app.get("/sources", response_class=HTMLResponse)
     def sources_page(request: Request):
         cfg = load_feeds(feeds_path) if feeds_path.exists() else None
+        store = get_store()
+        raw_hot = store.get_setting("hotness_data")
+        hotness = json.loads(raw_hot) if raw_hot else None
+        hotness_updated = store.get_setting("hotness_updated_at")
         return templates.TemplateResponse(request, "sources.html", {
-            "feeds": cfg, "active": "sources"})
+            "feeds": cfg, "active": "sources",
+            "hotness": hotness,
+            "hotness_updated": hotness_updated,
+        })
 
     @app.post("/sources/add")
     def sources_add(name: str = Form(...), type: str = Form("rss"),
@@ -367,7 +385,7 @@ def create_app(config: Config | None = None,
                     render_js: str = Form("")):
         cfg = load_feeds(feeds_path)
         topic_list = [t.strip() for t in topics.split(",") if t.strip()]
-        cfg.sources.append(SourceConfig(
+        cfg.add_source(SourceConfig(
             name=name, type=type, url=url, topics=topic_list, mode=mode,
             include_pattern=include_pattern or None,
             exclude_pattern=exclude_pattern or None,
@@ -378,12 +396,9 @@ def create_app(config: Config | None = None,
 
     def _append_sources(found):
         cfg = load_feeds(feeds_path)
-        existing = {s.url for s in cfg.sources}
         added = 0
         for s in found:
-            if s.url not in existing:
-                cfg.sources.append(s)
-                existing.add(s.url)
+            if cfg.add_source(s) is not None:
                 added += 1
         if added:
             save_feeds(cfg, feeds_path)
@@ -400,6 +415,23 @@ def create_app(config: Config | None = None,
         topic_list = [t.strip() for t in topics.split(",") if t.strip()]
         _append_sources(discover_from_keyword(keyword, topics=topic_list))
         return RedirectResponse(url="/sources", status_code=303)
+
+    # ---- hotness ranking ----
+
+    @app.post("/sources/refresh-hotness")
+    def sources_refresh_hotness():
+        store = get_store()
+        cfg = load_feeds(feeds_path) if feeds_path.exists() else None
+        try:
+            data = compute_hotness(store, feeds_cfg=cfg,
+                                   provider=_llm_provider())
+        except Exception:
+            # Fallback: store-only with no provider
+            data = compute_hotness(store)
+        store.set_setting("hotness_data", json.dumps(data))
+        store.set_setting("hotness_updated_at",
+                          datetime.now(timezone.utc).isoformat())
+        return {"status": "ok", **data}
 
     # ---- smart topic recommendation ----
 
@@ -445,7 +477,7 @@ def create_app(config: Config | None = None,
     def topics_add(name: str = Form(...), keywords: str = Form("")):
         cfg = load_feeds(feeds_path)
         kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
-        cfg.topics.append(Topic(name=name.strip(), keywords=kw_list))
+        cfg.add_topic(Topic(name=name.strip(), keywords=kw_list))
         save_feeds(cfg, feeds_path)
         return RedirectResponse(url="/sources", status_code=303)
 
@@ -501,6 +533,32 @@ def create_app(config: Config | None = None,
         cfg.sources = [s for s in cfg.sources if s.url != url.strip()]
         save_feeds(cfg, feeds_path)
         return RedirectResponse(url="/sources", status_code=303)
+
+    @app.post("/sources/delete-batch")
+    async def sources_delete_batch(request: Request):
+        body = await request.json()
+        urls = body.get("items", [])
+        if not urls:
+            return {"deleted": 0}
+        cfg = load_feeds(feeds_path)
+        url_set = set(u.strip() for u in urls)
+        before = len(cfg.sources)
+        cfg.sources = [s for s in cfg.sources if s.url not in url_set]
+        save_feeds(cfg, feeds_path)
+        return {"deleted": before - len(cfg.sources)}
+
+    @app.post("/sources/topics/delete-batch")
+    async def topics_delete_batch(request: Request):
+        body = await request.json()
+        names = body.get("items", [])
+        if not names:
+            return {"deleted": 0}
+        cfg = load_feeds(feeds_path)
+        name_set = set(n.strip() for n in names)
+        before = len(cfg.topics)
+        cfg.topics = [t for t in cfg.topics if t.name not in name_set]
+        save_feeds(cfg, feeds_path)
+        return {"deleted": before - len(cfg.topics)}
 
     @app.post("/sources/toggle")
     def sources_toggle(url: str = Form(...)):

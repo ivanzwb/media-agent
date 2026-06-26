@@ -1,106 +1,106 @@
 topics:
 - name: 人工智能
   keywords:
-  - 人工智能
   - Artificial Intelligence
-  - AI
-  - 机器学习
+  - 人工智能
   - Machine Learning
-  - 深度学习
+  - 机器学习
   - Deep Learning
-  - 自然语言处理
+  - 深度学习
+  - Neural Network
+  - 神经网络
+  - Natural Language Processing
   - NLP
+  - 自然语言处理
+  - Computer Vision
   - 计算机视觉
-  - 生成式AI
-  - Generative AI
-  - AIGC
-  - 大语言模型
-  - LLM
-- name: 大语言模型
-  keywords:
-  - 大语言模型
-  - Large Language Model
-  - LLM
-  - 基础模型
-  - Foundation Model
-  - Transformer
-  - 注意力机制
-  - Attention Mechanism
-  - 提示工程
-  - Prompt Engineering
-  - 思维链
-  - Chain of Thought
-  - CoT
-  - 检索增强生成
-  - RAG
-- name: 具身智能
-  keywords:
-  - 具身智能
-  - Embodied AI
-  - Embodied Intelligence
-  - 人形机器人
-  - Humanoid robot
-  - 物理AI
-  - Physical AI
-  - 空间智能
-  - Spatial Intelligence
-  - 视觉语言动作模型
-  - Vision-Language-Action model
-  - VLA
-  - 强化学习
   - Reinforcement Learning
-  - 模仿学习
+  - 强化学习
+- name: 量子计算
+  keywords:
+  - 量子计算
+  - Quantum computing
+  - 量子比特
+  - Qubit
+  - 超导量子比特
+  - Superconducting qubit
+  - 离子阱
+  - Ion trap
+  - 光量子计算
+  - Photonic quantum computing
+  - 拓扑量子比特
+  - Topological qubit
+  - 量子门
+  - Quantum gate
+  - 量子纠错
 - name: 脑机接口
   keywords:
   - 脑机接口
   - Brain-Computer Interface
   - BCI
-  - 神经接口
-  - Neural Interface
-  - 侵入式脑机接口
-  - Invasive BCI
-  - 非侵入式脑机接口
-  - Non-invasive BCI
-  - 半侵入式
-  - 脑电信号
+  - Neuralink
+  - Synchron
+  - BrainGate
+  - Kernel
+  - Neurable
+  - NextMind
+  - OpenBCI
+  - 脑电图
   - EEG
-  - ECoG
-  - fNIRS
-  - 神经解码
-- name: 半导体芯片
+  - 功能磁共振成像
+  - fMRI
+  - 近红外光谱
+- name: 芯片制造
   keywords:
-  - 半导体
-  - 芯片
-  - 集成电路
+  - 芯片制造
+  - semiconductor manufacturing
   - 晶圆
+  - wafer
   - 光刻
-  - 先进封装
-  - 制程
-  - 摩尔定律
-  - SoC
-  - GPU
-  - CPU
-  - ASIC
-  - FPGA
-  - 台积电
-  - TSMC
+  - photolithography
+  - 极紫外光刻
+  - EUV
+  - 深紫外光刻
+  - DUV
+  - 刻蚀
+  - etching
+  - 薄膜沉积
+  - thin film deposition
+  - 化学气相沉积
+- name: 自动驾驶
+  keywords:
+  - 自动驾驶
+  - autonomous driving
+  - self-driving
+  - 无人驾驶
+  - ADAS
+  - 高级驾驶辅助系统
+  - L2级自动驾驶
+  - L3级自动驾驶
+  - L4级自动驾驶
+  - L5级自动驾驶
+  - 感知
+  - perception
+  - 激光雷达
+  - LiDAR
+  - 毫米波雷达
 - name: 虚拟现实
   keywords:
   - 虚拟现实
   - Virtual Reality
   - VR
-  - VR头显
-  - HMD
+  - 增强现实
+  - Augmented Reality
+  - AR
+  - 混合现实
+  - Mixed Reality
+  - MR
   - 空间计算
   - Spatial Computing
-  - 元宇宙
-  - Metaverse
-  - Apple Vision Pro
+  - Oculus
   - Meta Quest
-  - Pico
-  - PSVR2
   - HTC Vive
-  - Pancake光学
+  - Valve Index
 - name: 增强现实
   keywords:
   - 增强现实
@@ -112,80 +112,522 @@ topics:
   - 扩展现实
   - XR
   - 空间计算
-  - Spatial Computing
-  - 智能眼镜
-  - Smart Glasses
-  - AR眼镜
-  - AR头显
+  - spatial computing
+  - 光波导
+  - optical waveguide
+  - 全息投影
+  - holographic projection
   - SLAM
-- name: 机器人技术
+- name: 5G通信
   keywords:
-  - 机器人技术
-  - Robotics
-  - 具身智能
-  - Embodied AI
-  - 人形机器人
-  - Humanoid Robot
-  - 波士顿动力
-  - Boston Dynamics
-  - 特斯拉擎天柱
-  - Tesla Optimus
-  - 宇树科技
-  - Unitree
-  - Figure AI
-  - 优必选
-  - UBTECH
-- name: 6G通信
+  - 5G NR
+  - 5G New Radio
+  - massive MIMO
+  - 大规模MIMO
+  - beamforming
+  - 波束赋形
+  - mmWave
+  - 毫米波
+  - sub-6 GHz
+  - 厘米波
+  - small cell
+  - 小基站
+  - network slicing
+  - 网络切片
+  - eMBB
+- name: 6G研发
   keywords:
   - 6G
-  - 第六代移动通信
-  - 6G communication
-  - 6G network
+  - 6G研发
+  - 6G网络
   - 太赫兹通信
   - Terahertz communication
-  - THz
+  - 毫米波
+  - mmWave
   - 空天地一体化
-  - Space-air-ground integrated network
-  - SAGIN
-  - 通感一体化
-  - ISAC
-  - Integrated Sensing and Communication
+  - 卫星互联网
+  - 非地面网络
+  - NTN
   - 智能超表面
   - RIS
+  - 可重构智能表面
+  - Reconfigurable Intelligent Surface
+- name: 物联网
+  keywords:
+  - IoT
+  - Internet of Things
+  - 物联网
+  - 传感器
+  - sensor
+  - 边缘计算
+  - edge computing
+  - MQTT
+  - CoAP
+  - 嵌入式系统
+  - embedded system
+  - 低功耗广域网
+  - LPWAN
+  - LoRa
+  - NB-IoT
+- name: 区块链技术
+  keywords:
+  - 区块链
+  - Blockchain
+  - 分布式账本
+  - Distributed Ledger
+  - 共识机制
+  - Consensus Mechanism
+  - 工作量证明
+  - Proof of Work
+  - PoW
+  - 权益证明
+  - Proof of Stake
+  - PoS
+  - 委托权益证明
+  - Delegated Proof of Stake
+  - DPoS
+- name: 云计算
+  keywords:
+  - cloud computing
+  - 云计算
+  - IaaS
+  - PaaS
+  - SaaS
+  - public cloud
+  - 私有云
+  - 混合云
+  - 多云
+  - 虚拟化
+  - 弹性计算
+  - 云原生
+  - 无服务器计算
+  - 容器
+  - Kubernetes
+- name: AI Agent
+  keywords:
+  - AI Agent
+  - Agent框架
+  - function calling
+  - 工具使用
+  - AutoGPT
+  - CrewAI
+  - LangGraph
+  - 多Agent
+  - 规划
+  - 记忆
+  - 反思
+  - Agent评测
+  - 智能体
+  - LLM Agent
+  - ReAct
+  - AI Agents
+  - 多智能体系统
+  - 函数调用
+  - LangChain Agent
+  - Microsoft AutoGen
+- name: 具身智能
+  keywords:
+  - embodied AI
+  - 具身智能
+  - 人形机器人
+  - 世界模型
+  - 灵巧手
+  - 机械臂操作
+  - Sim-to-Real
+  - 遥操作
+  - Physical Intelligence
+  - Figure
+  - Tesla Optimus
+  - 具身人工智能
+  - 机器人学习
+  - Robot Learning
+  - 仿真环境
+  - Sim-to-Real Transfer
+  - Humanoid Robot
+  - 英伟达 Isaac
+  - NVIDIA Omniverse
+  - 李飞飞 具身智能
+- name: 机器人
+  keywords:
+  - robotics
+  - 人形机器人
+  - 波士顿动力
+  - 机械臂
+  - 运动控制
+  - 强化学习
+  - 具身智能
+  - 四足机器人
+  - 灵巧手
+  - SLAM
+  - 宇树
+  - Figure
+  - 服务机器人
+  - 工业机器人
+  - 机器人 Robot
+  - 人形机器人 Humanoid Robot
+  - 特斯拉 Optimus Tesla Bot
+  - 具身智能 Embodied AI
+  - 波士顿动力 Boston Dynamics
+  - 人工智能机器人 AI Robot
+- name: 商业航天
+  keywords:
+  - 商业航天
+  - SpaceX
+  - 星舰
+  - Starlink
+  - 可回收火箭
+  - 卫星互联网
+  - 太空旅游
+  - 民营航天
+  - 商业航天 Commercial Space
+  - 星链 Starlink
+  - 猎鹰9号 Falcon 9
+  - 星舰 Starship
+  - 可重复使用火箭 Reusable Rocket
+  - 太空旅游 Space Tourism
+  - 蓝色起源 Blue Origin
+  - 维珍银河 Virgin Galactic
+  - 火箭实验室 Rocket Lab
+  - 低轨卫星星座 LEO Satellite Constellation
+  - 中国商业航天 China Commercial Space
+  - 星河动力 Galactic Energy
+- name: 生成式AI应用
+  keywords:
+  - ChatGPT
+  - 生成式AI
+  - Generative AI
+  - AIGC
+  - OpenAI
+  - GPT-4
+  - 大语言模型
+  - Large Language Model
+  - DALL-E
+  - Midjourney
+  - Stable Diffusion
+  - Sora
+  - 生成式AI应用
+  - Generative AI Applications
+  - Microsoft Copilot
+  - Google Gemini
+  - Claude
+  - 文本生成图像
+  - Text-to-Image
+  - 文本生成视频
+- name: ChatGPT与对话AI
+  keywords:
+  - ChatGPT
+  - 对话AI
+  - Conversational AI
+  - 聊天机器人
+  - Chatbot
+  - GPT-4
+  - GPT-4o
+  - 大语言模型
+  - LLM
+  - OpenAI
+  - 自然语言处理
+  - NLP
+  - 生成式AI
+  - Generative AI
+  - 提示工程
+  - Prompt Engineering
+  - 上下文理解
+  - Context Understanding
+  - 多轮对话
+  - Multi-turn Dialogue
+- name: 新材料
+  keywords:
+  - 新材料
+  - new materials
+  - 先进材料
+  - advanced materials
+  - 石墨烯
+  - graphene
+  - 碳纤维
+  - carbon fiber
+  - 半导体材料
+  - semiconductor materials
+  - 高温合金
+  - superalloy
+  - 生物材料
+  - biomaterials
+  - 纳米材料
+  - nanomaterials
+  - 3D打印材料
+  - 3D printing materials
+  - 新能源材料
+  - energy materials
+- name: 核聚变
+  keywords:
+  - 核聚变
+  - Nuclear fusion
+  - ITER（国际热核聚变实验堆）
+  - 托卡马克
+  - Tokamak
+  - 氘氚反应
+  - Deuterium-tritium reaction
+  - 等离子体约束
+  - Plasma confinement
+  - 惯性约束聚变
+  - Inertial confinement fusion
+  - 磁约束聚变
+  - Magnetic confinement fusion
+  - 美国国家点火装置
+  - National Ignition Facility
+  - 能量增益
+  - Q值
+  - Q factor
+  - SPARC聚变堆
+  - Commonwealth Fusion Systems
+- name: 智能制造
+  keywords:
+  - 智能制造
+  - Smart Manufacturing
+  - 工业4.0
+  - Industry 4.0
+  - 工业互联网
+  - Industrial Internet
+  - 人工智能
+  - Artificial Intelligence
+  - 数字孪生
+  - Digital Twin
+  - 物联网
+  - IoT
+  - 大数据
+  - Big Data
+  - 云计算
+  - Cloud Computing
+  - 边缘计算
+  - Edge Computing
+  - 5G
+  - 工业机器人
+- name: AI芯片
+  keywords:
+  - AI芯片
+  - GPU
+  - NVIDIA
+  - 英伟达
+  - TPU
+  - 人工智能芯片
+  - 算力
+  - NPU
+  - 神经网络处理器
+  - 华为昇腾
+  - 深度学习加速器
+  - 寒武纪
+  - 大模型训练
+  - AI加速卡
+  - HBM
+  - Chiplet
+  - 出口管制
+  - 存算一体
+  - 边缘AI芯片
+  - CUDA
+- name: Web3
+  keywords:
+  - Web3
+  - Web 3.0
+  - 去中心化网络
+  - Semantic Web
+  - 语义网
+  - 区块链
+  - Blockchain
+  - 以太坊
+  - Ethereum
+  - 智能合约
+  - Smart Contract
+  - 去中心化应用
+  - DApps
+  - DeFi
+  - Decentralized Finance
+  - 去中心化金融
+  - NFT
+  - Non-Fungible Token
+  - 非同质化代币
+  - DAO
+- name: 人工智能大模型
+  keywords:
+  - 大模型
+  - LLM
+  - Large Language Model
+  - GPT-4
+  - ChatGPT
+  - OpenAI
+  - 生成式人工智能
+  - AIGC
+  - Google Gemini
+  - Transformer
+  - 预训练模型
+  - Prompt Engineering
+  - DeepSeek
+  - 文心一言
+  - 通义千问
+  - Claude
+  - 百川智能
+  - 参数规模
+  - 多模态大模型
+  - Meta Llama
+- name: 新能源
+  keywords:
+  - 新能源
+  - 光伏
+  - 锂电池
+  - 固态电池
+  - 氢能
+  - 钙钛矿
+  - 储能
+  - 新能源汽车
+  - 充电桩
+  - 核聚变
+  - 新能源 (New Energy)
+  - 新能源汽车 (New Energy Vehicle/NEV)
+  - 比亚迪 (BYD)
+  - 特斯拉 (Tesla)
+  - 光伏 (Photovoltaic/PV)
+  - 储能 (Energy Storage)
+  - 碳中和 (Carbon Neutrality)
+  - 锂电池 (Lithium Battery)
+  - 氢能 (Hydrogen Energy)
+  - 电动汽车 (Electric Vehicle/EV)
+- name: 生物科技
+  keywords:
+  - CRISPR
+  - 基因编辑
+  - Gene Editing
+  - mRNA疫苗
+  - mRNA vaccine
+  - 生物技术
+  - Biotechnology
+  - 合成生物学
+  - Synthetic Biology
+  - CAR-T细胞疗法
+  - CAR-T cell therapy
+  - 基因测序
+  - Gene Sequencing
+  - Illumina
+  - Moderna
+  - BioNTech
+  - 干细胞疗法
+  - Stem Cell Therapy
+  - 精准医疗
+  - Precision Medicine
+- name: 低空经济
+  keywords:
+  - 低空经济
+  - 低空经济政策
+  - eVTOL
+  - 电动垂直起降飞行器
+  - 城市空中交通
+  - Urban Air Mobility
+  - 无人机
+  - UAV
+  - 亿航智能
+  - EHang
+  - 大疆创新
+  - DJI
+  - 空中出租车
+  - Air Taxi
+  - 小鹏汇天
+  - 通用航空
+  - 适航取证
+  - 低空空域管理改革
+  - 无人机配送
+  - Drone Delivery
+- name: AR/VR
+  keywords:
+  - AR (增强现实)
+  - VR (虚拟现实)
+  - Mixed Reality (混合现实)
+  - Metaverse (元宇宙)
+  - Apple Vision Pro
+  - Extended Reality (XR)
+  - Spatial Computing (空间计算)
+  - Meta Quest
+  - 头戴式显示器 (Head-Mounted Display)
+  - Microsoft HoloLens
+  - AR眼镜 (AR Glasses)
+  - 眼动追踪 (Eye Tracking)
+  - 沉浸式体验 (Immersive Experience)
+  - 手势识别 (Hand Tracking)
+  - HTC Vive
+  - PSVR2
+  - Pico (字节跳动)
+  - Digital Twin (数字孪生)
+  - 光波导 (Waveguide)
+  - ARKit
 sources:
-- name: Physical Intelligence (π) – Blog
+- name: Updates | Neuralink
   type: scrape
-  url: https://www.physicalintelligence.company/blog
-  topics:
-  - 具身智能
-  enabled: true
-  mode: list
-- name: News | Figure
-  type: scrape
-  url: https://www.figure.ai/news
-  topics:
-  - 具身智能
-  enabled: true
-  mode: list
-- name: Blogs | Boston Dynamics
-  type: scrape
-  url: https://bostondynamics.com/blog/
-  topics:
-  - 具身智能
-  enabled: true
-  mode: list
-- name: News — Synchron
-  type: scrape
-  url: https://www.synchron.com/news
+  url: https://neuralink.com/blog/
   topics:
   - 脑机接口
   enabled: true
   mode: list
-- name: Press Releases | Agility
+- name: 3GPP News
   type: scrape
-  url: https://agilityrobotics.com/news/
+  url: https://www.3gpp.org/news-events/3gpp-news
   topics:
-  - 具身智能
+  - 5G通信
+  enabled: true
+  mode: list
+- name: IBM Quantum Computing | Blog
+  type: scrape
+  url: https://www.ibm.com/quantum/blog
+  topics:
+  - 量子计算
+  enabled: true
+  mode: list
+- name: Intel Newsroom Home
+  type: rss
+  url: https://newsroom.intel.com/feed
+  topics: &id001
+  - 芯片制造
+  enabled: true
+- name: Intel Newsroom Home
+  type: rss
+  url: https://newsroom.intel.com/comments/feed
+  topics: *id001
+  enabled: true
+- name: Qualcomm OnQ Blog | Stay Ahead of AI &amp; Industry Trends | Qualcomm
+  type: scrape
+  url: https://www.qualcomm.com/news/onq
+  topics:
+  - 5G通信
+  enabled: true
+  mode: list
+- name: BLOG | Samsung Research
+  type: scrape
+  url: https://research.samsung.com/blog
+  topics:
+  - 6G研发
+  enabled: true
+  mode: list
+- name: Latest News | Samsung Semiconductor Global
+  type: scrape
+  url: https://semiconductor.samsung.com/newsroom/
+  topics:
+  - 芯片制造
+  enabled: true
+  mode: list
+- name: Research \ Anthropic
+  type: scrape
+  url: https://www.anthropic.com/research
+  topics:
+  - 人工智能
+  enabled: true
+  mode: list
+- name: Press releases | ASML - Supplying the semiconductor industry
+  type: scrape
+  url: https://www.asml.com/en/news/press-releases
+  topics:
+  - 芯片制造
+  enabled: true
+  mode: list
+- name: News - Developer Bosch IoT Suite
+  type: scrape
+  url: https://bosch-iot-suite.com/news/
+  topics:
+  - 物联网
   enabled: true
   mode: list
 - name: News — Google DeepMind
@@ -195,197 +637,630 @@ sources:
   - 人工智能
   enabled: true
   mode: list
-- name: News | Blackrock Neurotech
+- name: Home | Ethereum Foundation Blog
+  type: rss
+  url: https://blog.ethereum.org/en/feed.xml
+  topics:
+  - 区块链技术
+  enabled: true
+- name: AWS Blogs - Cloud news &amp; innovation | Amazon Web Services (AWS)
   type: scrape
-  url: https://blackrockneurotech.com/news/
+  url: https://aws.amazon.com/blogs/
+  topics:
+  - 云计算
+  enabled: true
+  mode: list
+- name: Huawei BLOG
+  type: scrape
+  url: https://blog.huawei.com/
+  topics:
+  - 5G通信
+  enabled: true
+  mode: list
+- name: The Internet of Things on AWS – Official Blog
+  type: rss
+  url: https://aws.amazon.com/blogs/iot/feed/
+  topics:
+  - 物联网
+  enabled: true
+- name: Ethereum Blockchain News, Insights, Product Updates, Events and Resources
+  type: scrape
+  url: https://consensys.io/blog
+  topics:
+  - 区块链技术
+  enabled: true
+  mode: list
+- name: Microsoft Azure Blog
+  type: rss
+  url: https://azure.microsoft.com/en-us/blog/feed/
+  topics: &id002
+  - 云计算
+  enabled: true
+- name: Microsoft Azure Blog
+  type: rss
+  url: https://azure.microsoft.com/en-us/blog/comments/feed/
+  topics: *id002
+  enabled: true
+- name: Lam Research Newsroom - Newsroom
+  type: rss
+  url: https://newsroom.lamresearch.com/press-releases?pagetemplate=rss
+  topics:
+  - 芯片制造
+  enabled: true
+- name: Press - ZTE Press Release - ZTE Offical Website
+  type: scrape
+  url: https://www.zte.com.cn/global/about/news/
+  topics:
+  - 6G研发
+  enabled: true
+  mode: list
+- name: Blog | Chainlink
+  type: scrape
+  url: https://blog.chain.link/
+  topics:
+  - 区块链技术
+  enabled: true
+  mode: list
+- name: '6G: The Future of Mobile Connectivity &amp; Wireless Tech | Qualcomm'
+  type: scrape
+  url: https://www.qualcomm.com/research/6g
+  topics:
+  - 6G研发
+  enabled: true
+  mode: list
+- name: Press - ZTE Press Release - ZTE Offical Website
+  type: scrape
+  url: https://www.zte.com.cn/global/about/news
+  topics:
+  - 5G通信
+  enabled: true
+  mode: list
+- name: Apple Vision Pro News - Newsroom - Apple
+  type: rss
+  url: https://www.apple.com/newsroom/rss-feed.rss
+  topics:
+  - 虚拟现实
+  enabled: true
+- name: Emotiv | Brain Data Measuring Hardware and Software Solutions
+  type: scrape
+  url: https://www.emotiv.com/blog/
   topics:
   - 脑机接口
   enabled: true
   mode: list
-- name: Newsroom - Apple
-  type: rss
-  url: https://www.apple.com/newsroom/rss-feed.rss
-  topics:
-  - 增强现实
-  enabled: true
-- name: Newsroom \ Anthropic
+- name: Polygon Blog — Payments, Stablecoins &amp; Blockchain Infrastructure Insights
   type: scrape
-  url: https://www.anthropic.com/news
+  url: https://polygon.technology/blog/
   topics:
-  - 大语言模型
+  - 区块链技术
   enabled: true
   mode: list
-- name: Sanctuary AI
+- name: MediaTek | Official Insights from MediaTek Inc
   type: rss
-  url: https://sanctuary.ai/feed/
-  topics: &id001
-  - 具身智能
-  enabled: true
-- name: Sanctuary AI
-  type: rss
-  url: https://sanctuary.ai/comments/feed/
-  topics: *id001
-  enabled: true
-- name: NVIDIA Blog
-  type: rss
-  url: https://blogs.nvidia.com/feed/
-  topics: &id002
-  - 半导体芯片
-  enabled: true
-- name: NVIDIA Blog
-  type: rss
-  url: https://blogs.nvidia.com/comments/feed/
-  topics: *id002
-  enabled: true
-- name: Microsoft Research Blog - Microsoft Research
-  type: rss
-  url: https://www.microsoft.com/en-us/research/feed/
+  url: https://www.mediatek.com/tek-talk-blogs/rss.xml
   topics:
-  - 人工智能
+  - 6G研发
   enabled: true
-- name: PlayStation.Blog &#8211; Official PlayStation Blog for news and video updates
-    on
+- name: PS VR2 &#8211; PlayStation.Blog
   type: rss
   url: http://feeds.feedburner.com/psblog
-  topics:
-  - 虚拟现实
-  enabled: true
-- name: News | ASML - Supplying the semiconductor industry
-  type: scrape
-  url: https://www.asml.com/en/news
-  topics:
-  - 半导体芯片
-  enabled: true
-  mode: list
-- name: HTC Vive博客 | VR虚拟现实设备 | HTC Vive中国 - 新鲜VR虚拟现实现实设备资讯尽在HTC Vive中国 博客栏目。
-  type: scrape
-  url: https://blog.htcvive.com/
-  topics:
-  - 虚拟现实
-  enabled: true
-  mode: list
-- name: Intel Newsroom Home
-  type: rss
-  url: https://newsroom.intel.com/feed
   topics: &id003
-  - 半导体芯片
+  - 虚拟现实
   enabled: true
-- name: Intel Newsroom Home
+- name: PS VR2 &#8211; PlayStation.Blog
   type: rss
-  url: https://newsroom.intel.com/comments/feed
+  url: https://blog.playstation.com/tag/ps-vr2/feed/
   topics: *id003
   enabled: true
-- name: Valve Corporation
+- name: Media Center | News &amp; Notices | NTT DOCOMO
   type: scrape
-  url: https://www.valvesoftware.com/en/news
+  url: https://www.docomo.ne.jp/english/info/media_center/
+  topics:
+  - 6G研发
+  enabled: true
+  mode: list
+- name: VIVE Blog - VR News, Views &amp; Breakthroughs from HTC
+  type: scrape
+  url: https://blog.vive.com/us/
   topics:
   - 虚拟现实
   enabled: true
   mode: list
-- name: News | Stanford HAI
-  type: scrape
-  url: https://hai.stanford.edu/news
-  topics:
-  - 人工智能
-  enabled: true
-  mode: list
-- name: 最新消息與活動 – Niantic Labs
-  type: scrape
-  url: https://nianticlabs.com/news/
-  topics:
-  - 增强现实
-  enabled: true
-  mode: list
-- name: Qualcomm Technology News &amp; Trends | Qualcomm
-  type: scrape
-  url: https://www.qualcomm.com/news
-  topics:
-  - 虚拟现实
-  enabled: true
-  mode: list
-- name: The Berkeley Artificial Intelligence Research Blog
+- name: The Cloudflare Blog
   type: rss
-  url: https://bair.berkeley.edu/blog/feed.xml
+  url: https://blog.cloudflare.com/rss
   topics:
-  - 人工智能
+  - 云计算
   enabled: true
-- name: www.picoxr.com
+- name: StarkWare-Blog | Latest Blog Posts and Resources
+  type: rss
+  url: https://starkware.co/feed/
+  topics: &id004
+  - 区块链技术
+  enabled: true
+- name: StarkWare-Blog | Latest Blog Posts and Resources
+  type: rss
+  url: https://starkware.co/comments/feed/
+  topics: *id004
+  enabled: true
+- name: Cloud | IBM
   type: scrape
-  url: https://www.picoxr.com/global/news
+  url: https://www.ibm.com/cloud/blog
+  topics:
+  - 云计算
+  enabled: true
+  mode: list
+- name: Arm Community
+  type: scrape
+  url: https://community.arm.com/arm-community-blogs/b/internet-of-things-blog
+  topics:
+  - 物联网
+  enabled: true
+  mode: list
+- name: Blog - Electric Coin Company
+  type: rss
+  url: https://electriccoin.co/feed/
+  topics: &id005
+  - 区块链技术
+  enabled: true
+- name: Blog - Electric Coin Company
+  type: rss
+  url: https://electriccoin.co/comments/feed/
+  topics: *id005
+  enabled: true
+- name: Homepage - VMware Blogs
+  type: scrape
+  url: https://blogs.vmware.com/
+  topics:
+  - 云计算
+  enabled: true
+  mode: list
+- name: Internet of Things (IoT) - Cisco Blogs
+  type: rss
+  url: https://blogs.cisco.com/feed
+  topics: &id006
+  - 物联网
+  enabled: true
+- name: Internet of Things (IoT) - Cisco Blogs
+  type: rss
+  url: https://blogs.cisco.com/comments/feed
+  topics: *id006
+  enabled: true
+- name: Internet of Things (IoT) - Cisco Blogs
+  type: rss
+  url: https://blogs.cisco.com/tag/iot/feed
+  topics: *id006
+  enabled: true
+- name: The official Red Hat blog
+  type: scrape
+  url: https://www.redhat.com/en/blog
+  topics:
+  - 云计算
+  enabled: true
+  mode: list
+- name: Think | IBM
+  type: scrape
+  url: https://www.ibm.com/blogs/internet-of-things/
+  topics:
+  - 物联网
+  enabled: true
+  mode: list
+- name: Home | IPFS Blog &amp; News
+  type: rss
+  url: https://blog.ipfs.tech/index.xml
+  topics:
+  - 区块链技术
+  enabled: true
+- name: Microsoft HoloLens | Microsoft Learn
+  type: scrape
+  url: https://www.microsoft.com/en-us/hololens/blog
   topics:
   - 虚拟现实
   enabled: true
   mode: list
 - name: Newsroom | Magic Leap | Augmented Reality Optics News
   type: scrape
-  url: https://www.magicleap.com/news
+  url: https://www.magicleap.com/en-us/news
   topics:
-  - 增强现实
+  - 虚拟现实
   enabled: true
   mode: list
-- name: XREAL News | News and Announcements
-  type: scrape
-  url: https://xreal.com/news/
-  topics:
-  - 增强现实
-  enabled: true
-  mode: list
-- name: News - BrainGate
+- name: Varjo Insider Blog
   type: rss
-  url: https://www.braingate.org/feed/
+  url: https://varjo.com/blog/rss.xml
   topics:
-  - 脑机接口
+  - 虚拟现实
   enabled: true
-- name: News - Wyss Center for Bio and Neuroengineering
+- name: DeepSeek | 深度求索
   type: scrape
-  url: https://wysscenter.ch/news/
+  url: https://deepseek.com/blog
   topics:
-  - 脑机接口
+  - 人工智能
   enabled: true
   mode: list
-- name: News Archive - Arm Newsroom
+- name: Microsoft Azure Quantum Blog
   type: rss
-  url: https://newsroom.arm.com/news/feed/
+  url: https://azure.microsoft.com/en-us/blog/quantum/feed/
   topics:
-  - 半导体芯片
+  - 量子计算
   enabled: true
-- name: Blog - IBM Research
+- name: 'Latest news
+
+    and events.'
+  type: scrape
+  url: https://aurora.tech/blog
+  topics:
+  - 自动驾驶
+  enabled: true
+  mode: list
+- name: AWS Quantum Technologies Blog
   type: rss
-  url: https://research.ibm.com/rss
+  url: https://aws.amazon.com/blogs/quantum-computing/feed/
   topics:
-  - 半导体芯片
+  - 量子计算
   enabled: true
-- name: Newsroom - Huawei
+- name: Mobileye News | Stay Updated on the Latest Innovations
   type: scrape
-  url: https://www.huawei.com/en/news
+  url: https://www.mobileye.com/news/
   topics:
-  - 6G通信
-  enabled: true
-  mode: list
-- name: News | Boston Dynamics
-  type: scrape
-  url: https://www.bostondynamics.com/news
-  topics:
-  - 机器人技术
+  - 自动驾驶
   enabled: true
   mode: list
-- name: News Center - Unitree Robotics
+- name: IonQ Newsroom and Media Resources
   type: scrape
-  url: https://www.unitree.com/news
+  url: https://ionq.com/news
   topics:
-  - 机器人技术
+  - 量子计算
+  enabled: true
+  mode: list
+- name: Rigetti Computing news | Rigetti Computing
+  type: scrape
+  url: https://www.rigetti.com/news
+  topics:
+  - 量子计算
+  enabled: true
+  mode: list
+- name: Latest thinking in AI, autonomous vehicles, research &amp; life at Wayve
+  type: rss
+  url: https://wayve.ai/wp-content/themes/wayve/rss-feed.php
+  topics:
+  - 自动驾驶
+  enabled: true
+- name: Quantinuum | News
+  type: scrape
+  url: https://www.quantinuum.com/news
+  topics:
+  - 量子计算
+  enabled: true
+  mode: list
+- name: DJI - The World Leader in Camera Drones/Quadcopters for Aerial Photography
+  type: scrape
+  url: https://www.dji.com/newsroom
+  topics:
+  - 低空经济
+  enabled: true
+  mode: list
+- name: ITER Newsline archive
+  type: scrape
+  url: https://www.iter.org/newsline
+  topics:
+  - 核聚变
+  enabled: true
+  mode: list
+- name: EHang | News Center
+  type: scrape
+  url: https://www.ehang.com/news/
+  topics:
+  - 低空经济
+  enabled: true
+  mode: list
+- name: Newsroom \ Anthropic
+  type: scrape
+  url: https://www.anthropic.com/news/
+  topics:
+  - ChatGPT与对话AI
+  enabled: true
+  mode: list
+- name: NVIDIA Blog
+  type: rss
+  url: https://blogs.nvidia.com/feed/
+  topics: &id007
+  - AI芯片
+  enabled: true
+- name: NVIDIA Blog
+  type: rss
+  url: https://blogs.nvidia.com/comments/feed/
+  topics: *id007
+  enabled: true
+- name: AI at Meta Blog
+  type: scrape
+  url: https://ai.meta.com/blog/
+  topics:
+  - 具身智能
+  enabled: true
+  mode: list
+- name: Newsroom \ Anthropic
+  type: scrape
+  url: https://www.anthropic.com/blog/
+  topics:
+  - 人工智能大模型
+  enabled: true
+  mode: list
+- name: News &#038; Events &#8211; Materials Science &amp; Engineering
+  type: rss
+  url: https://mse.berkeley.edu/feed/
+  topics: &id008
+  - 新材料
+  enabled: true
+- name: News &#038; Events &#8211; Materials Science &amp; Engineering
+  type: rss
+  url: https://mse.berkeley.edu/comments/feed/
+  topics: *id008
+  enabled: true
+- name: Newsroom \ Anthropic
+  type: scrape
+  url: https://www.anthropic.com/news
+  topics:
+  - 生成式AI应用
+  enabled: true
+  mode: list
+- name: All News | News &amp; Events | Materials Science &amp; Engineering | Northwester
+  type: scrape
+  url: https://www.mccormick.northwestern.edu/materials-science/news-events/
+  topics:
+  - 新材料
   enabled: true
   mode: list
 - name: '- Archives Page 1 | NVIDIA Blog'
   type: rss
   url: https://blogs.nvidia.com/blog/category/robotics/feed/
   topics:
-  - 机器人技术
+  - 机器人
   enabled: true
-- name: Press - ZTE Press Release - ZTE Offical Website
+- name: News | Rocket Lab
   type: scrape
-  url: https://www.zte.com.cn/global/about/news.html
+  url: https://www.rocketlabusa.com/updates/
   topics:
-  - 6G通信
+  - 商业航天
+  enabled: true
+  mode: list
+- name: News Desk | ORNL
+  type: scrape
+  url: https://www.ornl.gov/news
+  topics:
+  - 新材料
+  enabled: true
+  mode: list
+- name: Newsroom | Virgin Galactic
+  type: scrape
+  url: https://www.virgingalactic.com/news
+  topics:
+  - 商业航天
+  enabled: true
+  mode: list
+- name: Blogs | Boston Dynamics
+  type: scrape
+  url: https://bostondynamics.com/blog/
+  topics:
+  - 机器人
+  enabled: true
+  mode: list
+- name: Home | Max Planck Institute for Sustainable Materials
+  type: scrape
+  url: https://www.mpie.de/2281/en/news
+  topics:
+  - 新材料
+  enabled: true
+  mode: list
+- name: Updates
+  type: rss
+  url: https://www.relativityspace.com/updates?format=rss
+  topics:
+  - 商业航天
+  enabled: true
+- name: News and insights | Broad Institute
+  type: scrape
+  url: https://www.broadinstitute.org/news
+  topics:
+  - 生物科技
+  enabled: true
+  mode: list
+- name: Latest News - Firefly Aerospace
+  type: rss
+  url: https://fireflyspace.com/feed/
+  topics: &id009
+  - 商业航天
+  enabled: true
+- name: Latest News - Firefly Aerospace
+  type: rss
+  url: https://fireflyspace.com/comments/feed/
+  topics: *id009
+  enabled: true
+- name: Physical Intelligence (π) – Blog
+  type: scrape
+  url: https://physicalintelligence.company/blog
+  topics:
+  - 具身智能
+  enabled: true
+  mode: list
+- name: News
+  type: rss
+  url: https://www.sanger.ac.uk/feed/
+  topics:
+  - 生物科技
+  enabled: true
+- name: LangChain Blog
+  type: scrape
+  url: https://blog.langchain.dev/
+  topics:
+  - AI Agent
+  enabled: true
+  mode: list
+- name: Newsroom
+  type: scrape
+  url: https://www.axiomspace.com/news
+  topics:
+  - 商业航天
+  enabled: true
+  mode: list
+- name: News 2026  | NIMS
+  type: scrape
+  url: https://www.nims.go.jp/eng/news/index.html
+  topics:
+  - 新材料
+  enabled: true
+  mode: list
+- name: News | Cold Spring Harbor Laboratory
+  type: rss
+  url: https://www.cshl.edu/feed/
+  topics: &id010
+  - 生物科技
+  enabled: true
+- name: News | Cold Spring Harbor Laboratory
+  type: rss
+  url: https://www.cshl.edu/comments/feed/
+  topics: *id010
+  enabled: true
+- name: Polygon Blog — Payments, Stablecoins &amp; Blockchain Infrastructure Insights
+  type: scrape
+  url: https://blog.polygon.technology/
+  topics:
+  - Web3
+  enabled: true
+  mode: list
+- name: Press Releases | Sierra Space
+  type: rss
+  url: https://www.sierraspace.com/feed/
+  topics: &id011
+  - 商业航天
+  enabled: true
+- name: Press Releases | Sierra Space
+  type: rss
+  url: https://www.sierraspace.com/comments/feed/
+  topics: *id011
+  enabled: true
+- name: The Cohere Blog
+  type: scrape
+  url: https://cohere.com/blog
+  topics:
+  - ChatGPT与对话AI
+  enabled: true
+  mode: list
+- name: News | Department of Materials Science & Metallurgy
+  type: rss
+  url: https://www.msm.cam.ac.uk/news/feed
+  topics:
+  - 新材料
+  enabled: true
+- name: Microsoft HoloLens | Microsoft Learn
+  type: scrape
+  url: https://www.microsoft.com/en-us/mixed-reality
+  topics:
+  - AR/VR
+  enabled: true
+  mode: list
+- name: Artificial Intelligence
+  type: rss
+  url: https://aws.amazon.com/blogs/machine-learning/feed/
+  topics:
+  - AI芯片
+  enabled: true
+- name: HTC Vive博客 | VR虚拟现实设备 | HTC Vive中国 - 新鲜VR虚拟现实现实设备资讯尽在HTC Vive中国 博客栏目。
+  type: scrape
+  url: https://blog.vive.com/
+  topics:
+  - AR/VR
+  enabled: true
+  mode: list
+- name: News and Press - TAE Technologies
+  type: rss
+  url: https://tae.com/feed/
+  topics: &id012
+  - 核聚变
+  enabled: true
+- name: News and Press - TAE Technologies
+  type: rss
+  url: https://tae.com/comments/feed/
+  topics: *id012
+  enabled: true
+- name: News | Boston Dynamics
+  type: scrape
+  url: https://www.bostondynamics.com/news
+  topics:
+  - 机器人
+  enabled: true
+  mode: list
+- name: Newsroom | Editas Medicine
+  type: scrape
+  url: https://www.editasmedicine.com/news/
+  topics:
+  - 生物科技
+  enabled: true
+  mode: list
+- name: XREAL Blog | Explore &amp; Share
+  type: scrape
+  url: https://www.xreal.com/blog/
+  topics:
+  - AR/VR
+  enabled: true
+  mode: list
+- name: www.picoxr.com
+  type: scrape
+  url: https://www.picoxr.com/news/
+  topics:
+  - AR/VR
+  enabled: true
+  mode: list
+- name: Blog | Protocol Labs
+  type: rss
+  url: https://protocol.ai/rss.xml
+  topics:
+  - Web3
+  enabled: true
+- name: News
+  type: scrape
+  url: https://www.catl.com/en/news/
+  topics:
+  - 新能源
+  enabled: true
+  mode: list
+- name: News &amp; Updates &mdash; Stability AI
+  type: rss
+  url: https://stability.ai/news-updates?format=rss
+  topics:
+  - 生成式AI应用
+  enabled: true
+- name: sanctuaryai.com
+  type: scrape
+  url: https://sanctuaryai.com/blog
+  topics:
+  - 机器人
+  enabled: true
+  mode: list
+- name: Blog
+  type: scrape
+  url: https://www.graphcore.ai/posts
+  topics:
+  - AI芯片
+  enabled: true
+  mode: list
+- name: 'Category: Robotics | NVIDIA Technical Blog'
+  type: rss
+  url: https://developer.nvidia.com/blog/category/robotics/feed/
+  topics:
+  - 机器人
+  enabled: true
+- name: Siemens Energy press updates and news portal
+  type: scrape
+  url: https://www.siemens-energy.com/global/en/news.html
+  topics:
+  - 新能源
+  enabled: true
+  mode: list
+- name: DeepSeek | 深度求索
+  type: scrape
+  url: https://www.deepseek.com/
+  topics:
+  - 智能制造
   enabled: true
   mode: list
