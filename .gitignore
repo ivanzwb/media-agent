@@ -8,3 +8,5 @@ data/
 .tools/
 app.zip
 test_out.txt
+.obsidian/
+.omo/

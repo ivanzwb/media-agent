@@ -16,6 +16,7 @@ edge-tts>=6.1.0
 yt-dlp>=2024.1.1
 pytest==8.3.3
 
-# Optional (install manually; heavy, pulls in torch):
-#   pip install TTS         # Coqui XTTS-v2 local voice cloning (tts_provider=xtts)
+# Optional (install manually; some are heavy):
+#   pip install cosyvoice            # CosyVoice2-0.5B local voice cloning (tts_provider=cosyvoice) [torch, CUDA, Python<3.13]
+#   pip install fish-audio-sdk       # Fish Audio cloud voice cloning (tts_provider=fishaudio) [pure HTTP, any Python]
 #   pip install playwright && playwright install chromium  # JS rendering (render_js)

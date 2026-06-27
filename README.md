@@ -26,7 +26,7 @@
 ### 讲解视频
 - **脚本 + 配音**：从草稿自动生成口播分镜脚本（LLM）→ 逐段 TTS 配音；分镜可在草稿页**编辑**（旁白/画面/重选背景素材、增删/排序），并**只对改动的分镜重配**。
 - **合成**：ffmpeg 合成「图片轮播 / 原视频片段 + 中文字幕 + 配音」的 mp4；中文字幕用 PIL 生成画面帧/叠层（规避 ffmpeg 中文字体问题）；画面适配可选 `fit`（完整+黑边）/`crop`/`blur`。同一视频被连续分镜引用时**续播**、放完**冻结最后一帧**。
-- **TTS**：默认内置 `kitten`（中文走 edge-tts，免 key）；可选 **本地声音复刻 `xtts`**（Coqui XTTS-v2，上传干声本地克隆音色，自然度高、支持中文，需 `pip install TTS`）；也支持 OpenAI 兼容 / 外部 Kitten 服务。
+- **TTS**：默认内置 `kitten`（中文走 edge-tts，免 key）；可选 **本地声音复刻 `cosyvoice`**（CosyVoice2-0.5B，上传干声本地克隆音色，最佳中文 TTS 自然度，需 Python < 3.13 + NVIDIA GPU）；也支持 Fish Audio 云端克隆、OpenAI 兼容 / 外部 Kitten 服务。
 - 合成需本地 **ffmpeg**；原视频/HLS 下载需 **yt-dlp**。
 
 ### 运行与平台
@@ -47,7 +47,15 @@
 - **ffmpeg**（讲解视频合成、HLS 合并）：装好并加入 PATH（<https://ffmpeg.org>）。中文字幕字体可用 `MEDIA_AGENT_FONT` 指定（默认自动探测微软雅黑/黑体/Noto CJK）。
 - **yt-dlp**（平台视频 / HLS 下载）：已在 `requirements.txt`；CLI 不在 PATH 时自动回退 `python -m yt_dlp`。
 - **Playwright**（SPA/SSR 页面 JS 渲染抓取）：`pip install playwright && playwright install chromium`。
-- **TTS / Coqui**（本地声音复刻 `xtts`）：`pip install TTS`（较重，含 torch）。
+- **TTS / 声音复刻**（按需选装）：
+
+| 方案 | 类型 | Python | 显存 | 中文 | 声音复刻 | 安装 |
+|---|---|---|---|---|---|---|
+| **CosyVoice2-0.5B** ⬅️内置 | 本地 | <3.13 | 4GB+ | ⭐⭐⭐ 最佳 | ✅ zero-shot(3-10s) | `pip install cosyvoice` |
+| **GPT-SoVITS** | 本地 | 3.9-3.11 | 4GB+ | ⭐⭐⭐ 极好 | ✅ 1分钟样本 | 单独项目(RVC-Boss) |
+| **Fish Speech** | 本地 | >=3.10 | 4GB+ | ⭐⭐ 好 | ✅ 小样本 | `pip install fish-speech` |
+| **Fish Audio SDK** | ☁️ 云端 | **任意** | **无需** | ⭐⭐⭐ 好 | ✅ 即时复刻 | `pip install fish-audio-sdk` |
+| **edge-tts (kitten)** | 云端 | **任意** | **无需** | ⭐⭐ 中上 | ❌ 无 | 内置 |
 
 ```bash
 python -m venv .venv
@@ -99,7 +107,7 @@ sources:
 | `MEDIA_AGENT_LLM_API_KEY` | 大模型 API Key | 无 |
 | `MEDIA_AGENT_LLM_MODEL` | 模型名（如 `gpt-4o-mini`） | provider 默认 |
 | `MEDIA_AGENT_IMAGE_PROVIDER` | `mock` \| `openai` | `mock` |
-| `MEDIA_AGENT_TTS_PROVIDER` | `kitten`（内置，中文走 edge-tts）\| `xtts`（本地声音复刻/克隆）\| `mock` \| `kitten_http`（外部 Kitten 服务）\| `openai`（兼容） | `kitten` |
+| `MEDIA_AGENT_TTS_PROVIDER` | `kitten`（内置，中文走 edge-tts）\| `cosyvoice`（本地声音复刻/克隆，CosyVoice2-0.5B，需 Python\<3.13 + GPU）\| `fishaudio`（云端声音克隆，纯 HTTP 任意 Python）\| `mock` \| `kitten_http` \| `openai`（兼容） | `kitten` |
 | `MEDIA_AGENT_TTS_API_BASE` | 外部 TTS 服务地址（仅 `kitten_http`/`openai` 需要） | 无 |
 | `MEDIA_AGENT_TTS_API_KEY` | TTS API Key（内置/本地服务可留空） | 无 |
 | `MEDIA_AGENT_TTS_MODEL` | TTS 模型名（openai 兼容用） | `tts-1` |
@@ -179,7 +187,7 @@ app/
 ├─ media/               # 下载策略链（downloader / strategies：httpx 直链 / URL 变换 / yt-dlp）
 ├─ llm/                 # 大模型抽象层 + providers（mock / openai）
 ├─ images/              # 图片抽象层 + providers（mock / openai）
-├─ tts/                 # TTS 抽象层 + providers（kitten/edge-tts / xtts / openai…）+ 声音库
+├─ tts/                 # TTS 抽象层 + providers（kitten / cosyvoice / fishaudio / openai…）+ 声音库
 ├─ video/              # builder：PIL 字幕帧 + ffmpeg 合成
 ├─ pipeline/            # classifier / rewriter / sanitizer / localize / recommender(+热度)
 │                       #   / script / narration / images / adapter / video / orchestrator
