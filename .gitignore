@@ -10,3 +10,6 @@ app.zip
 test_out.txt
 .obsidian/
 .omo/
+pretrained_models/
+server*.log
+media/
