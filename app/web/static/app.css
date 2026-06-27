@@ -277,6 +277,16 @@ textarea, input, select {
 .tab-btn.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
 .tab-pane { display: none; }
 .tab-pane.on { display: block; }
+/* document toolbar above the body editor */
+.doc-toolbar {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin-bottom: 12px; padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.doc-toolbar .tb-form { display: inline; margin: 0; }
+.doc-toolbar .tb-label { font-size: 13px; color: var(--muted); }
+.doc-toolbar .tb-sep { color: var(--border); margin: 0 2px; }
+.doc-toolbar select { max-width: 150px; }
 .scene-table { margin-top: 12px; }
 .scene-table td { vertical-align: top; }
 .scene-table audio { width: 210px; height: 32px; }

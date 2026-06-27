@@ -37,34 +37,34 @@
     {% endif %}
     <p class="muted">来源：<a href="{{ meta.source_url }}" target="_blank" rel="noopener">{{ meta.source_name }}</a></p>
   </div>
-  <form method="post" action="/drafts/{{ draft.id }}" class="edit-form">
-    <label>候选标题（每行一个）</label>
-    <textarea name="title_candidates" rows="3">{{ title_candidates_text }}</textarea>
-
-    <label>正文（Markdown）</label>
-    <textarea name="body_md" id="editor">{{ body_md }}</textarea>
-
-    <label>状态</label>
-    <select name="status">
-      {% for s in statuses %}
-      <option value="{{ s }}" {{ 'selected' if draft.status==s else '' }}>{{ s }}</option>
+  <div>
+    <div class="doc-toolbar">
+      <label class="tb-label">状态</label>
+      <select name="status" form="edit-form">
+        {% for s in statuses %}
+        <option value="{{ s }}" {{ 'selected' if draft.status==s else '' }}>{{ s }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn primary" form="edit-form">保存</button>
+      <span class="tb-sep">|</span>
+      <span class="tb-label">生成平台适配版本：</span>
+      {% for p, label in [('wechat', '公众号'), ('xiaohongshu', '小红书'), ('zhihu', '知乎')] %}
+      <form method="post" action="/drafts/{{ draft.id }}/adapt" class="tb-form">
+        <input type="hidden" name="platform" value="{{ p }}"/>
+        <button type="submit" class="btn small">{{ label }}</button>
+      </form>
       {% endfor %}
-    </select>
+      <a class="btn small" href="/drafts">返回列表</a>
+    </div>
 
-    <button type="submit" class="btn primary">保存</button>
-    <a class="btn" href="/drafts">返回列表</a>
-  </form>
-</div>
+    <form id="edit-form" method="post" action="/drafts/{{ draft.id }}" class="edit-form">
+      <label>候选标题（每行一个）</label>
+      <textarea name="title_candidates" rows="3">{{ title_candidates_text }}</textarea>
 
-<h2>生成平台适配版本</h2>
-<p class="muted">基于当前主稿内容，生成对应平台风格的新草稿（不会改动本稿）。</p>
-<div class="adapt-row">
-  {% for p in ["wechat", "xiaohongshu", "zhihu"] %}
-  <form method="post" action="/drafts/{{ draft.id }}/adapt">
-    <input type="hidden" name="platform" value="{{ p }}"/>
-    <button type="submit" class="btn">{{ p }}</button>
-  </form>
-  {% endfor %}
+      <label>正文（Markdown）</label>
+      <textarea name="body_md" id="editor">{{ body_md }}</textarea>
+    </form>
+  </div>
 </div>
 </div><!-- /tab-article -->
 
