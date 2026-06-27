@@ -15,6 +15,7 @@
 - **配图**：原文配图下载 + AI 生成封面（provider 可切换，离线用占位图）。
 - **平台适配**：一键从主稿生成公众号 / 小红书 / 知乎风格的新草稿。
 - **讲解视频（实验）**：从草稿自动生成口播分镜脚本（LLM）→ 用**内置 TTS（默认 `kitten`，中文走 edge-tts，免 API key）**逐段配音 → **ffmpeg 合成图片轮播 + 中文字幕 + 配音的 mp4**，分镜引用到原文视频时用 **yt-dlp 下载原视频片段**作画面（循环铺满、去原声、叠加字幕），在草稿页试听/播放/下载。中文字幕用 PIL 生成画面帧/叠层（规避 ffmpeg 中文字体问题）。合成需本地安装 **ffmpeg**，原视频片段需 **yt-dlp**。
+- **声音复刻（本地，可选）**：在「设置 → 声音库」上传一段干声即可**本地克隆**该音色（基于 Coqui **XTTS-v2**，自然度高、无明显机器味、支持中文），配音时选 `xtts` provider + 该声音。需要 `pip install TTS`（较重，含 torch；未安装时该 provider 会给出提示，其它 provider 不受影响）。
 
 > 版权提示：把第三方视频片段剪入自己的成片并发布可能涉及版权，请自行注明出处或取得授权。
 
@@ -80,7 +81,7 @@ sources:
 | `MEDIA_AGENT_LLM_API_KEY` | 大模型 API Key | 无 |
 | `MEDIA_AGENT_LLM_MODEL` | 模型名（如 `gpt-4o-mini`） | provider 默认 |
 | `MEDIA_AGENT_IMAGE_PROVIDER` | `mock` \| `openai` | `mock` |
-| `MEDIA_AGENT_TTS_PROVIDER` | `kitten`（内置，中文走 edge-tts）\| `mock` \| `kitten_http`（外部 Kitten 服务）\| `openai`（兼容） | `kitten` |
+| `MEDIA_AGENT_TTS_PROVIDER` | `kitten`（内置，中文走 edge-tts）\| `xtts`（本地声音复刻/克隆）\| `mock` \| `kitten_http`（外部 Kitten 服务）\| `openai`（兼容） | `kitten` |
 | `MEDIA_AGENT_TTS_API_BASE` | 外部 TTS 服务地址（仅 `kitten_http`/`openai` 需要） | 无 |
 | `MEDIA_AGENT_TTS_API_KEY` | TTS API Key（内置/本地服务可留空） | 无 |
 | `MEDIA_AGENT_TTS_MODEL` | TTS 模型名（openai 兼容用） | `tts-1` |

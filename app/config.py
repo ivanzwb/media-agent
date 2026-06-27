@@ -71,6 +71,10 @@ class Config:
         return self.data_dir / "media"
 
     @property
+    def voices_dir(self) -> Path:
+        return self.data_dir / "voices"
+
+    @property
     def db_path(self) -> Path:
         return self.data_dir / "media.db"
 
@@ -152,5 +156,5 @@ class Config:
 
     def ensure_dirs(self) -> None:
         for d in (self.archive_dir, self.drafts_dir, self.images_dir,
-                  self.videos_dir, self.media_dir):
+                  self.videos_dir, self.media_dir, self.voices_dir):
             d.mkdir(parents=True, exist_ok=True)

@@ -32,6 +32,8 @@ from app.pipeline.rewriter import rewrite
 from app.pipeline.video import build_explainer_video, video_path
 from app.sources.extractor import _images_from_html, _videos_from_html
 from app.tts.base import get_tts_provider
+from app.tts.voices import (
+    list_voices, add_voice, delete_voice, sample_path as voice_sample_path)
 from app.scheduler import start_if_enabled
 from app.store import Store
 
@@ -443,6 +445,17 @@ def create_app(config: Config | None = None,
                             run_config.llm_model,
                             base_url=run_config.llm_api_base)
 
+    def _build_tts(rc):
+        # xtts (local voice cloning): resolve the selected voice id to its
+        # reference sample and pass it as the speaker reference.
+        if rc.tts_provider == "xtts":
+            sp = voice_sample_path(config, rc.tts_voice)
+            return get_tts_provider("xtts", voice=str(sp) if sp else None,
+                                    model=(rc.tts_model or "zh"))
+        return get_tts_provider(
+            rc.tts_provider, base_url=rc.tts_api_base,
+            api_key=rc.tts_api_key, model=rc.tts_model, voice=rc.tts_voice)
+
     @app.post("/sources/topics/suggest")
     def topics_suggest(themes: str = Form(...)):
         theme_list = [t.strip() for t in re.split(r"[,，\n]", themes) if t.strip()]
@@ -640,10 +653,7 @@ def create_app(config: Config | None = None,
                 llm = get_provider(run_config.llm_provider,
                                    run_config.llm_api_key, run_config.llm_model,
                                    base_url=run_config.llm_api_base)
-                tts = get_tts_provider(
-                    run_config.tts_provider, base_url=run_config.tts_api_base,
-                    api_key=run_config.tts_api_key, model=run_config.tts_model,
-                    voice=run_config.tts_voice)
+                tts = _build_tts(run_config)
                 generate_narration(draft_id, get_store(), llm, tts, config,
                                    progress=_nar_log)
                 with nar_lock:
@@ -701,10 +711,7 @@ def create_app(config: Config | None = None,
         def worker():
             try:
                 run_config = Config.load(store=get_store())
-                tts = get_tts_provider(
-                    run_config.tts_provider, base_url=run_config.tts_api_base,
-                    api_key=run_config.tts_api_key, model=run_config.tts_model,
-                    voice=run_config.tts_voice)
+                tts = _build_tts(run_config)
                 resynth_scenes(draft_id, indices, tts, config,
                                progress=_nar_log)
                 with nar_lock:
@@ -822,6 +829,31 @@ def create_app(config: Config | None = None,
             base["has_video"] = video_path(draft_id, config) is not None
         return base
 
+    # ---- voice library (local voice cloning, xtts) ----
+    @app.get("/api/voices")
+    def api_voices():
+        return {"voices": list_voices(config)}
+
+    @app.post("/voices")
+    async def voices_add(file: UploadFile = File(...), name: str = Form("")):
+        data = await file.read()
+        if data:
+            add_voice(config, name or file.filename or "声音",
+                      data, file.filename or "sample.wav")
+        return RedirectResponse(url="/settings", status_code=303)
+
+    @app.post("/voices/{voice_id}/delete")
+    def voices_delete(voice_id: str):
+        delete_voice(config, voice_id)
+        return RedirectResponse(url="/settings", status_code=303)
+
+    @app.get("/voices-audio/{voice_id}")
+    def voices_audio(voice_id: str):
+        p = voice_sample_path(config, voice_id)
+        if not p:
+            return HTMLResponse("not found", status_code=404)
+        return FileResponse(str(p))
+
     # ---- clear data ----
 
     @app.post("/clear/articles")
@@ -927,6 +959,7 @@ def create_app(config: Config | None = None,
             "tts_voice": db_tts_voice or (config.tts_voice or ""),
             "tts_key_set": tts_key_set,
             "tts_key_masked": tts_masked,
+            "voices": list_voices(config),
             "data_dir": str(config.data_dir),
             "max_age_days": db_max_age_days if db_max_age_days and db_max_age_days != "0" else (
                 str(config.max_age_days) if config.max_age_days is not None and config.max_age_days > 0 else ""),

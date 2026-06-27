@@ -30,4 +30,9 @@ def get_tts_provider(name: str | None, base_url: str | None = None,
     if name == "kitten_http":
         from app.tts.providers.kitten import KittenTTSProvider
         return KittenTTSProvider(base_url=base_url, voice=voice)
+    if name == "xtts":
+        # voice = speaker reference wav path (resolved by caller);
+        # model = language (e.g. "zh").
+        from app.tts.providers.xtts import XttsTTSProvider
+        return XttsTTSProvider(speaker_wav=voice, language=model)
     raise ValueError(f"Unknown TTS provider: {name}")
