@@ -15,7 +15,8 @@ _VIDEO_HINTS = (
 
 
 _IMAGE_EXTS = ("png", "jpg", "jpeg", "webp", "gif", "avif")
-_VIDEO_EXTS = ("mp4", "webm", "mov", "m4v", "ogv")
+# m3u8 = HLS playlist (streams .ts segments); downloaded via yt-dlp + ffmpeg.
+_VIDEO_EXTS = ("mp4", "webm", "mov", "m4v", "ogv", "m3u8")
 
 
 def _attr(tag: str, name: str) -> str | None:

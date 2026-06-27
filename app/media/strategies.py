@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import html
+import importlib.util
 import mimetypes
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse, unquote, parse_qs, urlsplit, urlunsplit, quote as _urlquote
@@ -29,6 +31,18 @@ _DIRECT_VIDEO_EXTS = {".mp4", ".webm", ".m4v", ".mov", ".ogv", ".ogg"}
 def _origin(url: str) -> str:
     p = urlparse(url)
     return f"{p.scheme}://{p.netloc}/" if p.scheme and p.netloc else url
+
+
+def _ytdlp_base() -> list[str] | None:
+    """Command prefix to run yt-dlp: prefer the CLI, fall back to the installed
+    Python module (`python -m yt_dlp`) so it works when only `pip install
+    yt-dlp` was done without the CLI on PATH."""
+    exe = shutil.which("yt-dlp")
+    if exe:
+        return [exe]
+    if importlib.util.find_spec("yt_dlp") is not None:
+        return [sys.executable, "-m", "yt_dlp"]
+    return None
 
 
 def normalize_url(url: str) -> str | None:
@@ -277,7 +291,8 @@ class YtDlpStrategy:
             emit(f"    [yt_dlp] 跳过无效地址 #{idx}：{(url or '')[:60]}")
             return None
 
-        if not shutil.which("yt-dlp"):
+        base = _ytdlp_base()
+        if base is None:
             emit(f"    [yt_dlp] 未安装 yt-dlp，跳过 #{idx}")
             return None
 
@@ -285,7 +300,7 @@ class YtDlpStrategy:
         emit(f"    [yt_dlp] 下载 #{idx}：{safe[:80]}")
         template = str(dest / f"vid-{idx}.%(ext)s")
         cmd = [
-            "yt-dlp", "--no-playlist", "--no-warnings",
+            *base, "--no-playlist", "--no-warnings",
             "--download-sections", f"*0-{max_seconds}",
             "-f", "best[ext=mp4]/best", "--merge-output-format", "mp4",
             "-o", template, safe,

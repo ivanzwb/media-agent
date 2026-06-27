@@ -82,6 +82,24 @@ def test_placeholders_keep_srcless_video_and_capture_script():
     assert "https://pi.co/r/clip-a.mp4" in videos
 
 
+def test_videos_capture_hls_m3u8():
+    html = (
+        '<video><source src="/hls/playlist.m3u8" '
+        'type="application/x-mpegURL"></video>'
+        '<script>var s = ["https://cdn.example.com/live/stream.m3u8?t=1"];</script>'
+    )
+    vids = _videos_from_html(html, base_url="https://x.com/a")
+    assert "https://x.com/hls/playlist.m3u8" in vids
+    assert any("stream.m3u8" in v for v in vids)
+
+
+def test_m3u8_routes_to_ytdlp_not_direct():
+    # HLS must NOT be treated as a direct file (httpx would only fetch the
+    # playlist text); it must go through yt-dlp (+ffmpeg) to mux .ts segments.
+    from app.pipeline.localize import _DIRECT_VIDEO_EXTS
+    assert ".m3u8" not in _DIRECT_VIDEO_EXTS
+
+
 def test_extract_collects_videos():
     html = (
         '<html><body>'
