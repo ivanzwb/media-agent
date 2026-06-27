@@ -14,8 +14,14 @@
   <button class="btn small" onclick="collapseAll()">收起全部</button>
 </div>
 
-<div id="mlz-status" class="muted" style="margin:12px 0"></div>
-<pre id="mlz-logs" class="run-logs" style="display:none; max-height:220px"></pre>
+<!-- floating task panel (rescrape / localize logs) — does not cover the list -->
+<div id="mlz-panel" class="run-panel" style="display:none">
+  <div class="run-panel-head">
+    <span id="mlz-status">任务进行中…</span>
+    <button type="button" class="run-close" onclick="hideMlzPanel()">×</button>
+  </div>
+  <pre id="mlz-logs" class="run-logs"></pre>
+</div>
 
 {% if date_groups %}
   {% for date_str, day_articles in date_groups %}
@@ -58,6 +64,13 @@
 <script>
 let mlzTimer = null;
 
+function showMlzPanel() {
+  document.getElementById('mlz-panel').style.display = 'flex';
+}
+function hideMlzPanel() {
+  document.getElementById('mlz-panel').style.display = 'none';
+}
+
 function expandAll() {
   document.querySelectorAll('.date-group').forEach(function (d) { d.open = true; });
 }
@@ -70,7 +83,6 @@ async function pollLocalize() {
   try {
     const s = await (await fetch('/api/localize-status')).json();
     const logs = document.getElementById('mlz-logs');
-    logs.style.display = 'block';
     logs.textContent = (s.logs || []).join('\n');
     logs.scrollTop = logs.scrollHeight;
     if (s.running) {
@@ -98,6 +110,8 @@ function setBusy(disabled) {
 
 async function refetchArticle(id) {
   const st = document.getElementById('mlz-status');
+  document.getElementById('mlz-logs').textContent = '';
+  showMlzPanel();
   st.textContent = '⏳ 重新抓取中…';
   setBusy(true);
   try {
@@ -114,6 +128,8 @@ async function refetchArticle(id) {
 
 async function localizeArticle(id) {
   setBusy(true);
+  document.getElementById('mlz-logs').textContent = '';
+  showMlzPanel();
   document.getElementById('mlz-status').textContent = '⏳ 本地化媒体中…';
   try {
     const data = await (await fetch('/archive/' + id + '/localize', {method: 'POST'})).json();
