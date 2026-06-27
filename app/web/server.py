@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -850,6 +850,16 @@ def create_app(config: Config | None = None,
     def voices_delete(voice_id: str):
         delete_voice(config, voice_id)
         return RedirectResponse(url="/settings", status_code=303)
+
+    @app.post("/api/voices/record")
+    async def voices_record(blob: UploadFile = File(...), name: str = Form("")):
+        """Receive a browser-recorded blob and save it as a new cloned voice."""
+        data = await blob.read()
+        if not data:
+            return JSONResponse({"error": "empty recording"}, status_code=400)
+        entry = add_voice(config, name or "录音声音", data,
+                          blob.filename or "recording.webm")
+        return JSONResponse({"voice": entry})
 
     @app.get("/voices-audio/{voice_id}")
     def voices_audio(voice_id: str):

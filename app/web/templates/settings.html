@@ -140,14 +140,41 @@
 
   <fieldset>
     <legend>声音库（本地声音复刻 · 供 xtts 使用）</legend>
-    <p class="field-desc">上传一段清晰干声（建议 10–60 秒 wav/mp3），用于本地克隆该音色。
+    <p class="field-desc">上传一段清晰干声（建议 10–60 秒 wav/mp3），或直接用麦克风录音，用于本地克隆该音色。
       选 TTS Provider = <code>xtts</code> 并「选用」一个声音后，讲解视频配音即用该音色（需 <code>pip install TTS</code>）。</p>
-    <form method="post" action="/voices" enctype="multipart/form-data"
-          style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0">
-      <input type="text" name="name" placeholder="声音名称（如 张三-播音腔）" style="max-width:220px"/>
-      <input type="file" name="file" accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg" required/>
-      <button type="submit" class="btn primary">＋ 录入声音</button>
-    </form>
+
+    <div style="display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap;">
+      <!-- Upload -->
+      <form method="post" action="/voices" enctype="multipart/form-data"
+            style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0">
+        <input type="text" name="name" placeholder="声音名称（如 张三-播音腔）" style="max-width:200px"/>
+        <input type="file" name="file" accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg" required/>
+        <button type="submit" class="btn primary">＋ 上传录入</button>
+      </form>
+
+      <!-- Record -->
+      <button type="button" id="recordBtn" class="btn" style="margin:6px 0"
+              onclick="toggleRecording()">🎤 麦克风录音</button>
+    </div>
+
+    <!-- Recording panel (hidden initially) -->
+    <div id="recordPanel" style="display:none; margin:8px 0; padding:12px; border:1px solid var(--border); border-radius:6px; background:var(--bg-alt)">
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:8px">
+        <button type="button" id="recToggle" class="btn primary" onclick="startRecord()">⏺ 开始录制</button>
+        <span id="recTimer" style="font-variant-numeric:tabular-nums; font-family:monospace; font-size:1.1em">00:00</span>
+        <span id="recStatus" class="muted">准备就绪</span>
+      </div>
+      <canvas id="recWave" width="400" height="48" style="width:100%; max-width:500px; height:48px; border-radius:4px; background:#000; display:block; margin-bottom:8px"></canvas>
+      <div id="recPreview" style="display:none; margin-bottom:8px">
+        <audio controls id="recPlayback" style="height:30px"></audio>
+      </div>
+      <div id="recSubmitRow" style="display:none; display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        <input type="text" id="recName" placeholder="声音名称（如 我-播音腔）" style="max-width:200px"/>
+        <button type="button" class="btn primary" onclick="submitRecording()">💾 保存录音</button>
+        <button type="button" class="btn" onclick="cancelRecording()">取消</button>
+      </div>
+    </div>
+
     {% if voices %}
     <table style="margin-top:8px">
       <thead><tr><th>名称</th><th>ID</th><th>试听</th><th style="width:160px">操作</th></tr></thead>
@@ -173,6 +200,140 @@
     <p class="muted">还没有录入声音。</p>
     {% endif %}
   </fieldset>
+
+<script>
+let mediaRecorder = null;
+let audioChunks = [];
+let stream = null;
+let recordingTimer = null;
+let seconds = 0;
+let analyser = null;
+let animationId = null;
+let recordedBlob = null;
+
+function toggleRecording() {
+  const panel = document.getElementById('recordPanel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  if (panel.style.display === 'none') cancelRecording();
+}
+
+async function startRecord() {
+  const btn = document.getElementById('recToggle');
+  const status = document.getElementById('recStatus');
+
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    // Stop recording
+    mediaRecorder.stop();
+    btn.textContent = '⏺ 开始录制';
+    clearInterval(recordingTimer);
+    if (animationId) cancelAnimationFrame(animationId);
+    status.textContent = '录音完成，试听后可保存';
+    return;
+  }
+
+  // Start recording
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    status.textContent = '❌ 无法访问麦克风：' + e.message;
+    return;
+  }
+
+  audioChunks = [];
+  seconds = 0;
+  recordedBlob = null;
+  document.getElementById('recTimer').textContent = '00:00';
+  document.getElementById('recPreview').style.display = 'none';
+  document.getElementById('recSubmitRow').style.display = 'none';
+  status.textContent = '⏺ 录制中...';
+
+  // Waveform via AnalyserNode
+  const audioCtx = new AudioContext();
+  const source = audioCtx.createMediaStreamSource(stream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 128;
+  source.connect(analyser);
+  drawWaveform();
+
+  mediaRecorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4' });
+  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    recordedBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+    const audioUrl = URL.createObjectURL(recordedBlob);
+    document.getElementById('recPlayback').src = audioUrl;
+    document.getElementById('recPreview').style.display = 'block';
+    document.getElementById('recSubmitRow').style.display = 'flex';
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (audioCtx) audioCtx.close();
+  };
+  mediaRecorder.start();
+  btn.textContent = '⏹ 停止录制';
+  recordingTimer = setInterval(() => {
+    seconds++;
+    const m = String(Math.floor(seconds / 60)).padStart(2, '0');
+    const s = String(seconds % 60).padStart(2, '0');
+    document.getElementById('recTimer').textContent = m + ':' + s;
+  }, 1000);
+}
+
+function drawWaveform() {
+  const canvas = document.getElementById('recWave');
+  const ctx = canvas.getContext('2d');
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Uint8Array(bufferLength);
+
+  function draw() {
+    if (!analyser) return;
+    animationId = requestAnimationFrame(draw);
+    analyser.getByteTimeDomainData(dataArray);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#4ade80';
+    ctx.beginPath();
+    const slice = canvas.width / bufferLength;
+    for (let i = 0; i < bufferLength; i++) {
+      const v = dataArray[i] / 128.0;
+      const y = (v * canvas.height) / 2;
+      if (i === 0) ctx.moveTo(0, y);
+      else ctx.lineTo(i * slice, y);
+    }
+    ctx.stroke();
+  }
+  draw();
+}
+
+async function submitRecording() {
+  if (!recordedBlob) return;
+  const name = document.getElementById('recName').value.trim() || '麦克风录音';
+  const formData = new FormData();
+  formData.append('blob', recordedBlob, 'recording.webm');
+  formData.append('name', name);
+  const status = document.getElementById('recStatus');
+  status.textContent = '⏳ 保存中...';
+  try {
+    const resp = await fetch('/api/voices/record', { method: 'POST', body: formData });
+    if (!resp.ok) throw new Error(await resp.text());
+    status.textContent = '✅ 录音已保存！刷新页面查看。';
+    document.getElementById('recSubmitRow').style.display = 'none';
+    location.reload();
+  } catch (e) {
+    status.textContent = '❌ 保存失败：' + e.message;
+  }
+}
+
+function cancelRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+  }
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (recordingTimer) clearInterval(recordingTimer);
+  if (animationId) cancelAnimationFrame(animationId);
+  recordedBlob = null;
+  document.getElementById('recordPanel').style.display = 'none';
+}
+</script>
 
   <fieldset>
     <legend>内容合规（敏感词 / 违禁词过滤）</legend>
