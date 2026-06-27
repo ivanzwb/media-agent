@@ -57,6 +57,33 @@ def sample_path(config: Config, voice_id: str | None) -> Path | None:
     return None
 
 
+def _ensure_16k_ref(config: Config, voice_id: str, filename: str) -> None:
+    """Best-effort: convert a non-WAV voice sample to 16kHz/16bit WAV
+    and save alongside as ``{voice_id}_16k.wav``.
+
+    CosyVoice (``_resolve_ref_wav``) checks for this cached variant first,
+    avoiding re-conversion on every ``synthesize()`` call.  If conversion
+    fails (pydub/ffmpeg missing) it is a no-op — the TTS provider will
+    convert lazily on first use.
+    """
+    ext = Path(filename or "").suffix.lower()
+    if ext == ".wav":
+        return
+    src = config.voices_dir / f"{voice_id}{ext}"
+    dst = config.voices_dir / f"{voice_id}_16k.wav"
+    if dst.exists():
+        return
+    try:
+        from pydub import AudioSegment
+        audio = AudioSegment.from_file(str(src))
+        audio = audio.set_frame_rate(16000).set_sample_width(2)
+        audio.export(str(dst), format="wav")
+        logger = __import__("logging").getLogger(__name__)
+        logger.info("上传时已缓存 16kHz/16bit 参考音频 %s", dst)
+    except Exception:
+        pass  # non-fatal — cosyvoice provider will convert lazily
+
+
 def add_voice(config: Config, name: str, data: bytes, filename: str) -> dict:
     ext = Path(filename or "").suffix.lower()
     if ext not in _ALLOWED_EXTS:
@@ -65,6 +92,7 @@ def add_voice(config: Config, name: str, data: bytes, filename: str) -> dict:
     config.voices_dir.mkdir(parents=True, exist_ok=True)
     sample = f"{voice_id}{ext}"
     (config.voices_dir / sample).write_bytes(data)
+    _ensure_16k_ref(config, voice_id, filename)
     entry = {
         "id": voice_id,
         "name": (name or "未命名声音").strip(),

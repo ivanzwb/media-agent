@@ -35,17 +35,18 @@ def test_sample_path_rejects_unknown_and_traversal(tmp_path):
     assert sample_path(cfg, "does-not-exist") is None
 
 
-def test_get_tts_provider_xtts():
-    from app.tts.providers.xtts import XttsTTSProvider
-    prov = get_tts_provider("xtts", voice="/tmp/ref.wav", model="zh")
-    assert isinstance(prov, XttsTTSProvider)
+def test_get_tts_provider_cosyvoice():
+    from app.tts.providers.cosyvoice import CosyVoiceTTS
+    prov = get_tts_provider("cosyvoice", voice="/tmp/ref.wav",
+                            model="FunAudioLLM/CosyVoice2-0.5B")
+    assert isinstance(prov, CosyVoiceTTS)
     assert prov.speaker_wav == "/tmp/ref.wav"
-    assert prov.language == "zh"
+    assert prov.model_name == "FunAudioLLM/CosyVoice2-0.5B"
 
 
-def test_xtts_requires_sample(tmp_path):
+def test_cosyvoice_requires_sample(tmp_path):
     import pytest
-    from app.tts.providers.xtts import XttsTTSProvider
-    prov = XttsTTSProvider(speaker_wav=None, language="zh")
+    from app.tts.providers.cosyvoice import CosyVoiceTTS
+    prov = CosyVoiceTTS(speaker_wav=None)
     with pytest.raises(RuntimeError):
         prov.synthesize("你好", tmp_path / "out")
