@@ -266,6 +266,17 @@ textarea, input, select {
   border: 1px solid var(--border); margin-right: 4px;
 }
 .badge.ok { color: var(--accent2); border-color: var(--accent2); }
+/* draft editor tabs (issue #14) */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 12px 0 16px; }
+.tab-btn {
+  background: none; border: none; color: var(--muted);
+  padding: 8px 16px; font-size: 15px; cursor: pointer;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tab-pane { display: none; }
+.tab-pane.on { display: block; }
 .scene-table { margin-top: 12px; }
 .scene-table td { vertical-align: top; }
 .scene-table audio { width: 210px; height: 32px; }

@@ -131,6 +131,16 @@ def test_archive_shows_rewrite_state(tmp_path):
     assert "已转写" in r.text  # seeded article already has a draft
 
 
+def test_draft_edit_has_tabs(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    _art, draft = seed(store)
+    r = client.get(f"/drafts/{draft.id}/edit")
+    assert r.status_code == 200
+    assert 'id="tab-article"' in r.text
+    assert 'id="tab-video"' in r.text
+    assert "文章内容" in r.text and "讲解视频" in r.text
+
+
 def test_archive_view_renders_original(tmp_path):
     client, store, _ = make_client(tmp_path)
     art, _draft = seed(store)

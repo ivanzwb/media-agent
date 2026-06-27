@@ -8,6 +8,13 @@
 {% block content %}
 <h1>编辑草稿 #{{ draft.id }}</h1>
 
+<div class="tabs" role="tablist">
+  <button type="button" class="tab-btn on" data-tab="article" onclick="showTab('article')">文章内容</button>
+  <button type="button" class="tab-btn" data-tab="video" onclick="showTab('video')">讲解视频</button>
+</div>
+
+<div id="tab-article" class="tab-pane on">
+
 {% if flagged_claims %}
 <div class="warn">
   <strong>⚠ 事实校验存疑（请人工核对原文后再发）：</strong>
@@ -59,7 +66,9 @@
   </form>
   {% endfor %}
 </div>
+</div><!-- /tab-article -->
 
+<div id="tab-video" class="tab-pane">
 <h2>讲解视频（分镜脚本 + 配音）</h2>
 <p class="muted">基于正文自动生成口播分镜脚本，并用配置的 TTS 逐段配音（可在「设置」里配 TTS）。视频合成为后续步骤。</p>
 <div class="adapt-row">
@@ -88,6 +97,7 @@
        src="/videos/draft-{{ draft.id }}/video.mp4"></video>
 <p><a class="btn small" href="/videos/draft-{{ draft.id }}/video.mp4" download>下载 mp4</a></p>
 {% endif %}
+</div><!-- /tab-video -->
 
 <script>
   if (window.marked && marked.setOptions) {
@@ -324,5 +334,30 @@
     } catch (e) { /* ignore */ }
   }
   se_load();
+
+  // ---- tabs: 文章内容 / 讲解视频 (issue #14) ----
+  function showTab(name, push) {
+    name = (name === 'video') ? 'video' : 'article';
+    document.querySelectorAll('.tab-pane').forEach(function (p) {
+      p.classList.toggle('on', p.id === 'tab-' + name);
+    });
+    document.querySelectorAll('.tab-btn').forEach(function (b) {
+      b.classList.toggle('on', b.dataset.tab === name);
+    });
+    if (push !== false && ('#' + name) !== location.hash) {
+      history.pushState(null, '', '#' + name);
+    }
+    // CodeMirror needs a refresh when shown after being hidden
+    if (name === 'article' && window.easyMDE) {
+      try { easyMDE.codemirror.refresh(); } catch (e) { /* ignore */ }
+    }
+  }
+  function _tabFromHash() {
+    return location.hash === '#video' ? 'video' : 'article';
+  }
+  window.addEventListener('popstate', function () {
+    showTab(_tabFromHash(), false);
+  });
+  showTab(_tabFromHash(), false);
 </script>
 {% endblock %}
