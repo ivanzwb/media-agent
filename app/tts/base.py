@@ -27,12 +27,16 @@ def get_tts_provider(name: str | None, base_url: str | None = None,
         from app.tts.providers.openai_compatible import OpenAICompatibleTTS
         return OpenAICompatibleTTS(base_url=base_url, api_key=api_key,
                                    model=model, voice=voice)
+    if name == "fishaudio":
+        from app.tts.providers.fish_audio import FishAudioTTS
+        return FishAudioTTS(api_key=api_key, speaker_wav=voice,
+                            model=model)
     if name == "kitten_http":
         from app.tts.providers.kitten import KittenTTSProvider
         return KittenTTSProvider(base_url=base_url, voice=voice)
-    if name == "xtts":
+    if name == "cosyvoice":
         # voice = speaker reference wav path (resolved by caller);
-        # model = language (e.g. "zh").
-        from app.tts.providers.xtts import XttsTTSProvider
-        return XttsTTSProvider(speaker_wav=voice, language=model)
+        # model = CosyVoice2 model name/path (HuggingFace ID or local dir).
+        from app.tts.providers.cosyvoice import CosyVoiceTTS
+        return CosyVoiceTTS(speaker_wav=voice, model=model)
     raise ValueError(f"Unknown TTS provider: {name}")
