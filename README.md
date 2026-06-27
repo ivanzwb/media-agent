@@ -6,33 +6,48 @@
 
 ## 核心特性
 
-- **多来源抓取**：RSS 订阅 + 网页爬取（列表页自动发现链接 / 单页抓取），统一为标准文章结构。列表页支持 **分页跟随**（`max_pages`，跟随 `?page=N` / `/page/N`）；对 SPA/SSR 站点可选 **JS 渲染**（`render_js`，需 `pip install playwright && playwright install chromium`，未安装则自动回退静态抓取）。
+### 采集与归档
+- **多来源抓取**：RSS 订阅 + 网页爬取（列表页自动发现链接 / 单页抓取）。列表页支持**分页跟随**（`max_pages`，跟随 `?page=N` / `/page/N`），href 提取兼容单/双/无引号；对 SPA/SSR 站点可选 **JS 渲染**（`render_js`，需 Playwright，未装则回退静态）。
 - **去重归档**：URL 规范化 + 标题指纹去重，跨轮次持久化；原文以 Markdown（带 front-matter）落盘，按主题分目录。
-- **媒体提取**：图片支持 `src`/`data-src`/`srcset`/`<picture>`，视频支持 `<video>/<source>` 及 **JS 动态填充**（扫描 `<script>`/JSON 中的 `.mp4`/`.png` 等 URL），尽量减少现代框架（Next.js 等）下的媒体遗漏。
-- **媒体本地化**：抓取归档时把文章里的图片（httpx）与视频（yt-dlp）**全部下载到本地** `data/media/<hash>/`，front-matter 记录本地路径 `/media/<hash>/<file>`；后续转写与讲解视频合成直接用本地文件，避免远程防盗链/失效。归档页每篇文章在转写前可点「本地化媒体」按钮单独补下载（已本地化的会跳过）。
-- **主题分类**：关键词优先命中，模糊时用 LLM 零样本分类到既定主题集合。
-- **保真改写**：原文为唯一事实来源，强约束不编造数据/引用/结论；产出候选标题 + 钩子 + 正文 + 来源标注；改写后做事实校验并标红存疑内容。
-- **敏感词过滤**：文章/视频脚本生成后自动移除自媒体平台敏感/违禁词（广告法绝对化用语、引流、医疗/金融夸大等），内置词库**按等级**（`off`/`basic`/`standard`/`strict`，可按平台选），支持自定义追加；命中静默处理、记录并在草稿页提示。
+- **选题热度打分**：`compute_hotness()` 以 LLM 给主题打基线分 + 联网新鲜度加成，辅助排序选题。
+- **智能推荐**（Web）：输入主题 →（多选）子主题 → 关键词，一键加为主题；并可「按主题发现前沿公司/机构来源」自动加入。
+
+### 媒体
+- **媒体提取**：图片支持 `src`/`data-src`/`srcset`/`<picture>`/CSS background-image，视频支持 `<video>/<source>`、平台 iframe、**JS 动态填充**（扫描 `<script>`/JSON 中的媒体 URL），并支持 **HLS（`.m3u8`，边播拉 `.ts`）**。
+- **媒体本地化**：抓取归档时把文章里的图片（httpx）与视频（yt-dlp，直链/HLS 均可）**下载到本地** `data/media/<hash>/`，front-matter 与正文引用改为本地路径；后续转写/合成直接用本地文件，避免防盗链/失效。归档页每篇可单独「重新抓取 / 本地化媒体」。
 - **配图**：原文配图下载 + AI 生成封面（provider 可切换，离线用占位图）。
+
+### 改写与合规
+- **主题分类**：关键词优先命中，模糊时 LLM 零样本分类。
+- **保真改写**：原文为唯一事实来源，禁编造数据/引用/结论；产出候选标题 + 钩子 + 正文 + 来源标注；改写后事实校验、存疑处标红。
+- **敏感词过滤**：文章/视频脚本生成后自动移除平台敏感/违禁词（广告法绝对化用语、引流、医疗/金融夸大等），内置词库**按等级**（`off`/`basic`/`standard`/`strict`），可自定义追加；静默处理、记录并在草稿页提示。
 - **平台适配**：一键从主稿生成公众号 / 小红书 / 知乎风格的新草稿。
-- **讲解视频（实验）**：从草稿自动生成口播分镜脚本（LLM）→ 用**内置 TTS（默认 `kitten`，中文走 edge-tts，免 API key）**逐段配音 → **ffmpeg 合成图片轮播 + 中文字幕 + 配音的 mp4**，分镜引用到原文视频时用 **yt-dlp 下载原视频片段**作画面（循环铺满、去原声、叠加字幕），在草稿页试听/播放/下载。中文字幕用 PIL 生成画面帧/叠层（规避 ffmpeg 中文字体问题）。合成需本地安装 **ffmpeg**，原视频片段需 **yt-dlp**。
-- **声音复刻（本地，可选）**：在「设置 → 声音库」上传一段干声即可**本地克隆**该音色（基于 Coqui **XTTS-v2**，自然度高、无明显机器味、支持中文），配音时选 `xtts` provider + 该声音。需要 `pip install TTS`（较重，含 torch；未安装时该 provider 会给出提示，其它 provider 不受影响）。
 
-> 版权提示：把第三方视频片段剪入自己的成片并发布可能涉及版权，请自行注明出处或取得授权。
+### 讲解视频
+- **脚本 + 配音**：从草稿自动生成口播分镜脚本（LLM）→ 逐段 TTS 配音；分镜可在草稿页**编辑**（旁白/画面/重选背景素材、增删/排序），并**只对改动的分镜重配**。
+- **合成**：ffmpeg 合成「图片轮播 / 原视频片段 + 中文字幕 + 配音」的 mp4；中文字幕用 PIL 生成画面帧/叠层（规避 ffmpeg 中文字体问题）；画面适配可选 `fit`（完整+黑边）/`crop`/`blur`。同一视频被连续分镜引用时**续播**、放完**冻结最后一帧**。
+- **TTS**：默认内置 `kitten`（中文走 edge-tts，免 key）；可选 **本地声音复刻 `xtts`**（Coqui XTTS-v2，上传干声本地克隆音色，自然度高、支持中文，需 `pip install TTS`）；也支持 OpenAI 兼容 / 外部 Kitten 服务。
+- 合成需本地 **ffmpeg**；原视频/HLS 下载需 **yt-dlp**。
 
-> 同一视频被连续多个分镜引用时会**续播**（不重头开始），放完后停留在**最后一帧**直到切换到其它背景素材。
-
-> 视频源支持直链（`.mp4/.webm/...`，httpx 直接下载）与 **HLS（`.m3u8`，边播边拉 `.ts`）**——HLS 经 yt-dlp 合并分片为 mp4（需本地 ffmpeg）。
+### 运行与平台
 - **运行控制**：按时间窗（`max_age_days`）与每源条数（`max_per_source`）限制抓取量。
-- **并发加速**：多来源抓取、图片/视频下载用线程池并发（`ThreadPoolExecutor`），并发数可配（`MEDIA_AGENT_DOWNLOAD_WORKERS`，默认 CPU 核数；视频因走 yt-dlp 子进程限制更低并发）。
-- **定时调度**：APScheduler cron 定时自动运行。
-- **本地 Web 界面**：仪表盘、归档浏览、草稿 Markdown 编辑审核、来源配置、设置、立即运行。
-- **可切换大模型**：业务代码不绑定厂商；内置 `mock`（离线跑通全链路）与 `openai`，易扩展 DeepSpeed/Claude/本地模型等。
-- **配置导出/导入**：在「设置」页可把来源（主题+来源）与配置导出为 JSON 文件分享/备份，导入可恢复；**导出不含 API Key**，导入也不会写入密钥。
+- **并发加速**：多来源抓取、图片/视频下载用线程池并发，数量可配（`MEDIA_AGENT_DOWNLOAD_WORKERS`，默认 CPU 核数）。
+- **定时调度**：APScheduler cron 定时自动运行；**实时运行进度/日志面板**。
+- **本地 Web 界面**：仪表盘、归档浏览（按日期分组、查看原文）、草稿编辑（文章/讲解视频双 Tab）、来源配置、设置、立即运行。
+- **可切换大模型**：业务代码不绑定厂商；内置 `mock`（离线跑通全链路）与 `openai`，易扩展。
+- **配置导出/导入**：把来源 + 配置导出为 JSON 分享/备份，导入可恢复；**导出不含 API Key**。
+
+> 版权提示：把第三方视频片段剪入自己的成片并发布可能涉及版权，请自行注明出处或取得授权；AI 生成图建议标注「AI 生成」。
 
 ## 安装
 
-需要 Python 3.11+（已在 3.12 验证）。讲解视频合成需额外安装 [ffmpeg](https://ffmpeg.org)（须在 PATH 中）；中文字幕字体可用 `MEDIA_AGENT_FONT` 指定（默认自动探测微软雅黑/黑体/Noto CJK）。
+需要 Python 3.11+（已在 3.12 验证）。
+
+**可选外部依赖（按需安装）：**
+- **ffmpeg**（讲解视频合成、HLS 合并）：装好并加入 PATH（<https://ffmpeg.org>）。中文字幕字体可用 `MEDIA_AGENT_FONT` 指定（默认自动探测微软雅黑/黑体/Noto CJK）。
+- **yt-dlp**（平台视频 / HLS 下载）：已在 `requirements.txt`；CLI 不在 PATH 时自动回退 `python -m yt_dlp`。
+- **Playwright**（SPA/SSR 页面 JS 渲染抓取）：`pip install playwright && playwright install chromium`。
+- **TTS / Coqui**（本地声音复刻 `xtts`）：`pip install TTS`（较重，含 torch）。
 
 ```bash
 python -m venv .venv
@@ -129,39 +144,47 @@ python -m app.cli run --feeds feeds.yaml --with-images
 
 `python -m app.cli serve` 后访问 `http://127.0.0.1:8000`：
 
-- **仪表盘**：归档/草稿/运行计数、最近运行、最新草稿、右上角「立即运行」。
-- **归档**：按主题筛选浏览已抓取原文，链接到来源。
-- **草稿**：列表 + Markdown 编辑器（实时预览）；候选标题、状态流转（drafted→reviewing→approved→published）、封面预览；**事实校验存疑会高亮警告**；一键生成公众号/小红书/知乎适配版本。
-- **来源**：查看主题与来源；手动新增，或「从网址发现」/「按关键词发现」自动添加来源（写回 `feeds.yaml`）。
-- **设置**：查看模型/图片 provider/运行控制；配置定时运行的 cron 表达式（如 `0 8 * * *`，每天 8 点）。
+- **仪表盘**：归档/草稿/运行计数、最近运行、最新草稿、右上角「立即运行」（带实时进度/日志面板）。
+- **归档**：按日期分组浏览、主题筛选；每篇可「查看原文」（本地媒体内联渲染）、「重新抓取」、「本地化媒体」、「转写/重写」；抓取/本地化日志在右下角浮动面板（不遮挡列表）。
+- **草稿**：列表 + 双 Tab 编辑器——
+  - 「文章内容」：候选标题、正文 Markdown（分屏实时预览）、状态流转（drafted→reviewing→approved→published）、封面预览、平台适配；**事实校验存疑 / 敏感词过滤**会高亮提示。
+  - 「讲解视频」：生成分镜脚本+配音、分镜编辑（旁白/画面/重选素材、增删/排序、局部重配）、合成 mp4、播放/下载。
+- **来源**：查看/编辑主题与来源；「智能推荐主题」（主题→子主题→关键词）、「按主题发现前沿来源」、「从网址/关键词发现」自动添加（写回 `feeds.yaml`）。
+- **设置**：LLM / 图片 / **TTS（含声音库录入）** provider、并发数、视频画面适配、**敏感词等级与自定义词**、运行控制、定时 cron、配置导出/导入。
 
 > 定时设置在 `serve` 启动时生效，修改后请重启服务。
 
 ## 产出物
 
-- `data/archive/<主题>/<日期>-<slug>.md`：抓取的原文（含 front-matter 元数据）。
-- `data/drafts/<主题>/<id>-<平台>-<slug>.md`：改写后的草稿，front-matter 含候选标题、来源、封面、平台、`flagged_claims`（存疑项）、状态。
-- `data/images/`：下载的原图与生成的封面。
+- `data/archive/<主题>/<日期>-<slug>.md`：抓取的原文（含 front-matter：标题/来源/主题/images/videos 等）。
+- `data/drafts/<主题>/<id>-<平台>-<slug>.md`：改写后的草稿，front-matter 含候选标题、来源、封面、平台、`flagged_claims`（存疑项）、`sensitive_hits`（被过滤的敏感词）、状态。
+- `data/media/<hash>/`：本地化的原文图片/视频。
+- `data/videos/draft-<id>/`：讲解视频产物（`script.json` 分镜脚本、逐段配音、`video.mp4`）。
+- `data/voices/`：声音复刻样本与注册表（`voices.json`）。
+- `data/images/`：生成的封面。
 - `data/media.db`：SQLite 元数据库（articles / drafts / runs / sources / settings）。
 
 ## 项目结构
 
 ```
 app/
-├─ config.py            # 配置（env）
+├─ config.py            # 配置（env + DB 覆盖）
 ├─ db.py / store.py     # SQLite + 归档/草稿文件读写与查询
 ├─ models.py            # Article / Draft 数据模型
-├─ feeds.py             # feeds.yaml 读写
+├─ feeds.py             # feeds.yaml 读写（含 max_pages / render_js）
 ├─ cli.py               # Typer CLI（init / run / serve）
 ├─ scheduler.py         # APScheduler 定时调度
 ├─ discovery.py         # 来源自动发现（RSS 探测 + 关键词搜索）
-├─ sources/             # rss / scraper / extractor / dedup
+├─ sources/             # rss / scraper（分页/JS 渲染）/ extractor（媒体提取）/ dedup
+├─ media/               # 下载策略链（downloader / strategies：httpx 直链 / URL 变换 / yt-dlp）
 ├─ llm/                 # 大模型抽象层 + providers（mock / openai）
 ├─ images/              # 图片抽象层 + providers（mock / openai）
-├─ pipeline/            # classifier / rewriter / images / adapter / orchestrator
+├─ tts/                 # TTS 抽象层 + providers（kitten/edge-tts / xtts / openai…）+ 声音库
+├─ video/              # builder：PIL 字幕帧 + ffmpeg 合成
+├─ pipeline/            # classifier / rewriter / sanitizer / localize / recommender(+热度)
+│                       #   / script / narration / images / adapter / video / orchestrator
 └─ web/                 # FastAPI 服务 + 模板 + 静态资源
-docs/superpowers/       # 设计文档与三个实现计划
-tests/                  # pytest（83 个测试）
+tests/                  # pytest（160 个测试）
 feeds.yaml  requirements.txt
 ```
 
@@ -178,7 +201,8 @@ python -m pytest -v
 ## 路线图（后续可扩展）
 
 - 真实平台发布 API 对接（公众号、知乎等）。
-- 选题热度/趋势推荐。
 - 更多来源（X/Twitter 等社交平台）。
 - 多模型对比改写、A/B 标题。
+- 归档双格式（原始 HTML + Markdown）以便提取逻辑升级后回溯重提取（见 issue #9）。
+- 背景音乐 / 转场 / 数字人口播 / 竖屏 9:16 适配。
 ```
