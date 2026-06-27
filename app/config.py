@@ -49,6 +49,8 @@ class Config:
     max_per_source: int | None = None
     download_workers: int | None = None
     video_fit: str | None = None  # fit | crop | blur
+    sensitive_level: str | None = None  # off | basic | standard | strict
+    sensitive_words: str | None = None  # user custom list (comma/newline)
 
     @property
     def archive_dir(self) -> Path:
@@ -107,6 +109,8 @@ class Config:
             max_per_source=_int_env("MEDIA_AGENT_MAX_PER_SOURCE"),
             download_workers=_int_env("MEDIA_AGENT_DOWNLOAD_WORKERS"),
             video_fit=os.environ.get("MEDIA_AGENT_VIDEO_FIT_MODE"),
+            sensitive_level=os.environ.get("MEDIA_AGENT_SENSITIVE_LEVEL"),
+            sensitive_words=os.environ.get("MEDIA_AGENT_SENSITIVE_WORDS"),
         )
         if store is not None:
             config._apply_db_overrides(store)
@@ -129,6 +133,8 @@ class Config:
             "tts_model": "tts_model",
             "tts_voice": "tts_voice",
             "video_fit": "video_fit",
+            "sensitive_level": "sensitive_level",
+            "sensitive_words": "sensitive_words",
         }
         for attr, db_key in str_overrides.items():
             val = store.get_setting(db_key)

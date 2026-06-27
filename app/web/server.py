@@ -29,6 +29,7 @@ from app.pipeline.recommender import (
     suggest_subtopics, suggest_keywords, suggest_sources, compute_hotness)
 from app.pipeline.localize import localize_one
 from app.pipeline.rewriter import rewrite
+from app.pipeline.sanitizer import load_words, sanitize_draft
 from app.pipeline.video import build_explainer_video, video_path
 from app.sources.extractor import _images_from_html, _videos_from_html
 from app.tts.base import get_tts_provider
@@ -219,6 +220,7 @@ def create_app(config: Config | None = None,
             store.delete_draft(old["id"])
 
         draft = rewrite(art, provider)
+        sanitize_draft(draft, load_words(run_config))
         saved = store.save_draft(draft)
         if image_provider is not None:
             attach_cover(saved, image_provider, store.config.images_dir)
@@ -250,6 +252,7 @@ def create_app(config: Config | None = None,
             "title_candidates_text": "\n".join(title_candidates),
             "body_md": body.get("body_md", ""),
             "flagged_claims": body.get("flagged_claims", []) or [],
+            "sensitive_hits": body.get("sensitive_hits", []) or [],
             "narration": load_narration(draft_id, config),
             "has_video": video_path(draft_id, config) is not None,
             "statuses": ["drafted", "reviewing", "approved", "published"],
@@ -294,6 +297,7 @@ def create_app(config: Config | None = None,
         "image_provider", "image_api_base", "image_model",
         "tts_provider", "tts_api_base", "tts_model", "tts_voice",
         "max_age_days", "max_per_source", "download_workers", "video_fit",
+        "sensitive_level", "sensitive_words",
         "schedule_cron", "schedule_enabled",
     ]
 
@@ -896,6 +900,7 @@ def create_app(config: Config | None = None,
             source_url=meta.get("source_url", ""),
             source_name=meta.get("source_name", ""),
             cover_image=meta.get("cover_image"))
+        sanitize_draft(new_draft, load_words(run_config))
         saved = store.save_draft(new_draft)
         return RedirectResponse(url=f"/drafts/{saved.id}/edit", status_code=303)
 
@@ -921,6 +926,8 @@ def create_app(config: Config | None = None,
         db_max_per_source = store.get_setting("max_per_source") or ""
         db_download_workers = store.get_setting("download_workers") or ""
         db_video_fit = store.get_setting("video_fit") or ""
+        db_sensitive_level = store.get_setting("sensitive_level") or ""
+        db_sensitive_words = store.get_setting("sensitive_words") or ""
 
         # API key: indicate whether set, mask the value
         api_key_val = store.get_setting("llm_api_key")
@@ -969,6 +976,8 @@ def create_app(config: Config | None = None,
                 str(config.download_workers) if config.download_workers else ""),
             "default_workers": os.cpu_count() or 4,
             "video_fit": db_video_fit or (config.video_fit or "fit"),
+            "sensitive_level": db_sensitive_level or (config.sensitive_level or "standard"),
+            "sensitive_words": db_sensitive_words or (config.sensitive_words or ""),
             "api_key_set": api_key_set,
             "api_key_masked": masked,
             "img_key_set": img_key_set,
@@ -995,6 +1004,8 @@ def create_app(config: Config | None = None,
                       max_per_source: str = Form(""),
                       download_workers: str = Form(""),
                       video_fit: str = Form(""),
+                      sensitive_level: str = Form(""),
+                      sensitive_words: str = Form(""),
                       schedule_cron: str = Form(""),
                       schedule_enabled: str = Form("0")):
         store = get_store()
@@ -1012,6 +1023,8 @@ def create_app(config: Config | None = None,
             "tts_model": tts_model.strip(),
             "tts_voice": tts_voice.strip(),
             "video_fit": video_fit.strip(),
+            "sensitive_level": sensitive_level.strip(),
+            "sensitive_words": sensitive_words.strip(),
         }
         for db_key, value in str_fields.items():
             if value:

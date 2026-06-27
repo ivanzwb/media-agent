@@ -15,6 +15,13 @@
 </div>
 {% endif %}
 
+{% if sensitive_hits %}
+<div class="warn">
+  <strong>🛡 已过滤敏感/违禁词（已从正文与标题移除，发布前请检查通顺）：</strong>
+  <p>{{ sensitive_hits | join('、') }}</p>
+</div>
+{% endif %}
+
 <div class="edit-grid">
   <div>
     {% if meta.cover_image %}

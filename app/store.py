@@ -92,6 +92,7 @@ class Store:
             "platform": draft.platform,
             "cover_image": draft.cover_image,
             "flagged_claims": draft.flagged_claims,
+            "sensitive_hits": getattr(draft, "sensitive_hits", []) or [],
             "status": draft.status,
         })
         abs_path.write_text(frontmatter.dumps(post), encoding="utf-8")

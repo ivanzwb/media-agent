@@ -72,3 +72,4 @@ class Draft:
     status: str = DraftStatus.DRAFTED
     draft_path: str | None = None
     id: int | None = None
+    sensitive_hits: list[str] = field(default_factory=list)

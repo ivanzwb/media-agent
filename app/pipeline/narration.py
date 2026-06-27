@@ -43,6 +43,18 @@ def generate_narration(draft_id: int, store: Store, llm: LLMProvider,
     script = build_script(body_md, title, llm, max_scenes=max_scenes)
     scenes = script["scenes"]
 
+    from app.pipeline.sanitizer import load_words, sanitize
+    sens_words = load_words(config)
+    if sens_words:
+        total = 0
+        for sc in scenes:
+            clean, hits = sanitize(sc.get("narration", ""), sens_words)
+            if hits:
+                sc["narration"] = clean
+                total += sum(h["count"] for h in hits)
+        if total:
+            emit(f"敏感词过滤 {total} 处")
+
     out_dir = config.videos_dir / f"draft-{draft_id}"
     out_dir.mkdir(parents=True, exist_ok=True)
 

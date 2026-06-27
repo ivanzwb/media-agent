@@ -17,6 +17,7 @@ from app.pipeline.classifier import classify
 from app.pipeline.images import attach_cover, inject_image_prompt
 from app.pipeline.localize import localize_article
 from app.pipeline.rewriter import rewrite
+from app.pipeline.sanitizer import load_words, sanitize_draft
 
 
 def _fetch_source(src) -> list[Article]:
@@ -110,6 +111,7 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
     emit = progress or _noop
     stats = {"fetched": 0, "archived": 0, "classified": 0, "drafted": 0}
     run_id = store.record_run() if record else None
+    sens_words = load_words(store.config)
 
     try:
         emit("开始抓取来源…", stats)
@@ -146,6 +148,11 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
             emit(f"改写中：{art.title[:50]}", stats)
             try:
                 draft = rewrite(art, provider)
+                if sens_words:
+                    hits = sanitize_draft(draft, sens_words)
+                    if hits:
+                        n = sum(h["count"] for h in hits)
+                        emit(f"  敏感词过滤 {n} 处：{art.title[:40]}", stats)
                 saved_draft = store.save_draft(draft)
                 stats["drafted"] += 1
                 if image_provider is not None:

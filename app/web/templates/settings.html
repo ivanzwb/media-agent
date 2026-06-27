@@ -175,6 +175,26 @@
   </fieldset>
 
   <fieldset>
+    <legend>内容合规（敏感词 / 违禁词过滤）</legend>
+    <div class="field">
+      <label for="sensitive_level">过滤等级 <span class="env-hint">MEDIA_AGENT_SENSITIVE_LEVEL</span></label>
+      <select name="sensitive_level" id="sensitive_level" style="max-width:280px">
+        <option value="off" {{ 'selected' if sensitive_level == 'off' else '' }}>off（不过滤）</option>
+        <option value="basic" {{ 'selected' if sensitive_level == 'basic' else '' }}>basic（仅广告法绝对化用语）</option>
+        <option value="standard" {{ 'selected' if sensitive_level in ['standard',''] or not sensitive_level else '' }}>standard（广告法+引流+金融夸大，默认）</option>
+        <option value="strict" {{ 'selected' if sensitive_level == 'strict' else '' }}>strict（再加医疗夸大，最严）</option>
+      </select>
+      <span class="field-desc">生成文章/视频脚本后自动移除命中词（静默处理、记录命中、草稿页提示）。小红书/抖音建议 strict</span>
+    </div>
+    <div class="field">
+      <label for="sensitive_words">自定义敏感词 <span class="env-hint">MEDIA_AGENT_SENSITIVE_WORDS</span></label>
+      <textarea name="sensitive_words" id="sensitive_words" rows="3"
+                placeholder="每行一个或用逗号分隔，追加到内置词库">{{ sensitive_words }}</textarea>
+      <span class="field-desc">在内置词库之外追加你自己的屏蔽词</span>
+    </div>
+  </fieldset>
+
+  <fieldset>
     <legend>采集限制</legend>
 
     <div class="field">
