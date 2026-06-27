@@ -94,7 +94,8 @@
       <label for="tts_provider">TTS Provider <span class="env-hint">MEDIA_AGENT_TTS_PROVIDER</span></label>
       <select name="tts_provider" id="tts_provider">
         <option value="kitten" {{ 'selected' if tts_provider in ['kitten','local'] or not tts_provider else '' }}>kitten（内置·中文 edge-tts，默认，无需外部服务）</option>
-        <option value="xtts" {{ 'selected' if tts_provider == 'xtts' else '' }}>xtts（本地声音复刻 / 克隆，高自然度，需装 TTS）</option>
+        <option value="cosyvoice" {{ 'selected' if tts_provider == 'cosyvoice' else '' }}>cosyvoice（本地声音复刻 / 克隆 · CosyVoice2-0.5B，最佳中文 TTS，需 Python&lt;3.13 + 4GB+ 显存）</option>
+        <option value="fishaudio" {{ 'selected' if tts_provider == 'fishaudio' else '' }}>fishaudio（云端声音克隆 · 高自然度中文，需 API Key + pip install fish-audio-sdk）</option>
         <option value="mock" {{ 'selected' if tts_provider == 'mock' else '' }}>mock（离线占位静音）</option>
         <option value="kitten_http" {{ 'selected' if tts_provider == 'kitten_http' else '' }}>kitten_http（连接外部 Kitten 服务）</option>
         <option value="openai" {{ 'selected' if tts_provider in ['openai','http','openai_compatible'] else '' }}>openai 兼容 / 本地 HTTP</option>
@@ -127,30 +128,31 @@
     <div class="field">
       <label for="tts_model">TTS Model <span class="env-hint">MEDIA_AGENT_TTS_MODEL</span></label>
       <input type="text" name="tts_model" id="tts_model"
-             value="{{ tts_model }}" placeholder="openai 兼容用，如 tts-1（kitten 可留空）"/>
+             value="{{ tts_model }}" placeholder="cosyvoice：模型目录路径（如 pretrained_models/CosyVoice2-0.5B），留空自动搜索；openai 兼容用：tts-1"/>
     </div>
 
     <div class="field">
       <label for="tts_voice">TTS Voice / Profile <span class="env-hint">MEDIA_AGENT_TTS_VOICE</span></label>
       <input type="text" name="tts_voice" id="tts_voice"
-             value="{{ tts_voice }}" placeholder="kitten 风格：child/female/...；xtts：声音库里的声音ID"/>
-      <span class="field-desc">Kitten：填风格 profile（如 female）或音色名；openai 兼容：填 voice（如 alloy）；<strong>xtts：在下方「声音库」点「选用」自动填入声音ID</strong></span>
+             value="{{ tts_voice }}" placeholder="kitten 风格：child/female/...；cosyvoice：声音库里的声音ID"/>
+      <span class="field-desc">Kitten：填风格 profile（如 female）或音色名；openai 兼容：填 voice（如 alloy）；<strong>cosyvoice / fishaudio：在下方「声音库」点「选用」自动填入声音ID</strong></span>
     </div>
   </fieldset>
 
   <fieldset>
-    <legend>声音库（本地声音复刻 · 供 xtts 使用）</legend>
-    <p class="field-desc">上传一段清晰干声（建议 10–60 秒 wav/mp3），或直接用麦克风录音，用于本地克隆该音色。
-      选 TTS Provider = <code>xtts</code> 并「选用」一个声音后，讲解视频配音即用该音色（需 <code>pip install TTS</code>）。</p>
+    <legend>声音库（声音复刻 · 供 cosyvoice / fishaudio 使用）</legend>
+    <p class="field-desc">上传一段清晰干声（建议 10–60 秒 wav/mp3），或直接用麦克风录音，用于克隆该音色。
+      选 TTS Provider = <code>cosyvoice</code>（需 <code>pip install cosyvoice</code> + 下载模型 + Python&lt;3.13）
+      或 <code>fishaudio</code>（需 <code>pip install fish-audio-sdk</code> + API Key），
+      并「选用」一个声音后，讲解视频配音即用该音色。</p>
 
     <div style="display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap;">
-      <!-- Upload -->
-      <form method="post" action="/voices" enctype="multipart/form-data"
-            style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0">
-        <input type="text" name="name" placeholder="声音名称（如 张三-播音腔）" style="max-width:200px"/>
-        <input type="file" name="file" accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg" required/>
-        <button type="submit" class="btn primary">＋ 上传录入</button>
-      </form>
+      <!-- Upload (JS fetch to avoid nested form) -->
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0">
+        <input type="text" id="voiceUploadName" placeholder="声音名称（如 张三-播音腔）" style="max-width:200px"/>
+        <input type="file" id="voiceUploadFile" accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg"/>
+        <button type="button" class="btn primary" onclick="uploadVoice()">＋ 上传录入</button>
+      </div>
 
       <!-- Record -->
       <button type="button" id="recordBtn" class="btn" style="margin:6px 0"
@@ -187,10 +189,8 @@
           <td class="actions">
             <button type="button" class="btn small primary"
                     onclick="document.getElementById('tts_voice').value='{{ v.id }}'">选用</button>
-            <form method="post" action="/voices/{{ v.id }}/delete" style="display:inline"
-                  onsubmit="return confirm('删除声音「{{ v.name }}」？')">
-              <button type="submit" class="btn small danger">删除</button>
-            </form>
+            <button type="button" class="btn small danger"
+                    onclick="deleteVoice('{{ v.id }}','{{ v.name }}')">删除</button>
           </td>
         </tr>
       {% endfor %}
@@ -202,6 +202,27 @@
   </fieldset>
 
 <script>
+// ── Voice upload: file picker → POST via fetch ──────────────────────
+async function uploadVoice() {
+  const fileInput = document.getElementById('voiceUploadFile');
+  const nameInput = document.getElementById('voiceUploadName');
+  if (!fileInput.files.length) return alert('请选择音频文件');
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+  fd.append('name', nameInput.value.trim() || '上传声音');
+  fileInput.disabled = true;
+  await fetch('/voices', { method: 'POST', body: fd });
+  location.reload();
+}
+
+// ── Voice delete: confirm → POST via fetch ──────────────────────────
+async function deleteVoice(id, name) {
+  if (!confirm('删除声音「' + name + '」？')) return;
+  await fetch('/voices/' + id + '/delete', { method: 'POST' });
+  location.reload();
+}
+
+// ── Browser microphone recording ────────────────────────────────────
 let mediaRecorder = null;
 let audioChunks = [];
 let stream = null;

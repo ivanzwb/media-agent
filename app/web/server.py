@@ -450,12 +450,19 @@ def create_app(config: Config | None = None,
                             base_url=run_config.llm_api_base)
 
     def _build_tts(rc):
-        # xtts (local voice cloning): resolve the selected voice id to its
-        # reference sample and pass it as the speaker reference.
-        if rc.tts_provider == "xtts":
+        # cosyvoice / fishaudio (voice cloning providers): resolve the
+        # selected voice id to its reference sample and pass as speaker_wav.
+        if rc.tts_provider == "cosyvoice":
             sp = voice_sample_path(config, rc.tts_voice)
-            return get_tts_provider("xtts", voice=str(sp) if sp else None,
-                                    model=(rc.tts_model or "zh"))
+            return get_tts_provider("cosyvoice", voice=str(sp) if sp else None,
+                                    model=rc.tts_model)
+        if rc.tts_provider == "fishaudio":
+            sp = voice_sample_path(config, rc.tts_voice)
+            return get_tts_provider(
+                "fishaudio",
+                api_key=rc.tts_api_key,
+                voice=str(sp) if sp else None,
+                model=rc.tts_model)
         return get_tts_provider(
             rc.tts_provider, base_url=rc.tts_api_base,
             api_key=rc.tts_api_key, model=rc.tts_model, voice=rc.tts_voice)
@@ -833,7 +840,7 @@ def create_app(config: Config | None = None,
             base["has_video"] = video_path(draft_id, config) is not None
         return base
 
-    # ---- voice library (local voice cloning, xtts) ----
+    # ---- voice library (local voice cloning, cosyvoice) ----
     @app.get("/api/voices")
     def api_voices():
         return {"voices": list_voices(config)}

@@ -268,7 +268,7 @@
         se_mediaOptions(sc.media || 'none') + '</select> ' + se_thumb(sc.media || 'none') + '</div>' +
         '<div class="scene-audio">' + (sc.audio ?
           '<audio controls preload="none" src="/videos/draft-' + SCENE_DRAFT + '/' + sc.audio + '"></audio>' :
-          '<span class="muted">（无配音' + (sc.audio_error ? '：失败' : '') + '）</span>') +
+          '<span class="muted">（无配音' + (sc.audio_error ? '：' + se_esc(sc.audio_error) : '') + '）</span>') +
         '</div></div>';
     });
     h += '<div class="adapt-row" style="margin-top:10px">' +
