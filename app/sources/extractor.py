@@ -220,11 +220,30 @@ def extract_from_html(html: str, url: str) -> dict:
     # Insert [[VIDEO:N]] placeholders where videos appear, so they stay in the
     # body at their original position instead of being dumped at the end.
     html_pl, videos = _videos_with_placeholders(html, base_url=url)
-    content_md = trafilatura.extract(
-        html_pl, output_format="markdown", include_images=True,
-        include_links=True, url=url) or ""
+
+    content_md = ""
+    # ── 1. readability-lxml: extract main article HTML (removes nav/sidebar) ──
+    try:
+        from readability import Document
+        readable = Document(html_pl)
+        article_html = readable.summary()
+        if article_html:
+            content_md = trafilatura.extract(
+                article_html, output_format="markdown",
+                include_images=True, include_links=True, url=url) or ""
+    except Exception:                          # noqa: BLE001
+        pass
+
+    # ── 2. trafilatura directly on original HTML (fallback) ──
+    if not content_md.strip():
+        content_md = trafilatura.extract(
+            html_pl, output_format="markdown", include_images=True,
+            include_links=True, url=url) or ""
+
+    # ── 3. plain <p> tag extraction (last resort) ──
     if not content_md.strip():
         content_md = _content_fallback(html)
+
     images = [urljoin(url, u) for u in _images_from_html(html)]
     return {
         "title": _title_from_html(html),
