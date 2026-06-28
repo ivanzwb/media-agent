@@ -1146,6 +1146,7 @@ input[type="checkbox"] {
   margin-left: auto;
 }
 .date-group table { margin-top: 0; border: none; }
+.date-group .actions { white-space: normal; }
 .date-group table th,
 .date-group table td { padding-left: 16px; padding-right: 16px; }
 
