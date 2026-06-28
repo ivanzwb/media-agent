@@ -50,12 +50,12 @@ class Article:
         parts = urlparse(self.url)
         query = [(k, v) for k, v in parse_qsl(parts.query)
                  if k.lower() not in _TRACKING_PARAMS]
-        return urlunparse(parts._replace(query=urlencode(query), fragment=""))
+        path = parts.path.rstrip("/") or "/"
+        return urlunparse(parts._replace(path=path, query=urlencode(query),
+                                         fragment=""))
 
     def fingerprint(self) -> str:
-        norm_title = re.sub(r"\s+", " ", self.title).strip().lower()
-        key = f"{self.normalized_url()}|{norm_title}"
-        return hashlib.sha256(key.encode("utf-8")).hexdigest()
+        return hashlib.sha256(self.normalized_url().encode("utf-8")).hexdigest()
 
 
 @dataclass

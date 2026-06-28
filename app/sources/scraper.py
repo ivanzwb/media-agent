@@ -152,6 +152,8 @@ def discover_links(html: str, base_url: str,
             continue
         if _is_non_article(absolute):
             continue
+        # Normalize: strip trailing slash so /path/ and /path are identical
+        absolute = absolute.rstrip("/")
         if absolute not in seen:
             seen.add(absolute)
             out.append(absolute)
