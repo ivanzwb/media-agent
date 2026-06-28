@@ -4,35 +4,15 @@
 <h1>归档浏览</h1>
 <div class="filters">
   <span class="filter-label">主题</span>
-  <a href="/archive{{ '?source=' + current_source if current_source else '' }}" class="chip {{ 'on' if not current_topic else '' }}">全部</a>
+  <a href="/archive" class="chip {{ 'on' if not current_topic else '' }}">全部</a>
   {% for t in topics %}
-  <a href="/archive?topic={{ t }}{{ '&source=' + current_source if current_source else '' }}" class="chip {{ 'on' if current_topic==t else '' }}">{{ t }}</a>
+  <a href="/archive?topic={{ t }}" class="chip {{ 'on' if current_topic==t else '' }}">{{ t }}</a>
   {% endfor %}
 </div>
-
-<div class="filters">
-  <span class="filter-label">来源</span>
-  <a href="/archive{{ '?topic=' + current_topic if current_topic else '' }}" class="chip {{ 'on' if not current_source else '' }}">全部</a>
-</div>
-<div class="filter-chips-wrap" id="source-chips">
-  {% for s in sources %}
-  <a href="/archive?source={{ s }}{{ '&topic=' + current_topic if current_topic else '' }}" class="chip {{ 'on' if current_source==s else '' }}">{{ s }}</a>
-  {% endfor %}
-</div>
-<a class="filter-toggle" id="source-toggle" onclick="toggleSources()">展开全部来源</a>
 
 <div class="archive-toolbar">
   <button class="btn small" onclick="expandAll()">展开全部</button>
   <button class="btn small" onclick="collapseAll()">收起全部</button>
-</div>
-
-<!-- floating task panel (rescrape / localize logs) — does not cover the list -->
-<div id="mlz-panel" class="run-panel" style="display:none">
-  <div class="run-panel-head">
-    <span id="mlz-status">任务进行中…</span>
-    <button type="button" class="run-close" onclick="hideMlzPanel()">×</button>
-  </div>
-  <pre id="mlz-logs" class="run-logs"></pre>
 </div>
 
 {% if date_groups %}
@@ -54,8 +34,7 @@
           <td>{{ a.fetched_at[:10] }}</td>
           <td class="actions" id="art-actions-{{ a.id }}">
             <a class="btn small" href="javascript:void(0)" onclick="viewArticle({{ a.id }})">查看原文</a>
-            <button class="btn small btn-refetch" onclick="refetchArticle({{ a.id }})">重新抓取</button>
-            <button class="btn small btn-localize" onclick="localizeArticle({{ a.id }})">本地化媒体</button>
+            <button class="btn small" onclick="refetchArticle({{ a.id }})">重新抓取</button>
             {% if a.id in draft_map %}
               <span class="badge ok">✓ 已转写</span>
               <a class="btn small" href="/drafts/{{ draft_map[a.id] }}/edit">查看草稿</a>
@@ -86,7 +65,6 @@
 </div>
 
 <script>
-let mlzTimer = null;
 
 function viewArticle(id) {
   const iframe = document.getElementById('viewer-iframe');
@@ -94,98 +72,44 @@ function viewArticle(id) {
   document.getElementById('viewer-modal').style.display = 'flex';
 }
 function closeViewer(e) {
-  if (e && e.target !== e.currentTarget) return; // only close on backdrop click
+  if (e && e.target !== e.currentTarget) return;
   const modal = document.getElementById('viewer-modal');
   modal.style.display = 'none';
   document.getElementById('viewer-iframe').src = 'about:blank';
 }
-
-// Listen for iframe "close-viewer" message (e.g. 返回归档 clicked inside modal)
 window.addEventListener('message', function (e) {
   if (e.data === 'close-viewer') closeViewer();
 });
 
-function showMlzPanel() {
-  document.getElementById('mlz-panel').style.display = 'flex';
-}
-function hideMlzPanel() {
-  document.getElementById('mlz-panel').style.display = 'none';
-}
-
 function expandAll() {
   document.querySelectorAll('.date-group').forEach(function (d) { d.open = true; });
 }
-
 function collapseAll() {
   document.querySelectorAll('.date-group').forEach(function (d) { d.open = false; });
 }
 
-function toggleSources() {
-  var wrap = document.getElementById('source-chips');
-  var toggle = document.getElementById('source-toggle');
-  wrap.classList.toggle('open');
-  toggle.textContent = wrap.classList.contains('open') ? '收起来源' : '展开全部来源';
-}
-
-async function pollLocalize() {
-  try {
-    const s = await (await fetch('/api/localize-status')).json();
-    const logs = document.getElementById('mlz-logs');
-    logs.textContent = (s.logs || []).join('\n');
-    logs.scrollTop = logs.scrollHeight;
-    if (s.running) {
-      mlzTimer = setTimeout(pollLocalize, 1500);
-    } else {
-      const st = document.getElementById('mlz-status');
-      if (s.error) {
-        st.textContent = '本地化失败：' + s.error;
-      } else {
-        const x = s.stats || {};
-        st.textContent = '本地化完成：新增本地媒体 ' + (x.downloaded || 0) + ' 个';
-      }
-      setBusy(false);
-    }
-  } catch (e) {
-    mlzTimer = setTimeout(pollLocalize, 2000);
-  }
-}
-
-function setBusy(disabled) {
-  document.querySelectorAll('.btn-refetch, .btn-localize').forEach(function (b) {
-    b.disabled = disabled;
-  });
-}
-
 async function refetchArticle(id) {
-  const st = document.getElementById('mlz-status');
-  document.getElementById('mlz-logs').textContent = '';
-  showMlzPanel();
-  st.textContent = '⏳ 重新抓取中…';
-  setBusy(true);
+  const cell = document.getElementById('art-actions-' + id);
+  const prev = cell.innerHTML;
+  cell.innerHTML = '<span class="muted">重新抓取中...</span>';
   try {
     const data = await (await fetch('/archive/' + id + '/refetch', {method: 'POST'})).json();
-    st.textContent = data.ok
-      ? ('重新抓取完成：图片 ' + data.images + ' · 视频 ' + data.videos +
-         '（接着可点「本地化媒体」下载到本地）')
-      : ('重新抓取失败：' + (data.error || ''));
-  } catch (e) {
-    st.textContent = '重新抓取请求失败';
-  }
-  setBusy(false);
-}
-
-async function localizeArticle(id) {
-  setBusy(true);
-  document.getElementById('mlz-logs').textContent = '';
-  showMlzPanel();
-  document.getElementById('mlz-status').textContent = '⏳ 本地化媒体中…';
-  try {
-    const data = await (await fetch('/archive/' + id + '/localize', {method: 'POST'})).json();
-    if (data.started === false) {
-      document.getElementById('mlz-status').textContent = data.message || '已有任务在进行';
+    cell.innerHTML = prev;
+    if (data.ok) {
+      var msg = '图片 ' + data.images + ' / 视频 ' + data.videos;
+      if (data.localized) msg += ' (本地化 ' + data.localized + ')';
+      var dot = document.createElement('span');
+      dot.className = 'badge ok';
+      dot.textContent = msg;
+      dot.style.marginLeft = '6px';
+      cell.appendChild(dot);
+    } else {
+      alert('重新抓取失败：' + (data.error || ''));
     }
-  } catch (e) { /* poll reflects state */ }
-  pollLocalize();
+  } catch (e) {
+    cell.innerHTML = prev;
+    alert('请求失败');
+  }
 }
 
 async function rewriteArticle(id, isRewrite) {

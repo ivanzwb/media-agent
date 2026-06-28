@@ -505,6 +505,7 @@ select:focus {
   box-shadow: 0 0 0 3px rgba(245,158,11,.15);
 }
 textarea {
+  width: 100%;
   resize: vertical;
   line-height: 1.5;
 }
@@ -620,31 +621,6 @@ input[type="checkbox"] {
   border-color: transparent;
   color: #000;
   font-weight: 600;
-}
-
-/* ── Collapsible source filter ── */
-.filter-chips-wrap {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin: 0 0 var(--space-2) 0;
-  max-height: 52px;
-  overflow: hidden;
-  transition: max-height .25s ease-out;
-}
-.filter-chips-wrap.open {
-  max-height: 2000px;
-}
-.filter-toggle {
-  display: inline-block;
-  font-size: 12px;
-  color: var(--amber);
-  cursor: pointer;
-  margin-bottom: var(--space-3);
-  user-select: none;
-}
-.filter-toggle:hover {
-  text-decoration: underline;
 }
 
 /* ── Alert / Warning boxes ── */
@@ -1476,10 +1452,26 @@ input[type="checkbox"] {
 .settings-section details[open] > summary { margin-bottom: var(--space-3); }
 
 /* ── Settings: Upload/Record toolbar ── */
+.voice-display {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  min-width: 120px;
+}
+.voice-edit-link {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  color: var(--text3);
+  text-decoration: none;
+}
+.voice-edit-link:hover { color: var(--amber); }
+
 .voice-toolbar {
   display: flex;
   gap: var(--space-3);
-  align-items: flex-start;
+  align-items: center;
   flex-wrap: wrap;
 }
 .voice-upload-row {

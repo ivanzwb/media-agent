@@ -148,7 +148,9 @@ def create_app(config: Config | None = None,
             date_key = dt[:10] if dt else "未知日期"
             by_date.setdefault(date_key, []).append(a)
         for date_key in sorted(by_date, reverse=True):
-            groups.append((date_key, by_date[date_key]))
+            # Sort day's articles by source_name so same source clusters together
+            day_articles = sorted(by_date[date_key], key=lambda a: a["source_name"] or "")
+            groups.append((date_key, day_articles))
         return templates.TemplateResponse(request, "archive.html", {
             "articles": articles, "topics": topics, "sources": sources,
             "draft_map": store.drafts_by_article(),
@@ -173,6 +175,7 @@ def create_app(config: Config | None = None,
     @app.post("/archive/{article_id}/refetch")
     def archive_refetch(article_id: int):
         from app.sources.scraper import scrape_single
+        from app.pipeline.localize import localize_article
         store = get_store()
         row = store.get_article(article_id)
         if not row:
@@ -183,10 +186,17 @@ def create_app(config: Config | None = None,
             return {"ok": False, "error": f"抓取失败：{e}"}
         if not art or not art.content_md:
             return {"ok": False, "error": "未抓到正文（可能需要登录/JS 渲染）"}
+        # Auto-localize media after refetch
+        localized = 0
+        try:
+            localize_article(art, store.config)
+            localized = sum(1 for u in art.images + art.videos if u.startswith("/media/"))
+        except Exception:                          # noqa: BLE001
+            pass
         store.update_article_archive(article_id, art.content_md, art.images,
                                      art.videos)
         return {"ok": True, "images": len(art.images),
-                "videos": len(art.videos)}
+                "videos": len(art.videos), "localized": localized}
 
     @app.post("/archive/{article_id}/rewrite")
     def archive_rewrite(article_id: int):
@@ -925,9 +935,13 @@ def create_app(config: Config | None = None,
     @app.post("/voices")
     async def voices_add(file: UploadFile = File(...), name: str = Form("")):
         data = await file.read()
-        if data:
+        if not data:
+            return RedirectResponse(url="/settings?import_error=1", status_code=303)
+        try:
             add_voice(config, name or file.filename or "声音",
                       data, file.filename or "sample.wav")
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
         return RedirectResponse(url="/settings", status_code=303)
 
     @app.post("/voices/{voice_id}/delete")
@@ -941,8 +955,11 @@ def create_app(config: Config | None = None,
         data = await blob.read()
         if not data:
             return JSONResponse({"error": "empty recording"}, status_code=400)
-        entry = add_voice(config, name or "录音声音", data,
-                          blob.filename or "recording.webm")
+        try:
+            entry = add_voice(config, name, data,
+                              blob.filename or "recording.webm")
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
         return JSONResponse({"voice": entry})
 
     @app.get("/voices-audio/{voice_id}")
@@ -1004,6 +1021,19 @@ def create_app(config: Config | None = None,
         sanitize_draft(new_draft, load_words(run_config))
         saved = store.save_draft(new_draft)
         return RedirectResponse(url=f"/drafts/{saved.id}/edit", status_code=303)
+
+    def _voice_display_name(voice_id: str, config) -> str:
+        """Resolve a voice ID to its display name, falling back to the raw value."""
+        if not voice_id:
+            return ""
+        try:
+            from app.tts.voices import list_voices
+            for v in list_voices(config):
+                if v["id"] == voice_id:
+                    return v.get("name", voice_id)
+        except Exception:                          # noqa: BLE001
+            pass
+        return voice_id
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request, response: Response):
@@ -1067,6 +1097,7 @@ def create_app(config: Config | None = None,
             "tts_api_base": db_tts_api_base or (config.tts_api_base or ""),
             "tts_model": db_tts_model or (config.tts_model or ""),
             "tts_voice": db_tts_voice or (config.tts_voice or ""),
+            "tts_voice_display": _voice_display_name(db_tts_voice, config),
             "tts_key_set": tts_key_set,
             "tts_key_masked": tts_masked,
             "voices": list_voices(config),

@@ -143,9 +143,15 @@
 
     <div class="field">
       <label for="tts_voice">TTS Voice / Profile <span class="env-hint">MEDIA_AGENT_TTS_VOICE</span></label>
-      <input type="text" name="tts_voice" id="tts_voice"
-             value="{{ tts_voice }}" placeholder="kitten 风格：child/female/...；cosyvoice：声音库里的声音ID"/>
-      <span class="field-desc">Kitten：填风格 profile（如 female）或音色名；openai 兼容：填 voice（如 alloy）；<strong>cosyvoice / fishaudio：在下方「声音库」点「选用」自动填入声音ID</strong></span>
+      <div class="field">
+        <span id="tts_voice_display" class="voice-display">{{ tts_voice_display or tts_voice }}</span>
+        <input type="text" id="tts_voice_edit" placeholder="自定义"
+               style="display:none; width:100%"
+               onchange="document.getElementById('tts_voice').value=this.value; document.getElementById('tts_voice_display').textContent=this.value">
+        <input type="hidden" name="tts_voice" id="tts_voice" value="{{ tts_voice }}">
+        <a class="voice-edit-link" onclick="toggleVoiceEdit()">✎</a>
+      </div>
+      <span class="field-desc">Kitten：填风格（如 female）；openai：填 voice（如 alloy）；cosyvoice / fishaudio：下方声音库「选用」</span>
     </div>
   </fieldset>
 
@@ -200,7 +206,7 @@
           <td><audio controls preload="none" src="/voices-audio/{{ v.id }}" class="voice-audio"></audio></td>
           <td class="actions">
             <button type="button" class="btn small primary"
-                    onclick="document.getElementById('tts_voice').value='{{ v.id }}'">选用</button>
+                    onclick="selectVoice('{{ v.id }}','{{ v.name }}')">选用</button>
             <button type="button" class="btn small danger"
                     onclick="deleteVoice('{{ v.id }}','{{ v.name }}')">删除</button>
           </td>
@@ -214,16 +220,40 @@
   </fieldset>
 
 <script>
+// ── Voice selection (show name, store ID) ────────────────────────────
+function selectVoice(id, name) {
+  document.getElementById('tts_voice').value = id;
+  document.getElementById('tts_voice_display').textContent = name;
+  document.getElementById('tts_voice_display').style.display = '';
+  document.getElementById('tts_voice_edit').style.display = 'none';
+}
+function toggleVoiceEdit() {
+  var d = document.getElementById('tts_voice_display');
+  var e = document.getElementById('tts_voice_edit');
+  if (e.style.display === 'none') {
+    e.value = document.getElementById('tts_voice').value;
+    d.style.display = 'none';
+    e.style.display = '';
+    e.focus();
+  } else {
+    d.style.display = '';
+    e.style.display = 'none';
+  }
+}
+
 // ── Voice upload: file picker → POST via fetch ──────────────────────
 async function uploadVoice() {
   const fileInput = document.getElementById('voiceUploadFile');
   const nameInput = document.getElementById('voiceUploadName');
+  const name = nameInput.value.trim();
+  if (!name) return alert('请输入声音名称');
   if (!fileInput.files.length) return alert('请选择音频文件');
   const fd = new FormData();
   fd.append('file', fileInput.files[0]);
-  fd.append('name', nameInput.value.trim() || '上传声音');
+  fd.append('name', name);
   fileInput.disabled = true;
-  await fetch('/voices', { method: 'POST', body: fd });
+  const resp = await fetch('/voices', { method: 'POST', body: fd });
+  if (!resp.ok) { fileInput.disabled = false; const e = await resp.json(); return alert(e.error || '上传失败'); }
   location.reload();
 }
 
@@ -339,7 +369,8 @@ function drawWaveform() {
 
 async function submitRecording() {
   if (!recordedBlob) return;
-  const name = document.getElementById('recName').value.trim() || '麦克风录音';
+  const name = document.getElementById('recName').value.trim();
+  if (!name) return alert('请输入声音名称');
   const formData = new FormData();
   formData.append('blob', recordedBlob, 'recording.webm');
   formData.append('name', name);

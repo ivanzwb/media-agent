@@ -85,6 +85,12 @@ def _ensure_16k_ref(config: Config, voice_id: str, filename: str) -> None:
 
 
 def add_voice(config: Config, name: str, data: bytes, filename: str) -> dict:
+    name = (name or "未命名声音").strip()
+    reg = _load(config)
+    # Check for duplicate name
+    for v in reg.get("voices", []):
+        if v.get("name") == name:
+            raise ValueError(f"声音名称「{name}」已存在")
     ext = Path(filename or "").suffix.lower()
     if ext not in _ALLOWED_EXTS:
         ext = ".wav"
@@ -95,11 +101,10 @@ def add_voice(config: Config, name: str, data: bytes, filename: str) -> dict:
     _ensure_16k_ref(config, voice_id, filename)
     entry = {
         "id": voice_id,
-        "name": (name or "未命名声音").strip(),
+        "name": name,
         "sample": sample,
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
-    reg = _load(config)
     reg.setdefault("voices", []).append(entry)
     _save(config, reg)
     return entry
