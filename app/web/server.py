@@ -303,6 +303,7 @@ def create_app(config: Config | None = None,
         "max_age_days", "max_per_source", "download_workers", "video_fit",
         "video_brand_name",
         "sensitive_level", "sensitive_words",
+        "promotion_footer",
         "schedule_cron", "schedule_enabled",
     ]
 
@@ -969,6 +970,12 @@ def create_app(config: Config | None = None,
                                 run_config.llm_model,
                                 base_url=run_config.llm_api_base)
         result = adapt(meta.get("body_md", ""), titles[0], platform, provider)
+
+        # Append promotion footer to all platform drafts if configured
+        footer = run_config.promotion_footer
+        if footer:
+            result["body_md"] = result["body_md"].rstrip() + f"\n\n---\n{footer}\n"
+
         new_draft = Draft(
             article_id=row["article_id"], platform=platform,
             title_candidates=result["title_candidates"],
@@ -1006,6 +1013,7 @@ def create_app(config: Config | None = None,
         db_video_brand_name = store.get_setting("video_brand_name") or ""
         db_sensitive_level = store.get_setting("sensitive_level") or ""
         db_sensitive_words = store.get_setting("sensitive_words") or ""
+        db_promotion_footer = store.get_setting("promotion_footer") or ""
 
         # API key: indicate whether set, mask the value
         api_key_val = store.get_setting("llm_api_key")
@@ -1057,6 +1065,7 @@ def create_app(config: Config | None = None,
             "video_brand_name": db_video_brand_name or (config.video_brand_name or "Media Agent"),
             "sensitive_level": db_sensitive_level or (config.sensitive_level or "standard"),
             "sensitive_words": db_sensitive_words or (config.sensitive_words or ""),
+            "promotion_footer": db_promotion_footer or (config.promotion_footer or ""),
             "api_key_set": api_key_set,
             "api_key_masked": masked,
             "img_key_set": img_key_set,
@@ -1086,7 +1095,8 @@ def create_app(config: Config | None = None,
                         video_brand_name: str = Form(""),
                        sensitive_level: str = Form(""),
                        sensitive_words: str = Form(""),
-                      schedule_cron: str = Form(""),
+                       promotion_footer: str = Form(""),
+                       schedule_cron: str = Form(""),
                       schedule_enabled: str = Form("0")):
         store = get_store()
 
@@ -1106,6 +1116,7 @@ def create_app(config: Config | None = None,
             "video_brand_name": video_brand_name.strip(),
             "sensitive_level": sensitive_level.strip(),
             "sensitive_words": sensitive_words.strip(),
+            "promotion_footer": promotion_footer.strip(),
         }
         for db_key, value in str_fields.items():
             if value:

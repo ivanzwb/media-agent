@@ -77,6 +77,13 @@ def filter_by_age(articles: list[Article], max_age_days: int | None,
             if a.published_at is None or a.published_at >= cutoff]
 
 
+def _apply_promotion_footer(draft: Draft, config) -> None:
+    """Append configured promotion footer to draft body_md."""
+    footer = config.promotion_footer
+    if footer:
+        draft.body_md = draft.body_md.rstrip() + f"\n\n---\n{footer}\n"
+
+
 def _append_prompt(draft: Draft, store: Store) -> None:
     """Append an image-generation prompt placeholder to the draft body."""
     meta = store.read_draft_body(draft.id)
@@ -148,6 +155,7 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
             emit(f"改写中：{art.title[:50]}", stats)
             try:
                 draft = rewrite(art, provider)
+                _apply_promotion_footer(draft, store.config)
                 if sens_words:
                     hits = sanitize_draft(draft, sens_words)
                     if hits:

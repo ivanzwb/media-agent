@@ -457,6 +457,17 @@ function cancelRecording() {
   </div>
 </form>
 
+<fieldset class="settings-form">
+  <legend>推广落款（自动追加到所有草稿正文末尾）</legend>
+
+  <div class="field">
+    <label for="promotion_footer">推广文案 <span class="env-hint">MEDIA_AGENT_PROMOTION_FOOTER</span></label>
+    <textarea name="promotion_footer" id="promotion_footer" rows="3"
+              placeholder="关注我们，获取更多前沿资讯&#10;---&#10;如果觉得有帮助，欢迎点赞、分享">{{ promotion_footer }}</textarea>
+    <span class="field-desc">所有草稿（主稿 + 各平台适配稿）末尾自动追加此文案，支持 Markdown 格式。留空则不追加。</span>
+  </div>
+</fieldset>
+
 <fieldset class="settings-form" style="margin-top:24px">
   <legend>导出 / 导入配置</legend>
   <p class="field-desc">导出来源（主题与来源）与配置为一个 JSON 文件，便于分享或备份。
