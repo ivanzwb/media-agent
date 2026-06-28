@@ -54,11 +54,14 @@
       <span class="tb-sep">|</span>
       <span class="tb-label">同步到平台：</span>
       {% for p in platforms %}
-      <form method="post" action="/drafts/{{ draft.id }}/adapt" class="tb-form">
-        <input type="hidden" name="platform" value="{{ p.id }}"/>
-        <button type="submit" class="btn small">{{ p.label }}</button>
-      </form>
+      <a class="btn small" href="{{ p.publish_url }}" target="_blank" rel="noopener"
+         onclick="syncToPlatform('{{ p.id }}', {{ draft.id }}, this)">{{ p.label }}</a>
       {% endfor %}
+      <span class="sync-status muted" style="margin-left:8px"></span>
+      <span class="tb-sep" style="margin-left:12px">|</span>
+      <button type="button" class="btn small primary" onclick="syncAllPlatforms({{ draft.id }}, this)">
+        一键同步所有
+      </button>
       <a class="btn small" href="/drafts">返回列表</a>
     </div>
 
@@ -118,8 +121,9 @@
   <span class="tb-label" style="margin-right:8px">同步到平台：</span>
   {% for p in platforms %}
   <a class="btn small" href="{{ p.publish_url }}" target="_blank" rel="noopener"
-     onclick="syncToPlatform('{{ p.id }}', {{ draft.id }})">{{ p.label }}</a>
+     onclick="syncToPlatform('{{ p.id }}', {{ draft.id }}, this)">{{ p.label }}</a>
   {% endfor %}
+  <span class="sync-status muted" style="margin-left:8px"></span>
 </div>
 {% endif %}
 </div><!-- /tab-video -->
@@ -476,14 +480,41 @@
   });
   showTab(_tabFromHash(), false);
 
-  async function syncToPlatform(platformId, draftId) {
-    // Copy current article body to clipboard, then platform URL opens via link
-    const titleEl = document.querySelector('.title-cn-input');
-    const title = titleEl?.value || '';
-    const body = window.easyMDE ? easyMDE.value() : (document.getElementById('editor')?.value || '');
+  async function syncAllPlatforms(draftId, btn) {
+    const platforms = ['wechat', 'xiaohongshu', 'toutiao', 'zhihu'];
+    const statusEl = btn.parentElement.querySelector('.sync-status');
+    btn.disabled = true;
+    for (let i = 0; i < platforms.length; i++) {
+      const pid = platforms[i];
+      if (statusEl) statusEl.textContent = '⏳ ' + pid + ' (' + (i+1) + '/' + platforms.length + ')...';
+      try {
+        const resp = await fetch('/api/drafts/' + draftId + '/adapt?platform=' + pid);
+        if (!resp.ok) { const e = await resp.json(); throw new Error(e.error); }
+        const data = await resp.json();
+        const title = (data.title_candidates || [])[0] || '';
+        await navigator.clipboard.writeText(title + '\n\n' + data.body_md);
+        if (data.publish_url) window.open(data.publish_url, '_blank');
+      } catch (e) {
+        if (statusEl) statusEl.textContent = '❌ ' + pid + ': ' + e.message;
+      }
+    }
+    if (statusEl) statusEl.textContent = '✅ 全部完成';
+    btn.disabled = false;
+  }
+    // Call API to get LLM-adapted content, then copy to clipboard
+    const statusEl = btn.parentElement.querySelector('.sync-status');
+    if (statusEl) statusEl.textContent = '⏳ 转换中...';
     try {
-      await navigator.clipboard.writeText(title + '\n\n' + body);
-    } catch (_) { /* ignore */ }
+      const resp = await fetch('/api/drafts/' + draftId + '/adapt?platform=' + platformId);
+      if (!resp.ok) { const e = await resp.json(); throw new Error(e.error || 'failed'); }
+      const data = await resp.json();
+      const title = (data.title_candidates || [])[0] || '';
+      const text = title + '\n\n' + data.body_md;
+      await navigator.clipboard.writeText(text);
+      if (statusEl) statusEl.textContent = '✅ 已复制，请在打开的页面粘贴';
+    } catch (e) {
+      if (statusEl) statusEl.textContent = '❌ ' + e.message;
+    }
   }
 </script>
 {% endblock %}
