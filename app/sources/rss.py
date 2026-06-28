@@ -9,15 +9,21 @@ import httpx
 from urllib.parse import urljoin
 
 from app.models import Article
+from app.sources.date_parser import parse_date
 from app.sources.extractor import _images_from_html, _videos_from_html
 
 
 def _to_dt(entry) -> datetime | None:
     parsed = getattr(entry, "published_parsed", None) or \
         getattr(entry, "updated_parsed", None)
-    if not parsed:
-        return None
-    return datetime.fromtimestamp(mktime(parsed), tz=timezone.utc)
+    if parsed:
+        return datetime.fromtimestamp(mktime(parsed), tz=timezone.utc)
+    # Fallback: try parsing the plain-text date fields.
+    text = getattr(entry, "published", None) or \
+        getattr(entry, "updated", None)
+    if text:
+        return parse_date(text)
+    return None
 
 
 def parse_feed(xml: str, source_name: str) -> list[Article]:

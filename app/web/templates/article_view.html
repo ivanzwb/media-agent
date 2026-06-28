@@ -12,7 +12,7 @@
 <h1>{{ article.title }}</h1>
 <p class="muted">
   来源：{{ article.source_name }} · 主题：{{ article.topic }} ·
-  {{ article.published_at or article.fetched_at }}
+  发布于：{{ article.published_at or "—" }} · 抓取于：{{ article.fetched_at }}
 </p>
 
 <article id="article-body" class="article-body"></article>

@@ -31,14 +31,15 @@
       <span class="date-count">{{ day_articles|length }} 篇</span>
     </summary>
     <table>
-      <thead><tr><th>标题</th><th>主题</th><th>来源</th><th>时间</th><th style="width:200px">转写</th></tr></thead>
+      <thead><tr><th>标题</th><th>主题</th><th>来源</th><th>发布时间</th><th>抓取时间</th><th style="width:200px">转写</th></tr></thead>
       <tbody>
       {% for a in day_articles %}
         <tr id="art-row-{{ a.id }}">
           <td><a href="{{ a.url }}" target="_blank" rel="noopener">{{ a.title }}</a></td>
           <td>{{ a.topic }}</td>
           <td>{{ a.source_name }}</td>
-          <td>{{ (a.published_at or a.fetched_at)[:10] }}</td>
+          <td>{% if a.published_at %}{{ a.published_at[:10] }}{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td>{{ a.fetched_at[:10] }}</td>
           <td class="actions" id="art-actions-{{ a.id }}">
             <a class="btn small" href="/archive/{{ a.id }}/view">查看原文</a>
             <button class="btn small btn-refetch" onclick="refetchArticle({{ a.id }})">重新抓取</button>

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from urllib.parse import urljoin
 
 import trafilatura
+
+from app.sources.date_parser import parse_date
 
 # Hints that an <iframe> embeds a video (vs. ads / widgets).
 _VIDEO_HINTS = (
@@ -154,6 +157,65 @@ def _content_fallback(html: str) -> str:
     return "\n\n".join(texts)
 
 
+def _date_from_html(html: str) -> datetime | None:
+    """Extract a publish/creation date from HTML meta tags, attributes, and
+    structured data."""
+    candidates: list[str] = []
+
+    # 1. Open Graph / article meta: <meta property="article:published_time">
+    for m in re.finditer(
+        r'<meta\b[^>]*?(?:property|name)=["\'](?:article:)?published_time["\']'
+        r'\s+content=["\']([^"\']+)["\'][^>]*/?>',
+        html, re.I,
+    ):
+        candidates.append(m.group(1))
+    for m in re.finditer(
+        r'<meta\b[^>]*?content=["\']([^"\']+)["\'][^>]*?'
+        r'(?:property|name)=["\'](?:article:)?published_time["\'][^>]*/?>',
+        html, re.I,
+    ):
+        candidates.append(m.group(1))
+
+    # 2. <meta name="pubdate" content="...">
+    for m in re.finditer(
+        r'<meta\b[^>]*?name=["\']pubdate["\']\s+content=["\']([^"\']+)["\'][^>]*/?>',
+        html, re.I,
+    ):
+        candidates.append(m.group(1))
+
+    # 3. <meta name="dc.date" content="..."> (Dublin Core)
+    for m in re.finditer(
+        r'<meta\b[^>]*?name=["\']dc\.date["\']\s+content=["\']([^"\']+)["\'][^>]*/?>',
+        html, re.I,
+    ):
+        candidates.append(m.group(1))
+
+    # 4. <time datetime="..."> — schema.org / HTML5
+    for m in re.finditer(
+        r'<time\b[^>]*?datetime=["\']([^"\']+)["\']',
+        html, re.I,
+    ):
+        candidates.append(m.group(1))
+
+    # 5. JSON-LD (schema.org) — naive regex for "datePublished"
+    for m in re.finditer(
+        r'"datePublished"\s*:\s*"([^"]+)"',
+        html,
+    ):
+        candidates.append(m.group(1))
+    for m in re.finditer(
+        r'"dateCreated"\s*:\s*"([^"]+)"',
+        html,
+    ):
+        candidates.append(m.group(1))
+
+    for raw in candidates:
+        parsed = parse_date(raw)
+        if parsed is not None:
+            return parsed
+    return None
+
+
 def extract_from_html(html: str, url: str) -> dict:
     # Insert [[VIDEO:N]] placeholders where videos appear, so they stay in the
     # body at their original position instead of being dumped at the end.
@@ -169,4 +231,5 @@ def extract_from_html(html: str, url: str) -> dict:
         "content_md": content_md,
         "images": images,
         "videos": videos,
+        "published_at": _date_from_html(html),
     }
