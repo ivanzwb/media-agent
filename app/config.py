@@ -49,6 +49,7 @@ class Config:
     max_per_source: int | None = None
     download_workers: int | None = None
     video_fit: str | None = None  # fit | crop | blur
+    video_brand_name: str | None = None  # brand name for intro/outro
     sensitive_level: str | None = None  # off | basic | standard | strict
     sensitive_words: str | None = None  # user custom list (comma/newline)
 
@@ -109,6 +110,7 @@ class Config:
             max_per_source=_int_env("MEDIA_AGENT_MAX_PER_SOURCE"),
             download_workers=_int_env("MEDIA_AGENT_DOWNLOAD_WORKERS"),
             video_fit=os.environ.get("MEDIA_AGENT_VIDEO_FIT_MODE"),
+            video_brand_name=os.environ.get("MEDIA_AGENT_VIDEO_BRAND_NAME"),
             sensitive_level=os.environ.get("MEDIA_AGENT_SENSITIVE_LEVEL"),
             sensitive_words=os.environ.get("MEDIA_AGENT_SENSITIVE_WORDS"),
         )
@@ -133,6 +135,7 @@ class Config:
             "tts_model": "tts_model",
             "tts_voice": "tts_voice",
             "video_fit": "video_fit",
+            "video_brand_name": "video_brand_name",
             "sensitive_level": "sensitive_level",
             "sensitive_words": "sensitive_words",
         }

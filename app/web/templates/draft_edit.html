@@ -81,7 +81,9 @@
 <pre id="nar-logs" class="run-logs" style="display:none; max-height:200px; margin-top:10px"></pre>
 
 <div id="scene-editor" data-draft="{{ draft.id }}"
-     data-has="{{ '1' if narration and narration.scenes else '' }}"></div>
+     data-has="{{ '1' if narration and narration.scenes else '' }}"
+     data-brand-name="{{ video_brand_name }}"
+     data-article-title="{{ article_title }}"></div>
 
 <div class="adapt-row" style="margin-top:14px">
   <button type="button" class="btn primary" id="vid-btn"
@@ -267,12 +269,16 @@
         '<div class="scene-media"><select onchange="se_media(' + i + ',this.value)">' +
         se_mediaOptions(sc.media || 'none') + '</select> ' + se_thumb(sc.media || 'none') + '</div>' +
         '<div class="scene-audio">' + (sc.audio ?
-          '<audio controls preload="none" src="/videos/draft-' + SCENE_DRAFT + '/' + sc.audio + '"></audio>' :
-          '<span class="muted">（无配音' + (sc.audio_error ? '：' + se_esc(sc.audio_error) : '') + '）</span>') +
+          '<audio controls preload="none" src="/videos/draft-' + SCENE_DRAFT + '/' + sc.audio + '"></audio>' +
+          '<button type="button" class="btn small" onclick="se_resynth(' + i + ')" style="margin-left:6px">重新配音</button>' :
+          '<span class="muted">（无配音' + (sc.audio_error ? '：' + se_esc(sc.audio_error) : '') + '）</span>' +
+          '<button type="button" class="btn small" onclick="se_resynth(' + i + ')" style="margin-left:6px">生成配音</button>') +
         '</div></div>';
     });
     h += '<div class="adapt-row" style="margin-top:10px">' +
+      '<button type="button" class="btn small" onclick="se_add_intro()">＋ 添加片头</button>' +
       '<button type="button" class="btn small" onclick="se_add()">＋ 新增分镜</button>' +
+      '<button type="button" class="btn small" onclick="se_add_outro()">＋ 添加片尾</button>' +
       '<button type="button" class="btn primary" onclick="se_save(false)">保存脚本</button>' +
       '<button type="button" class="btn primary" onclick="se_save(true)">保存并重配改动的配音</button>' +
       '<span id="scene-status" class="muted"></span></div>';
@@ -292,6 +298,34 @@
   function se_add() {
     sceneState.scenes.push({ narration: '新分镜旁白', visual: '', media: 'none', audio: null });
     sceneState.orig.push(null); se_render();
+  }
+  function se_add_intro() {
+    const wrap = document.getElementById('scene-editor');
+    const brand = wrap.dataset.brandName || 'Media Agent';
+    const title = wrap.dataset.articleTitle || '';
+    const narration = title ? `欢迎收看 ${brand}，本期话题：${title}` : `欢迎收看 ${brand}`;
+    sceneState.scenes.unshift({ narration: narration, visual: '片头画面：品牌名 + 文章标题', media: 'none', audio: null, type: 'intro' });
+    sceneState.orig.unshift(null); se_render();
+  }
+  function se_add_outro() {
+    const wrap = document.getElementById('scene-editor');
+    const brand = wrap.dataset.brandName || 'Media Agent';
+    sceneState.scenes.push({ narration: `感谢收看 ${brand}，我们下期再见！`, visual: '片尾画面：感谢观看 + 品牌名', media: 'none', audio: null, type: 'outro' });
+    sceneState.orig.push(null); se_render();
+  }
+
+  async function se_resynth(i) {
+    const st = document.getElementById('scene-status');
+    st.textContent = '配音中…';
+    try {
+      const data = await (await fetch('/api/script/' + SCENE_DRAFT + '/resynth', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenes: sceneState.scenes, indices: [i] })
+      })).json();
+      if (data.started === false) { st.textContent = data.message || '已有任务在进行'; return; }
+      st.textContent = '配音中…（分镜 ' + (i + 1) + '）';
+      pollNarration(SCENE_DRAFT);
+    } catch (e) { st.textContent = '配音失败'; }
   }
 
   async function se_save(resynth) {

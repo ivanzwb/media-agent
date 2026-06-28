@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import secrets
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from app.config import Config
@@ -43,6 +44,22 @@ def generate_narration(draft_id: int, store: Store, llm: LLMProvider,
     script = build_script(body_md, title, llm, max_scenes=max_scenes)
     scenes = script["scenes"]
 
+    # Add intro scene at position 0 and outro scene at end,
+    # pre-filled with brand name and article title.
+    brand = (config.video_brand_name or "").strip() or "Media Agent"
+    scenes.insert(0, {
+        "type": "intro",
+        "narration": f"欢迎收看 {brand}，本期话题：{title}" if title else f"欢迎收看 {brand}",
+        "visual": "片头画面：品牌名 + 文章标题",
+        "media": "none",
+    })
+    scenes.append({
+        "type": "outro",
+        "narration": f"感谢收看 {brand}，我们下期再见！",
+        "visual": "片尾画面：感谢观看 + 品牌名",
+        "media": "none",
+    })
+
     from app.pipeline.sanitizer import load_words, sanitize
     sens_words = load_words(config)
     if sens_words:
@@ -58,16 +75,23 @@ def generate_narration(draft_id: int, store: Store, llm: LLMProvider,
     out_dir = config.videos_dir / f"draft-{draft_id}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    emit(f"共 {len(scenes)} 个分镜，开始逐段配音…")
-    for i, sc in enumerate(scenes):
-        emit(f"配音 {i + 1}/{len(scenes)}：{sc['narration'][:30]}")
+    emit(f"共 {len(scenes)} 个分镜，开始并行配音…")
+
+    def synth_one(i_sc):
+        i, sc = i_sc
         try:
             audio = tts.synthesize(sc["narration"], out_dir / f"scene-{i}")
-            sc["audio"] = audio.name
-        except Exception as e:  # noqa: BLE001 - surface per-scene failures
-            sc["audio"] = None
-            sc["audio_error"] = str(e)
-            emit(f"  配音失败：{e}")
+            return i, audio.name, None
+        except Exception as e:  # noqa: BLE001
+            return i, None, str(e)
+
+    with ThreadPoolExecutor(max_workers=min(len(scenes), 6)) as pool:
+        for i, fname, err in pool.map(synth_one, enumerate(scenes)):
+            if err:
+                scenes[i]["audio"] = None
+                scenes[i]["audio_error"] = err
+            else:
+                scenes[i]["audio"] = fname
 
     script["draft_id"] = draft_id
     (out_dir / "script.json").write_text(
@@ -105,6 +129,7 @@ def save_scenes(draft_id: int, scenes: list, config: Config) -> dict:
         if not narration:
             continue
         item = {
+            "type": sc.get("type"),  # preserve intro/outro/normal
             "narration": narration,
             "visual": str(sc.get("visual", "")).strip(),
             "media": _valid_media(sc.get("media", "none")),
@@ -130,20 +155,25 @@ def resynth_scenes(draft_id: int, indices: list[int], tts: TTSProvider,
     out_dir.mkdir(parents=True, exist_ok=True)
 
     targets = [i for i in indices if 0 <= i < len(scenes)]
-    emit(f"重新配音 {len(targets)} 个分镜…")
-    for i in targets:
+    emit(f"重新配音 {len(targets)} 个分镜（并行）…")
+
+    def synth_one(i):
         sc = scenes[i]
-        emit(f"配音 #{i + 1}：{sc.get('narration', '')[:30]}")
+        stem = out_dir / f"scene-{i}-{secrets.token_hex(3)}"
         try:
-            # unique name so reordered/edited scenes don't clobber each other
-            stem = out_dir / f"scene-{i}-{secrets.token_hex(3)}"
             audio = tts.synthesize(sc.get("narration", ""), stem)
-            sc["audio"] = audio.name
-            sc.pop("audio_error", None)
+            return i, audio.name, None
         except Exception as e:  # noqa: BLE001
-            sc["audio"] = None
-            sc["audio_error"] = str(e)
-            emit(f"  失败：{e}")
+            return i, None, str(e)
+
+    with ThreadPoolExecutor(max_workers=min(len(targets), 6)) as pool:
+        for i, fname, err in pool.map(synth_one, targets):
+            if err:
+                scenes[i]["audio"] = None
+                scenes[i]["audio_error"] = err
+            else:
+                scenes[i]["audio"] = fname
+                scenes[i].pop("audio_error", None)
 
     _save_script(draft_id, script, config)
     emit("配音更新完成")

@@ -412,6 +412,14 @@ function cancelRecording() {
       </select>
       <span class="field-desc">合成讲解视频时图片/原视频如何放入 16:9 画面。fit 保留完整画面（推荐）；crop 会裁掉非 16:9 素材的边缘</span>
     </div>
+
+    <div class="field">
+      <label for="video_brand_name">品牌名称 <span class="env-hint">MEDIA_AGENT_VIDEO_BRAND_NAME</span></label>
+      <input type="text" name="video_brand_name" id="video_brand_name"
+             value="{{ video_brand_name }}" placeholder="Media Agent"
+             style="max-width:300px"/>
+      <span class="field-desc">片头/片尾显示的品牌名或自媒体名称</span>
+    </div>
   </fieldset>
 
   <fieldset>

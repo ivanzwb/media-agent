@@ -256,6 +256,8 @@ def create_app(config: Config | None = None,
             "narration": load_narration(draft_id, config),
             "has_video": video_path(draft_id, config) is not None,
             "statuses": ["drafted", "reviewing", "approved", "published"],
+            "video_brand_name": config.video_brand_name or "Media Agent",
+            "article_title": (title_candidates[0] if title_candidates else ""),
             "active": "drafts"})
 
     @app.post("/drafts/{draft_id}")
@@ -297,6 +299,7 @@ def create_app(config: Config | None = None,
         "image_provider", "image_api_base", "image_model",
         "tts_provider", "tts_api_base", "tts_model", "tts_voice",
         "max_age_days", "max_per_source", "download_workers", "video_fit",
+        "video_brand_name",
         "sensitive_level", "sensitive_words",
         "schedule_cron", "schedule_enabled",
     ]
@@ -638,25 +641,36 @@ def create_app(config: Config | None = None,
             }
 
     # ---- narration / explainer-video generation ----
-    nar_lock = threading.Lock()
-    nar_state = {"running": False, "draft_id": None, "logs": [],
-                 "error": None, "done": False}
+    # Per-draft state tracking: different drafts can run concurrently.
+    nar_main_lock = threading.Lock()
+    nar_states: dict[int, dict] = {}
+    nar_locks: dict[int, threading.Lock] = {}
 
-    def _nar_log(msg):
+    def _nar_state(draft_id: int) -> dict:
+        with nar_main_lock:
+            if draft_id not in nar_states:
+                nar_states[draft_id] = {"running": False, "logs": [],
+                                        "error": None, "done": False}
+                nar_locks[draft_id] = threading.Lock()
+            return nar_states[draft_id]
+
+    def _nar_log(draft_id: int, msg: str) -> None:
+        st = _nar_state(draft_id)
         line = f"{datetime.now().strftime('%H:%M:%S')} {msg}"
-        with nar_lock:
-            nar_state["logs"].append(line)
-            if len(nar_state["logs"]) > 300:
-                del nar_state["logs"][:-300]
+        with nar_locks[draft_id]:
+            st["logs"].append(line)
+            if len(st["logs"]) > 300:
+                del st["logs"][:-300]
 
     @app.post("/drafts/{draft_id}/narration")
     def trigger_narration(draft_id: int):
-        with nar_lock:
-            if nar_state["running"]:
+        st = _nar_state(draft_id)
+        lk = nar_locks[draft_id]
+        with lk:
+            if st["running"]:
                 return {"started": False, "running": True,
-                        "message": "已有生成任务在进行"}
-            nar_state.update(running=True, draft_id=draft_id, logs=[],
-                             error=None, done=False)
+                        "message": "该草稿已有生成任务在进行"}
+            st.update(running=True, logs=[], error=None, done=False)
 
         def worker():
             try:
@@ -666,32 +680,32 @@ def create_app(config: Config | None = None,
                                    base_url=run_config.llm_api_base)
                 tts = _build_tts(run_config)
                 generate_narration(draft_id, get_store(), llm, tts, config,
-                                   progress=_nar_log)
-                with nar_lock:
-                    nar_state["done"] = True
+                                   progress=lambda m: _nar_log(draft_id, m))
+                with nar_locks[draft_id]:
+                    st["done"] = True
             except Exception as e:  # noqa: BLE001 - surface to UI
-                with nar_lock:
-                    nar_state["error"] = str(e)
-                _nar_log(f"生成出错：{e}")
+                with nar_locks[draft_id]:
+                    st["error"] = str(e)
+                _nar_log(draft_id, f"生成出错：{e}")
             finally:
-                with nar_lock:
-                    nar_state["running"] = False
+                with nar_locks[draft_id]:
+                    st["running"] = False
 
         threading.Thread(target=worker, daemon=True).start()
         return {"started": True, "running": True}
 
     @app.get("/api/narration-status")
     def api_narration_status(draft_id: int | None = None):
-        with nar_lock:
-            base = {
-                "running": nar_state["running"],
-                "draft_id": nar_state["draft_id"],
-                "logs": list(nar_state["logs"]),
-                "error": nar_state["error"],
-                "done": nar_state["done"],
-            }
-        if draft_id is not None and not base["running"]:
-            base["script"] = load_narration(draft_id, config)
+        base = {"running": False, "logs": [], "error": None, "done": False}
+        if draft_id is not None:
+            st = _nar_state(draft_id)
+            with nar_locks[draft_id]:
+                base["running"] = st["running"]
+                base["logs"] = list(st["logs"])
+                base["error"] = st["error"]
+                base["done"] = st["done"]
+            if not base["running"]:
+                base["script"] = load_narration(draft_id, config)
         return base
 
     @app.get("/api/script/{draft_id}")
@@ -712,28 +726,29 @@ def create_app(config: Config | None = None,
         # optionally persist edits sent alongside before re-synth
         if data.get("scenes"):
             save_scenes(draft_id, data["scenes"], config)
-        with nar_lock:
-            if nar_state["running"]:
+        st = _nar_state(draft_id)
+        lk = nar_locks[draft_id]
+        with lk:
+            if st["running"]:
                 return {"started": False, "running": True,
-                        "message": "已有任务在进行"}
-            nar_state.update(running=True, draft_id=draft_id, logs=[],
-                             error=None, done=False)
+                        "message": "该草稿已有配音/生成任务在进行"}
+            st.update(running=True, logs=[], error=None, done=False)
 
         def worker():
             try:
                 run_config = Config.load(store=get_store())
                 tts = _build_tts(run_config)
                 resynth_scenes(draft_id, indices, tts, config,
-                               progress=_nar_log)
-                with nar_lock:
-                    nar_state["done"] = True
+                               progress=lambda m: _nar_log(draft_id, m))
+                with nar_locks[draft_id]:
+                    st["done"] = True
             except Exception as e:  # noqa: BLE001
-                with nar_lock:
-                    nar_state["error"] = str(e)
-                _nar_log(f"出错：{e}")
+                with nar_locks[draft_id]:
+                    st["error"] = str(e)
+                _nar_log(draft_id, f"出错：{e}")
             finally:
-                with nar_lock:
-                    nar_state["running"] = False
+                with nar_locks[draft_id]:
+                    st["running"] = False
 
         threading.Thread(target=worker, daemon=True).start()
         return {"started": True, "running": True}
@@ -812,7 +827,8 @@ def create_app(config: Config | None = None,
 
         def worker():
             try:
-                build_explainer_video(draft_id, config, progress=_vid_log)
+                rc = Config.load(store=get_store())
+                build_explainer_video(draft_id, rc, progress=_vid_log)
                 with vid_lock:
                     vid_state["done"] = True
             except Exception as e:  # noqa: BLE001 - surface to UI
@@ -943,6 +959,7 @@ def create_app(config: Config | None = None,
         db_max_per_source = store.get_setting("max_per_source") or ""
         db_download_workers = store.get_setting("download_workers") or ""
         db_video_fit = store.get_setting("video_fit") or ""
+        db_video_brand_name = store.get_setting("video_brand_name") or ""
         db_sensitive_level = store.get_setting("sensitive_level") or ""
         db_sensitive_words = store.get_setting("sensitive_words") or ""
 
@@ -993,6 +1010,7 @@ def create_app(config: Config | None = None,
                 str(config.download_workers) if config.download_workers else ""),
             "default_workers": os.cpu_count() or 4,
             "video_fit": db_video_fit or (config.video_fit or "fit"),
+            "video_brand_name": db_video_brand_name or (config.video_brand_name or "Media Agent"),
             "sensitive_level": db_sensitive_level or (config.sensitive_level or "standard"),
             "sensitive_words": db_sensitive_words or (config.sensitive_words or ""),
             "api_key_set": api_key_set,
@@ -1020,9 +1038,10 @@ def create_app(config: Config | None = None,
                       max_age_days: str = Form(""),
                       max_per_source: str = Form(""),
                       download_workers: str = Form(""),
-                      video_fit: str = Form(""),
-                      sensitive_level: str = Form(""),
-                      sensitive_words: str = Form(""),
+                        video_fit: str = Form(""),
+                        video_brand_name: str = Form(""),
+                       sensitive_level: str = Form(""),
+                       sensitive_words: str = Form(""),
                       schedule_cron: str = Form(""),
                       schedule_enabled: str = Form("0")):
         store = get_store()
@@ -1040,6 +1059,7 @@ def create_app(config: Config | None = None,
             "tts_model": tts_model.strip(),
             "tts_voice": tts_voice.strip(),
             "video_fit": video_fit.strip(),
+            "video_brand_name": video_brand_name.strip(),
             "sensitive_level": sensitive_level.strip(),
             "sensitive_words": sensitive_words.strip(),
         }

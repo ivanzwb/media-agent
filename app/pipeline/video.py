@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+import json as _json
+
 from app.config import Config
 from app.pipeline.localize import local_media_file, normalize_url
 from app.pipeline.narration import load_narration
@@ -26,6 +28,15 @@ _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 def _noop(*_a, **_k) -> None:
     pass
+
+
+def _int_val(val: str | None, default: int) -> int:
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
 
 
 def _origin(url: str) -> str:
@@ -97,6 +108,39 @@ def _download_images(urls: list[str], dest: Path, config: Config,
     return out
 
 
+def _migrate_script(script: dict) -> bool:
+    """Convert old script format (intro_audio/outro_audio at top level) to
+    new format (intro/outro as scenes with type field). Returns True if
+    migration happened (caller should persist)."""
+    scenes = script.get("scenes", [])
+    # Already migrated — first scene has a type marker
+    if scenes and scenes[0].get("type") in ("intro", "outro"):
+        return False
+    has_intro = "intro_audio" in script
+    has_outro = "outro_audio" in script
+    if not has_intro and not has_outro:
+        return False
+
+    title = script.get("title") or script.get("article_title") or ""
+    if has_intro:
+        scenes.insert(0, {
+            "type": "intro",
+            "narration": title,
+            "visual": "片头画面",
+            "media": "none",
+            "audio": script.pop("intro_audio", None),
+        })
+    if has_outro:
+        scenes.append({
+            "type": "outro",
+            "narration": "感谢观看，我们下期再见！",
+            "visual": "片尾画面",
+            "media": "none",
+            "audio": script.pop("outro_audio", None),
+        })
+    return True
+
+
 def build_explainer_video(draft_id: int, config: Config, progress=None) -> Path:
     """Compose the explainer video for a draft from its narration script
     (must be generated first) + downloaded article images."""
@@ -122,9 +166,15 @@ def build_explainer_video(draft_id: int, config: Config, progress=None) -> Path:
         video_map = _download_videos(script["videos"], work / "assets", config,
                                      progress=emit)
 
+    # Migrate old-format scripts (intro_audio/outro_audio at top level)
+    if _migrate_script(script):
+        (work / "script.json").write_text(
+            _json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
+
     out = work / "video.mp4"
     build_video(script, work, image_map, out, progress=emit,
-                video_map=video_map, fit=(config.video_fit or "fit"))
+                video_map=video_map, fit=(config.video_fit or "fit"),
+                brand_name=(config.video_brand_name or "Media Agent"))
     return out
 
 

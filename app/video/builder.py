@@ -130,6 +130,97 @@ def render_frame(text: str, out_png: Path, bg_image: Path | None = None,
     return out_png
 
 
+def render_intro_frame(title: str, brand_name: str, out_png: Path,
+                       duration_sec: int = 4) -> Path:
+    """Render an intro title frame: brand name + article title on a
+    dark gradient background. The frame stays on screen for `duration_sec`
+    (used only for clip timing)."""
+    out_png = Path(out_png)
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    canvas = Image.new("RGB", (W, H), _BG)
+
+    draw = ImageDraw.Draw(canvas)
+
+    # decorative gradient-ish bands
+    for i in range(5):
+        y = H // 2 + i * 4 - 40
+        alpha = 60 - i * 10
+        if alpha > 0:
+            overlay = Image.new("RGBA", (W, 4), (100, 140, 255, alpha))
+            canvas.paste(overlay, (0, y), overlay)
+
+    # brand name (smaller, subtle)
+    brand_font = _font(28)
+    bw = draw.textlength(brand_name, font=brand_font)
+    draw.text(((W - bw) // 2, H // 2 - 100), brand_name,
+              font=brand_font, fill=(160, 180, 220))
+
+    # decorative line under brand
+    draw.line([(W // 2 - 60, H // 2 - 65), (W // 2 + 60, H // 2 - 65)],
+              fill=(100, 140, 255), width=2)
+
+    # title (large, centered)
+    title_font = _font(42)
+    lines = _wrap(draw, title, title_font, W - 160)
+    if not lines:
+        lines = [title]
+    # show at most 3 lines
+    if len(lines) > 3:
+        lines = lines[:3]
+        lines[-1] = lines[-1][:-1] + "…"
+    line_h = 52
+    block_h = line_h * len(lines)
+    start_y = H // 2 - block_h // 2 + 10
+    for i, ln in enumerate(lines):
+        tw = draw.textlength(ln, font=title_font)
+        draw.text(((W - tw) // 2, start_y + i * line_h), ln,
+                  font=title_font, fill=(255, 255, 255))
+
+    canvas.save(out_png, format="PNG")
+    return out_png
+
+
+def render_outro_frame(brand_name: str, out_png: Path,
+                       duration_sec: int = 4) -> Path:
+    """Render an outro frame: thank-you message + brand name on a dark
+    background. The frame stays on screen for `duration_sec`."""
+    out_png = Path(out_png)
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    canvas = Image.new("RGB", (W, H), _BG)
+    draw = ImageDraw.Draw(canvas)
+
+    # subtle decorative band
+    for i in range(8):
+        y = H // 2 - 40 + i * 6
+        alpha = 40 - i * 5
+        if alpha > 0:
+            overlay = Image.new("RGBA", (W, 6), (100, 140, 255, alpha))
+            canvas.paste(overlay, (0, y), overlay)
+
+    # "感谢观看"
+    thanks_font = _font(48)
+    thanks = "感谢观看"
+    tw = draw.textlength(thanks, font=thanks_font)
+    draw.text(((W - tw) // 2, H // 2 - 60), thanks,
+              font=thanks_font, fill=(255, 255, 255))
+
+    # brand name
+    brand_font = _font(28)
+    bw = draw.textlength(brand_name, font=brand_font)
+    draw.text(((W - bw) // 2, H // 2 + 20), brand_name,
+              font=brand_font, fill=(160, 180, 220))
+
+    # "关注我们" hint
+    follow_font = _font(22)
+    follow = "关注我们 · 获取更多前沿资讯"
+    fw = draw.textlength(follow, font=follow_font)
+    draw.text(((W - fw) // 2, H // 2 + 70), follow,
+              font=follow_font, fill=(120, 140, 180))
+
+    canvas.save(out_png, format="PNG")
+    return out_png
+
+
 def render_subtitle_overlay(text: str, out_png: Path,
                             max_lines: int = 6) -> Path:
     """Render a transparent 1280x720 PNG with only the subtitle band/text,
@@ -239,10 +330,19 @@ def _make_video_clip(src_video: Path, overlay_png: Path, audio: Path | None,
               "-ac", "2", str(out_mp4)])
 
 
+def _is_enabled(val: str | bool | None) -> bool:
+    if val is None:
+        return True  # enabled by default
+    if isinstance(val, bool):
+        return val
+    return val in ("1", "true", "yes")
+
+
 def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
                 out_mp4: Path, progress=None,
                 video_map: dict[int, Path] | None = None,
-                fit: str = "fit") -> Path:
+                fit: str = "fit",
+                brand_name: str = "Media Agent") -> Path:
     """Compose a narrated video from a narration script.
 
     image_map: 1-based index -> local image path (for media "image:N").
@@ -278,10 +378,15 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
     video_total: dict[str, float] = {}
 
     clips: list[Path] = []
+
+    total = len(scenes)
     for i, sc in enumerate(scenes):
-        emit(f"合成分镜 {i + 1}/{len(scenes)}")
+        emit(f"合成分镜 {i + 1}/{total}")
+        scene_type = sc.get("type", "normal")
+        narration = sc.get("narration", "")
         media = str(sc.get("media", "none"))
 
+        # Audio resolution (same for all scene types)
         audio = None
         if sc.get("audio"):
             cand = work_dir / sc["audio"]
@@ -289,33 +394,48 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
                 audio = cand
         duration = probe_duration(audio) if audio else None
         if not duration:
-            duration = max(2.0, len(sc.get("narration", "")) * 0.25)
+            duration = max(2.0, len(narration) * 0.25)
 
         clip = work_dir / f"clip-{i}.mp4"
-        vidx = _idx(media, "video:")
-        src_video = video_map.get(vidx) if vidx else None
-        if src_video and Path(src_video).exists():
-            overlay = render_subtitle_overlay(
-                sc.get("narration", ""), work_dir / f"ov-{i}.png")
-            key = str(src_video)
-            if key not in video_total:
-                video_total[key] = probe_duration(src_video) or 0.0
-            total = video_total[key]
-            offset = video_pos.get(key, 0.0)
-            seek = _seek_for(offset, total)
-            _make_video_clip(src_video, overlay, audio, duration, clip,
-                             fit=fit, seek=seek)
-            video_pos[key] = offset + duration
-        else:
-            iidx = _idx(media, "image:")
-            bg = image_map.get(iidx) if iidx else None
-            if bg is None and img_pool:  # auto-assign so scene isn't black
-                bg = img_pool[auto % len(img_pool)]
-                auto += 1
-            frame = render_frame(sc.get("narration", ""),
-                                 work_dir / f"frame-{i}.png", bg_image=bg,
-                                 fit=fit)
+
+        if scene_type == "intro":
+            # Branded title screen
+            title = script.get("title") or script.get("article_title") or ""
+            frame = render_intro_frame(
+                title, brand_name, work_dir / f"intro-{i}.png")
             _make_clip(frame, audio, duration, clip)
+        elif scene_type == "outro":
+            # Thank-you screen
+            frame = render_outro_frame(
+                brand_name, work_dir / f"outro-{i}.png")
+            _make_clip(frame, audio, duration, clip)
+        else:
+            # Normal scene: video background with subtitle overlay
+            vidx = _idx(media, "video:")
+            src_video = video_map.get(vidx) if vidx else None
+            if src_video and Path(src_video).exists():
+                overlay = render_subtitle_overlay(
+                    narration, work_dir / f"ov-{i}.png")
+                key = str(src_video)
+                if key not in video_total:
+                    video_total[key] = probe_duration(src_video) or 0.0
+                total_src = video_total[key]
+                offset = video_pos.get(key, 0.0)
+                seek = _seek_for(offset, total_src)
+                _make_video_clip(src_video, overlay, audio, duration, clip,
+                                 fit=fit, seek=seek)
+                video_pos[key] = offset + duration
+            else:
+                # Still image background with subtitle band
+                iidx = _idx(media, "image:")
+                bg = image_map.get(iidx) if iidx else None
+                if bg is None and img_pool:
+                    bg = img_pool[auto % len(img_pool)]
+                    auto += 1
+                frame = render_frame(narration,
+                                     work_dir / f"frame-{i}.png", bg_image=bg,
+                                     fit=fit)
+                _make_clip(frame, audio, duration, clip)
         clips.append(clip)
 
     emit("拼接所有分镜…")
