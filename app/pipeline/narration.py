@@ -26,7 +26,9 @@ def _valid_media(m: str) -> str:
 
 def generate_narration(draft_id: int, store: Store, llm: LLMProvider,
                        tts: TTSProvider, config: Config,
-                       max_scenes: int = 12, progress=None) -> dict:
+                       max_scenes: int = 12, progress=None,
+                       tts_provider: str | None = None,
+                       tts_voice: str | None = None) -> dict:
     """Build a shot-by-shot narration script for a draft and synthesize a
     voiceover audio clip per scene. Returns the script (scenes annotated with
     their audio file names). Audio + script.json land in
@@ -94,6 +96,10 @@ def generate_narration(draft_id: int, store: Store, llm: LLMProvider,
                 scenes[i]["audio"] = fname
 
     script["draft_id"] = draft_id
+    if tts_provider is not None:
+        script["tts_provider"] = tts_provider
+    if tts_voice is not None:
+        script["tts_voice"] = tts_voice
     (out_dir / "script.json").write_text(
         json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
     emit("讲解脚本与配音完成")
@@ -144,7 +150,9 @@ def save_scenes(draft_id: int, scenes: list, config: Config) -> dict:
 
 
 def resynth_scenes(draft_id: int, indices: list[int], tts: TTSProvider,
-                   config: Config, progress=None) -> dict:
+                   config: Config, progress=None,
+                   tts_provider: str | None = None,
+                   tts_voice: str | None = None) -> dict:
     """Re-synthesize voiceover only for the given scene indices."""
     emit = progress or _noop
     script = load_narration(draft_id, config)
@@ -175,6 +183,10 @@ def resynth_scenes(draft_id: int, indices: list[int], tts: TTSProvider,
                 scenes[i]["audio"] = fname
                 scenes[i].pop("audio_error", None)
 
+    if tts_provider is not None:
+        script["tts_provider"] = tts_provider
+    if tts_voice is not None:
+        script["tts_voice"] = tts_voice
     _save_script(draft_id, script, config)
     emit("配音更新完成")
     return script

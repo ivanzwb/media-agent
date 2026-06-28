@@ -71,6 +71,12 @@
 <div id="tab-video" class="tab-pane">
 <h2>讲解视频（分镜脚本 + 配音）</h2>
 <p class="muted">基于正文自动生成口播分镜脚本，并用配置的 TTS 逐段配音（可在「设置」里配 TTS）。视频合成为后续步骤。</p>
+<div class="adapt-row" style="margin-bottom:6px; gap:0; flex-wrap:wrap">
+  <label style="font-size:0.9em; margin-right:6px">TTS 音色：</label>
+  <select id="tts-provider" onchange="se_refreshVoiceList()"
+          style="margin-right:6px; margin-bottom:4px"></select>
+  <select id="tts-voice" style="margin-bottom:4px"></select>
+</div>
 <div class="adapt-row">
   <button type="button" class="btn primary" id="nar-btn"
           onclick="startNarration({{ draft.id }})">
@@ -161,8 +167,13 @@
     const btn = document.getElementById('nar-btn');
     btn.disabled = true;
     document.getElementById('nar-status').textContent = '⏳ 生成中…';
+    const voice = se_getVoice();
+    const params = new URLSearchParams();
+    if (voice.tts_provider) params.set('tts_provider', voice.tts_provider);
+    if (voice.tts_voice) params.set('tts_voice', voice.tts_voice);
     try {
-      const data = await (await fetch('/drafts/' + draftId + '/narration', {method: 'POST'})).json();
+      const url = '/drafts/' + draftId + '/narration' + (params.toString() ? '?' + params.toString() : '');
+      const data = await (await fetch(url, {method: 'POST'})).json();
       if (data.started === false) {
         document.getElementById('nar-status').textContent = data.message || '已有任务在进行';
       }
@@ -314,13 +325,65 @@
     sceneState.orig.push(null); se_render();
   }
 
+  // ---- per-draft TTS voice selector (issue #25) ----
+  let _VOICES_MAP = {};  // provider -> [{id, label}]
+  function se_refreshVoiceList() {
+    const prov = document.getElementById('tts-provider').value;
+    const sel = document.getElementById('tts-voice');
+    const current = sel.value;
+    const voices = _VOICES_MAP[prov] || [];
+    sel.innerHTML = voices.map(function (v) {
+      return '<option value="' + se_attr(v.id) + '"' +
+        (v.id === current ? ' selected' : '') + '>' + se_esc(v.label) + '</option>';
+    }).join('');
+    if (!sel.value && voices.length) { sel.value = voices[0].id; }
+  }
+  function se_getVoice() {
+    return {
+      tts_provider: document.getElementById('tts-provider').value,
+      tts_voice: document.getElementById('tts-voice').value,
+    };
+  }
+  // Fetch available voices from backend, then populate the selectors.
+  (async function se_initVoiceSelector() {
+    try {
+      const r = await (await fetch('/api/voices')).json();
+      _VOICES_MAP = r;
+    } catch (e) { _VOICES_MAP = {}; }
+    const providers = Object.keys(_VOICES_MAP);
+    // Known provider display labels
+    const LABELS = { kitten: 'Kitten（内置）', openai: 'OpenAI 兼容',
+      cosyvoice: 'CosyVoice（本地）', fishaudio: 'Fish Audio（云端）',
+      kitten_http: 'Kitten HTTP', mock: 'Mock（调试）' };
+    const selProv = document.getElementById('tts-provider');
+    const currentProv = selProv.dataset.current || '{{ tts_provider }}';
+    selProv.innerHTML = providers.map(function (p) {
+      return '<option value="' + p + '"' + (p === currentProv ? ' selected' : '') + '>' +
+        (LABELS[p] || p) + '</option>';
+    }).join('');
+    se_refreshVoiceList();
+    const selVoice = document.getElementById('tts-voice');
+    const currentVoice = selVoice.dataset.current || '{{ tts_voice }}';
+    if (currentVoice) {
+      // check if the option exists; if not, add it anyway so the config value shows
+      if (!selVoice.querySelector('option[value="' + se_attr(currentVoice) + '"]')) {
+        selVoice.innerHTML += '<option value="' + se_attr(currentVoice) + '" selected>' +
+          se_esc(currentVoice) + '</option>';
+      } else {
+        selVoice.value = currentVoice;
+      }
+    }
+  })();
+
   async function se_resynth(i) {
     const st = document.getElementById('scene-status');
     st.textContent = '配音中…';
+    const voice = se_getVoice();
     try {
       const data = await (await fetch('/api/script/' + SCENE_DRAFT + '/resynth', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scenes: sceneState.scenes, indices: [i] })
+        body: JSON.stringify({ scenes: sceneState.scenes, indices: [i],
+          tts_provider: voice.tts_provider, tts_voice: voice.tts_voice })
       })).json();
       if (data.started === false) { st.textContent = data.message || '已有任务在进行'; return; }
       st.textContent = '配音中…（分镜 ' + (i + 1) + '）';
@@ -337,9 +400,11 @@
     });
     try {
       if (resynth) {
+        const voice = se_getVoice();
         const data = await (await fetch('/api/script/' + SCENE_DRAFT + '/resynth', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scenes: sceneState.scenes, indices: changed })
+          body: JSON.stringify({ scenes: sceneState.scenes, indices: changed,
+            tts_provider: voice.tts_provider, tts_voice: voice.tts_voice })
         })).json();
         if (data.started === false) { st.textContent = data.message || '已有任务在进行'; return; }
         st.textContent = '重配音中…（' + changed.length + ' 段）';

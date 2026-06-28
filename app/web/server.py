@@ -258,6 +258,8 @@ def create_app(config: Config | None = None,
             "statuses": ["drafted", "reviewing", "approved", "published"],
             "video_brand_name": config.video_brand_name or "Media Agent",
             "article_title": (title_candidates[0] if title_candidates else ""),
+            "tts_provider": config.tts_provider,
+            "tts_voice": config.tts_voice,
             "active": "drafts"})
 
     @app.post("/drafts/{draft_id}")
@@ -452,23 +454,25 @@ def create_app(config: Config | None = None,
                             run_config.llm_model,
                             base_url=run_config.llm_api_base)
 
-    def _build_tts(rc):
+    def _build_tts(rc, tts_provider=None, tts_voice=None):
+        provider = tts_provider if tts_provider is not None else rc.tts_provider
+        voice = tts_voice if tts_voice is not None else rc.tts_voice
         # cosyvoice / fishaudio (voice cloning providers): resolve the
         # selected voice id to its reference sample and pass as speaker_wav.
-        if rc.tts_provider == "cosyvoice":
-            sp = voice_sample_path(config, rc.tts_voice)
+        if provider == "cosyvoice":
+            sp = voice_sample_path(config, voice)
             return get_tts_provider("cosyvoice", voice=str(sp) if sp else None,
                                     model=rc.tts_model)
-        if rc.tts_provider == "fishaudio":
-            sp = voice_sample_path(config, rc.tts_voice)
+        if provider == "fishaudio":
+            sp = voice_sample_path(config, voice)
             return get_tts_provider(
                 "fishaudio",
                 api_key=rc.tts_api_key,
                 voice=str(sp) if sp else None,
                 model=rc.tts_model)
         return get_tts_provider(
-            rc.tts_provider, base_url=rc.tts_api_base,
-            api_key=rc.tts_api_key, model=rc.tts_model, voice=rc.tts_voice)
+            provider, base_url=rc.tts_api_base,
+            api_key=rc.tts_api_key, model=rc.tts_model, voice=voice)
 
     @app.post("/sources/topics/suggest")
     def topics_suggest(themes: str = Form(...)):
@@ -663,7 +667,8 @@ def create_app(config: Config | None = None,
                 del st["logs"][:-300]
 
     @app.post("/drafts/{draft_id}/narration")
-    def trigger_narration(draft_id: int):
+    def trigger_narration(draft_id: int, tts_provider: str | None = None,
+                          tts_voice: str | None = None):
         st = _nar_state(draft_id)
         lk = nar_locks[draft_id]
         with lk:
@@ -678,8 +683,10 @@ def create_app(config: Config | None = None,
                 llm = get_provider(run_config.llm_provider,
                                    run_config.llm_api_key, run_config.llm_model,
                                    base_url=run_config.llm_api_base)
-                tts = _build_tts(run_config)
+                tts = _build_tts(run_config, tts_provider, tts_voice)
                 generate_narration(draft_id, get_store(), llm, tts, config,
+                                   tts_provider=tts_provider,
+                                   tts_voice=tts_voice,
                                    progress=lambda m: _nar_log(draft_id, m))
                 with nar_locks[draft_id]:
                     st["done"] = True
@@ -723,6 +730,8 @@ def create_app(config: Config | None = None,
     async def api_resynth_script(draft_id: int, request: Request):
         data = await request.json()
         indices = [int(i) for i in (data.get("indices") or [])]
+        tts_provider = data.get("tts_provider")
+        tts_voice = data.get("tts_voice")
         # optionally persist edits sent alongside before re-synth
         if data.get("scenes"):
             save_scenes(draft_id, data["scenes"], config)
@@ -737,8 +746,10 @@ def create_app(config: Config | None = None,
         def worker():
             try:
                 run_config = Config.load(store=get_store())
-                tts = _build_tts(run_config)
+                tts = _build_tts(run_config, tts_provider, tts_voice)
                 resynth_scenes(draft_id, indices, tts, config,
+                               tts_provider=tts_provider,
+                               tts_voice=tts_voice,
                                progress=lambda m: _nar_log(draft_id, m))
                 with nar_locks[draft_id]:
                     st["done"] = True
@@ -752,6 +763,39 @@ def create_app(config: Config | None = None,
 
         threading.Thread(target=worker, daemon=True).start()
         return {"started": True, "running": True}
+
+    # ---- available TTS voices for the per-draft voice selector ----
+    _KITTEN_PROFILES = [
+        {"id": "assistant", "label": "助手（默认）"},
+        {"id": "female", "label": "女声"},
+        {"id": "female_warm", "label": "温柔女声"},
+        {"id": "male", "label": "男声"},
+        {"id": "male_deep", "label": "低沉男声"},
+        {"id": "child", "label": "儿童声"},
+    ]
+    _OPENAI_VOICES = [
+        {"id": "alloy", "label": "Alloy"},
+        {"id": "echo", "label": "Echo"},
+        {"id": "fable", "label": "Fable"},
+        {"id": "onyx", "label": "Onyx"},
+        {"id": "nova", "label": "Nova"},
+        {"id": "shimmer", "label": "Shimmer"},
+    ]
+
+    @app.get("/api/voices")
+    def api_list_voices():
+        """Return available voice options grouped by provider."""
+        from app.tts.voices import list_voices
+        cloned = list_voices(config)
+        return {
+            "kitten": _KITTEN_PROFILES,
+            "openai": _OPENAI_VOICES,
+            "cosyvoice": [{"id": v["id"], "label": v.get("name", v["id"])}
+                          for v in cloned],
+            "fishaudio": [{"id": v["id"], "label": v.get("name", v["id"])}
+                          for v in cloned],
+            "kitten_http": _KITTEN_PROFILES,
+        }
 
     # ---- localize a single article's media (before transcribing) ----
     mlz_lock = threading.Lock()
