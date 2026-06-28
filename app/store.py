@@ -84,7 +84,7 @@ class Store:
         abs_path = self.config.data_dir / rel
         abs_path.parent.mkdir(parents=True, exist_ok=True)
 
-        post = frontmatter.Post(draft.body_md, **{
+        meta: dict[str, object] = {
             "title_candidates": draft.title_candidates,
             "topic": draft.topic,
             "source_url": draft.source_url,
@@ -94,16 +94,20 @@ class Store:
             "flagged_claims": draft.flagged_claims,
             "sensitive_hits": getattr(draft, "sensitive_hits", []) or [],
             "status": draft.status,
-        })
+        }
+        if draft.title_cn:
+            meta["title_cn"] = draft.title_cn
+        post = frontmatter.Post(draft.body_md, **meta)
         abs_path.write_text(frontmatter.dumps(post), encoding="utf-8")
         draft.draft_path = str(rel).replace("\\", "/")
 
         cur = self.conn.execute(
             """INSERT INTO drafts
-            (article_id, platform, draft_path, cover_image, status, updated_at)
-            VALUES (?,?,?,?,?,?)""",
+            (article_id, platform, draft_path, cover_image, title_cn,
+             status, updated_at)
+            VALUES (?,?,?,?,?,?,?)""",
             (draft.article_id, draft.platform, draft.draft_path,
-             draft.cover_image, draft.status,
+             draft.cover_image, draft.title_cn, draft.status,
              datetime.now(timezone.utc).isoformat()))
         self.conn.commit()
         draft.id = cur.lastrowid
@@ -111,16 +115,29 @@ class Store:
 
     # ----- read/update helpers for the web UI -----
 
-    def list_articles(self, limit: int = 100, topic: str | None = None):
+    def list_sources(self):
+        rows = self.conn.execute(
+            "SELECT DISTINCT source_name FROM articles WHERE source_name IS NOT NULL "
+            "ORDER BY source_name").fetchall()
+        return [r["source_name"] for r in rows]
+
+    def list_articles(self, limit: int = 100, topic: str | None = None,
+                      source: str | None = None):
+        clauses = []
+        params = []
         if topic:
-            return self.conn.execute(
-                """SELECT * FROM articles WHERE topic=?
-                   ORDER BY COALESCE(published_at, fetched_at) DESC LIMIT ?""",
-                (topic, limit)).fetchall()
+            clauses.append("topic=?")
+            params.append(topic)
+        if source:
+            clauses.append("source_name=?")
+            params.append(source)
+        where = ""
+        if clauses:
+            where = "WHERE " + " AND ".join(clauses)
         return self.conn.execute(
-            """SELECT * FROM articles
-               ORDER BY COALESCE(published_at, fetched_at) DESC LIMIT ?""",
-            (limit,)).fetchall()
+            f"SELECT * FROM articles {where} "
+            "ORDER BY COALESCE(published_at, fetched_at) DESC LIMIT ?",
+            (*params, limit)).fetchall()
 
     def get_article(self, article_id: int):
         return self.conn.execute(
@@ -214,7 +231,8 @@ class Store:
         return meta
 
     def update_draft_body(self, draft_id: int, title_candidates: list[str],
-                          body_md: str, status: str | None = None) -> None:
+                          body_md: str, status: str | None = None,
+                          title_cn: str | None = None) -> None:
         row = self.get_draft(draft_id)
         if not row or not row["draft_path"]:
             return
@@ -223,14 +241,26 @@ class Store:
             frontmatter.Post("")
         meta = dict(existing.metadata)
         meta["title_candidates"] = title_candidates
+        if title_cn is not None:
+            if title_cn:
+                meta["title_cn"] = title_cn
+            else:
+                meta.pop("title_cn", None)
         new_status = status or meta.get("status") or row["status"]
         meta["status"] = new_status
         post = frontmatter.Post(body_md, **meta)
         abs_path.parent.mkdir(parents=True, exist_ok=True)
         abs_path.write_text(frontmatter.dumps(post), encoding="utf-8")
-        self.conn.execute(
-            "UPDATE drafts SET status=?, updated_at=? WHERE id=?",
-            (new_status, datetime.now(timezone.utc).isoformat(), draft_id))
+        if title_cn is not None:
+            self.conn.execute(
+                "UPDATE drafts SET status=?, title_cn=?, updated_at=? WHERE id=?",
+                (new_status, title_cn or None,
+                 datetime.now(timezone.utc).isoformat(), draft_id))
+        else:
+            self.conn.execute(
+                "UPDATE drafts SET status=?, updated_at=? WHERE id=?",
+                (new_status,
+                 datetime.now(timezone.utc).isoformat(), draft_id))
         self.conn.commit()
 
     def set_draft_status(self, draft_id: int, status: str) -> None:

@@ -133,10 +133,12 @@ def create_app(config: Config | None = None,
         return get_store().dashboard_stats()
 
     @app.get("/archive", response_class=HTMLResponse)
-    def archive(request: Request, topic: str | None = None):
+    def archive(request: Request, topic: str | None = None,
+                source: str | None = None):
         store = get_store()
-        articles = store.list_articles(limit=200, topic=topic)
+        articles = store.list_articles(limit=200, topic=topic, source=source)
         topics = store.list_topics()
+        sources = store.list_sources()
         # Group articles by date (YYYY-MM-DD) for collapsible date nodes.
         from collections import OrderedDict
         groups: list[tuple[str, list]] = []
@@ -148,9 +150,10 @@ def create_app(config: Config | None = None,
         for date_key in sorted(by_date, reverse=True):
             groups.append((date_key, by_date[date_key]))
         return templates.TemplateResponse(request, "archive.html", {
-            "articles": articles, "topics": topics,
+            "articles": articles, "topics": topics, "sources": sources,
             "draft_map": store.drafts_by_article(),
-            "current_topic": topic, "active": "archive",
+            "current_topic": topic, "current_source": source,
+            "active": "archive",
             "date_groups": groups})
 
     @app.get("/archive/{article_id}/view", response_class=HTMLResponse)
@@ -236,8 +239,18 @@ def create_app(config: Config | None = None,
     def drafts_list(request: Request, status: str | None = None):
         store = get_store()
         drafts = store.list_drafts(status=status)
+        enriched = []
+        for d in drafts:
+            item = dict(d)
+            if not item.get("title_cn"):
+                body = store.read_draft_body(item["id"])
+                candidates = body.get("title_candidates", []) or []
+                item["display_title"] = candidates[0] if candidates else None
+            else:
+                item["display_title"] = None
+            enriched.append(item)
         return templates.TemplateResponse(request, "drafts.html", {
-            "drafts": drafts, "current_status": status,
+            "drafts": enriched, "current_status": status,
             "statuses": ["drafted", "reviewing", "approved", "published"],
             "active": "drafts"})
 
@@ -251,6 +264,7 @@ def create_app(config: Config | None = None,
             "draft": row, "meta": body,
             "title_candidates_text": "\n".join(title_candidates),
             "body_md": body.get("body_md", ""),
+            "title_cn": body.get("title_cn") or (title_candidates[0] if title_candidates else ""),
             "flagged_claims": body.get("flagged_claims", []) or [],
             "sensitive_hits": body.get("sensitive_hits", []) or [],
             "narration": load_narration(draft_id, config),
@@ -264,10 +278,12 @@ def create_app(config: Config | None = None,
 
     @app.post("/drafts/{draft_id}")
     def draft_save(draft_id: int, title_candidates: str = Form(""),
-                   body_md: str = Form(""), status: str = Form("drafted")):
+                   body_md: str = Form(""), status: str = Form("drafted"),
+                   title_cn: str = Form("")):
         store = get_store()
         titles = [t.strip() for t in title_candidates.splitlines() if t.strip()]
-        store.update_draft_body(draft_id, titles, body_md, status=status)
+        store.update_draft_body(draft_id, titles, body_md, status=status,
+                                title_cn=title_cn.strip() or None)
         return RedirectResponse(url=f"/drafts/{draft_id}/edit", status_code=303)
 
     @app.get("/images/{name}")
@@ -983,7 +999,8 @@ def create_app(config: Config | None = None,
             topic=meta.get("topic", "uncategorized"),
             source_url=meta.get("source_url", ""),
             source_name=meta.get("source_name", ""),
-            cover_image=meta.get("cover_image"))
+            cover_image=meta.get("cover_image"),
+            title_cn=meta.get("title_cn") or None)
         sanitize_draft(new_draft, load_words(run_config))
         saved = store.save_draft(new_draft)
         return RedirectResponse(url=f"/drafts/{saved.id}/edit", status_code=303)

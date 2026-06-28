@@ -20,6 +20,19 @@
 <div id="extra-videos" class="article-videos"></div>
 
 <script>
+  if (window !== window.top) {
+    // Inside modal iframe — make "返回归档" close the parent viewer
+    document.addEventListener('DOMContentLoaded', function () {
+      var backLink = document.querySelector('.article-head a[href="/archive"]');
+      if (backLink) {
+        backLink.addEventListener('click', function (e) {
+          e.preventDefault();
+          window.parent.postMessage('close-viewer', '*');
+        });
+      }
+    });
+  }
+
   var md = {{ content_md | tojson }};
   var videos = {{ videos | tojson }};
 

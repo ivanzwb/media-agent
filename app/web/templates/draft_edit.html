@@ -30,12 +30,17 @@
 {% endif %}
 
 <div class="edit-grid">
-  <div>
+  <div class="edit-sidebar">
     {% if meta.cover_image %}
-    <p class="muted">封面：</p>
-    <img class="cover" src="/images/{{ meta.cover_image }}" alt="cover"/>
+    <div class="sidebar-section">
+      <p class="muted">封面：</p>
+      <img class="cover" src="/images/{{ meta.cover_image }}" alt="cover"/>
+    </div>
     {% endif %}
-    <p class="muted">来源：<a href="{{ meta.source_url }}" target="_blank" rel="noopener">{{ meta.source_name }}</a></p>
+    <div class="sidebar-section">
+      <p class="muted">来源</p>
+      <p><a href="{{ meta.source_url }}" target="_blank" rel="noopener">{{ meta.source_name }}</a></p>
+    </div>
   </div>
   <div>
     <div class="doc-toolbar">
@@ -58,6 +63,9 @@
     </div>
 
     <form id="edit-form" method="post" action="/drafts/{{ draft.id }}" class="edit-form">
+      <label>文章中文标题</label>
+      <input type="text" name="title_cn" value="{{ title_cn }}" placeholder="输入文章中文标题（留空自动用候选标题第一条）" class="title-cn-input"/>
+
       <label>候选标题（每行一个）</label>
       <textarea name="title_candidates" rows="3">{{ title_candidates_text }}</textarea>
 

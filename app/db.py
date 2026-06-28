@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS drafts (
     platform TEXT NOT NULL DEFAULT 'master',
     draft_path TEXT,
     cover_image TEXT,
+    title_cn TEXT,
     status TEXT NOT NULL DEFAULT 'drafted',
     updated_at TEXT NOT NULL,
     FOREIGN KEY(article_id) REFERENCES articles(id)
@@ -59,4 +60,9 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # Migrate: add title_cn column if missing
+    try:
+        conn.execute("ALTER TABLE drafts ADD COLUMN title_cn TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     conn.commit()

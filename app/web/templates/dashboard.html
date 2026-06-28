@@ -3,9 +3,9 @@
 {% block content %}
 <h1>仪表盘</h1>
 <div class="cards">
-  <div class="card"><div class="num">{{ stats.articles }}</div><div>已归档文章</div></div>
-  <div class="card"><div class="num">{{ stats.drafts }}</div><div>草稿</div></div>
-  <div class="card"><div class="num">{{ stats.runs }}</div><div>运行次数</div></div>
+  <div class="card stat"><div class="num">{{ stats.articles }}</div><div class="stat-label">已归档文章</div></div>
+  <div class="card stat"><div class="num">{{ stats.drafts }}</div><div class="stat-label">草稿</div></div>
+  <div class="card stat"><div class="num">{{ stats.runs }}</div><div class="stat-label">运行次数</div></div>
 </div>
 
 {% if request.query_params.get('cleared_runs') %}
@@ -41,7 +41,7 @@
 
 <h2>最新草稿</h2>
 {% if drafts %}
-<ul class="draft-list">
+<ul class="draft-list" style="padding:0;list-style:none">
   {% for d in drafts %}
   <li><a href="/drafts/{{ d.id }}/edit">#{{ d.id }} · {{ d.status }} · {{ d.draft_path }}</a></li>
   {% endfor %}

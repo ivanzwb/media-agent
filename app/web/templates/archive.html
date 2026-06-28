@@ -3,11 +3,23 @@
 {% block content %}
 <h1>归档浏览</h1>
 <div class="filters">
-  <a href="/archive" class="chip {{ 'on' if not current_topic else '' }}">全部</a>
+  <span class="filter-label">主题</span>
+  <a href="/archive{{ '?source=' + current_source if current_source else '' }}" class="chip {{ 'on' if not current_topic else '' }}">全部</a>
   {% for t in topics %}
-  <a href="/archive?topic={{ t }}" class="chip {{ 'on' if current_topic==t else '' }}">{{ t }}</a>
+  <a href="/archive?topic={{ t }}{{ '&source=' + current_source if current_source else '' }}" class="chip {{ 'on' if current_topic==t else '' }}">{{ t }}</a>
   {% endfor %}
 </div>
+
+<div class="filters">
+  <span class="filter-label">来源</span>
+  <a href="/archive{{ '?topic=' + current_topic if current_topic else '' }}" class="chip {{ 'on' if not current_source else '' }}">全部</a>
+</div>
+<div class="filter-chips-wrap" id="source-chips">
+  {% for s in sources %}
+  <a href="/archive?source={{ s }}{{ '&topic=' + current_topic if current_topic else '' }}" class="chip {{ 'on' if current_source==s else '' }}">{{ s }}</a>
+  {% endfor %}
+</div>
+<a class="filter-toggle" id="source-toggle" onclick="toggleSources()">展开全部来源</a>
 
 <div class="archive-toolbar">
   <button class="btn small" onclick="expandAll()">展开全部</button>
@@ -41,7 +53,7 @@
           <td>{% if a.published_at %}{{ a.published_at[:10] }}{% else %}<span class="muted">—</span>{% endif %}</td>
           <td>{{ a.fetched_at[:10] }}</td>
           <td class="actions" id="art-actions-{{ a.id }}">
-            <a class="btn small" href="/archive/{{ a.id }}/view">查看原文</a>
+            <a class="btn small" href="javascript:void(0)" onclick="viewArticle({{ a.id }})">查看原文</a>
             <button class="btn small btn-refetch" onclick="refetchArticle({{ a.id }})">重新抓取</button>
             <button class="btn small btn-localize" onclick="localizeArticle({{ a.id }})">本地化媒体</button>
             {% if a.id in draft_map %}
@@ -62,8 +74,36 @@
   <p class="muted">暂无文章。</p>
 {% endif %}
 
+<!-- Article Viewer Modal -->
+<div id="viewer-modal" class="modal-overlay" style="display:none" onclick="closeViewer(event)">
+  <div class="modal-content">
+    <div class="modal-head">
+      <span class="modal-title">原文</span>
+      <button type="button" class="run-close" onclick="closeViewer()">×</button>
+    </div>
+    <iframe id="viewer-iframe" class="modal-iframe" src="about:blank"></iframe>
+  </div>
+</div>
+
 <script>
 let mlzTimer = null;
+
+function viewArticle(id) {
+  const iframe = document.getElementById('viewer-iframe');
+  iframe.src = '/archive/' + id + '/view';
+  document.getElementById('viewer-modal').style.display = 'flex';
+}
+function closeViewer(e) {
+  if (e && e.target !== e.currentTarget) return; // only close on backdrop click
+  const modal = document.getElementById('viewer-modal');
+  modal.style.display = 'none';
+  document.getElementById('viewer-iframe').src = 'about:blank';
+}
+
+// Listen for iframe "close-viewer" message (e.g. 返回归档 clicked inside modal)
+window.addEventListener('message', function (e) {
+  if (e.data === 'close-viewer') closeViewer();
+});
 
 function showMlzPanel() {
   document.getElementById('mlz-panel').style.display = 'flex';
@@ -78,6 +118,13 @@ function expandAll() {
 
 function collapseAll() {
   document.querySelectorAll('.date-group').forEach(function (d) { d.open = false; });
+}
+
+function toggleSources() {
+  var wrap = document.getElementById('source-chips');
+  var toggle = document.getElementById('source-toggle');
+  wrap.classList.toggle('open');
+  toggle.textContent = wrap.classList.contains('open') ? '收起来源' : '展开全部来源';
 }
 
 async function pollLocalize() {

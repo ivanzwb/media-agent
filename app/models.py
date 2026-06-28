@@ -68,6 +68,7 @@ class Draft:
     source_url: str
     source_name: str
     cover_image: str | None = None
+    title_cn: str | None = None
     flagged_claims: list[str] = field(default_factory=list)
     status: str = DraftStatus.DRAFTED
     draft_path: str | None = None
