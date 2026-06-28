@@ -247,6 +247,8 @@ def create_app(config: Config | None = None,
 
     @app.get("/drafts", response_class=HTMLResponse)
     def drafts_list(request: Request, status: str | None = None):
+        from datetime import datetime, timezone, timedelta
+        CST = timezone(timedelta(hours=8))
         store = get_store()
         drafts = store.list_drafts(status=status)
         enriched = []
@@ -258,6 +260,16 @@ def create_app(config: Config | None = None,
                 item["display_title"] = candidates[0] if candidates else None
             else:
                 item["display_title"] = None
+            # Convert updated_at UTC → local (CST)
+            raw = item.get("updated_at", "")
+            if raw:
+                try:
+                    dt = datetime.fromisoformat(str(raw))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    item["updated_at"] = dt.astimezone(CST).strftime("%Y-%m-%d %H:%M")
+                except Exception:                          # noqa: BLE001
+                    pass
             enriched.append(item)
         return templates.TemplateResponse(request, "drafts.html", {
             "drafts": enriched, "current_status": status,
