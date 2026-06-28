@@ -1036,36 +1036,6 @@ def create_app(config: Config | None = None,
         saved = store.save_draft(new_draft)
         return RedirectResponse(url=f"/drafts/{saved.id}/edit", status_code=303)
 
-    @app.get("/api/drafts/{draft_id}/adapt")
-    def api_draft_adapt(draft_id: int, platform: str):
-        """Return platform-adapted content as JSON (no draft created)."""
-        from app.platforms.registry import get as get_platform
-        store = get_store()
-        meta = store.read_draft_body(draft_id)
-        if not meta:
-            return JSONResponse({"error": "draft not found"}, status_code=404)
-        p = get_platform(platform)
-        if p is None:
-            return JSONResponse({"error": f"unknown platform: {platform}"},
-                                status_code=400)
-        titles = meta.get("title_candidates") or ["稿件"]
-        run_config = Config.load(store=store)
-        provider = get_provider(run_config.llm_provider,
-                                run_config.llm_api_key,
-                                run_config.llm_model,
-                                base_url=run_config.llm_api_base)
-        result = adapt(meta.get("body_md", ""), titles[0], platform, provider)
-        footer = run_config.promotion_footer
-        if footer:
-            result["body_md"] = result["body_md"].rstrip() + f"\n\n---\n{footer}\n"
-        return {
-            "platform": platform,
-            "label": p.label,
-            "publish_url": p.publish_url,
-            "title_candidates": result["title_candidates"],
-            "body_md": result["body_md"],
-        }
-
     def _voice_display_name(voice_id: str, config) -> str:
         """Resolve a voice ID to its display name, falling back to the raw value."""
         if not voice_id:
