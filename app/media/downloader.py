@@ -20,6 +20,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable
 
+from app.media.failure_log import log_failure
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,12 +64,40 @@ class MediaDownloader:
 
     def download(
         self, url: str, dest: Path, idx: int,
-        emit: Callable = _noop, **kwargs,
+        emit: Callable = _noop,
+        source_url: str | None = None,
+        **kwargs,
     ) -> Path | None:
-        """Try strategies sorted by confidence, fall through on failure."""
+        """Try strategies sorted by confidence, fall through on failure.
+
+        Parameters
+        ----------
+        source_url
+            The article/container URL for the failure log (not used for
+            download logic).
+        """
+        # --- Check for non-downloadable URI schemes before any strategy ---
+        lower = url.strip().lower()
+        if lower.startswith("data:"):
+            emit(f"    [downloader] 跳过 data: URI #{idx}（不下载）")
+            log_failure(url, source_url, self.media_type,
+                        error="data: URI (skipped)", skipped=True)
+            return None
+        if lower.startswith("//"):
+            log_failure(url, source_url, self.media_type,
+                        error="protocol-relative URL (skipped)", skipped=True)
+            # Fall through — strategies *may* handle it via normalize_url
+        elif not lower.startswith(("http://", "https://", "ftp://")):
+            emit(f"    [downloader] 跳过非标准 URI #{idx}：{(url or '')[:60]}")
+            log_failure(url, source_url, self.media_type,
+                        error="non-standard URI scheme (skipped)", skipped=True)
+            return None
+
+        # --- Strategy chain ---
         scored = [(s, s.match(url)) for s in self._strategies]
         scored.sort(key=lambda x: -x[1])
 
+        errors: list[tuple[str, str]] = []
         for strategy, confidence in scored:
             if confidence <= 0:
                 continue
@@ -77,8 +107,16 @@ class MediaDownloader:
                     return result
                 emit(f"    [{strategy.name}] 不适用，尝试下一策略")
             except Exception as e:
-                emit(f"    [{strategy.name}] 异常：{e}")
+                err_msg = str(e) or e.__class__.__name__
+                emit(f"    [{strategy.name}] 异常：{err_msg}")
+                errors.append((strategy.name, err_msg))
 
+        # --- All strategies failed — log the failure ---
+        error_detail = "; ".join(
+            f"[{name}] {msg}" for name, msg in errors
+        ) if errors else "all strategies returned None"
         emit(f"    所有下载策略均失败（{self.media_type}）：{(url or '')[:80]}")
         logger.warning("All %s strategies failed for: %s", self.media_type, url)
+        log_failure(url, source_url, self.media_type,
+                    error=error_detail, downloader=self.media_type)
         return None

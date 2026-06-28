@@ -12,4 +12,4 @@ test_out.txt
 .omo/
 pretrained_models/
 server*.log
-media/
+/media/

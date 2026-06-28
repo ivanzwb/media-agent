@@ -122,28 +122,33 @@ def _img_ext(url: str, content_type: str | None) -> str:
     return ".jpg"
 
 
-def _download_image(url: str, dest: Path, idx: int, emit) -> Path | None:
-    return _image_downloader.download(url, dest, idx, emit)
+def _download_image(url: str, dest: Path, idx: int, emit,
+                    source_url: str | None = None) -> Path | None:
+    return _image_downloader.download(url, dest, idx, emit,
+                                      source_url=source_url)
 
 
 _DIRECT_VIDEO_EXTS = {".mp4", ".webm", ".m4v", ".mov", ".ogv", ".ogg"}
 
 
 def _download_video(url: str, dest: Path, idx: int, emit,
+                    source_url: str | None = None,
                     max_seconds: int = 60) -> Path | None:
     return _video_downloader.download(url, dest, idx, emit,
+                                      source_url=source_url,
                                       max_seconds=max_seconds)
 
 
 def _download_set(urls, dest: Path, folder: str, fn, workers: int,
-                  emit) -> list[str]:
+                  emit, source_url: str | None = None) -> list[str]:
     """Download `urls` concurrently via `fn(url, dest, idx, emit)`, preserving
     order. Local (/media/) URLs pass through; failures keep the original URL."""
     results: dict[int, Path | None] = {}
     todo = [(i, u) for i, u in enumerate(urls, 1) if not _is_local(u)]
     if todo:
         with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-            futs = {ex.submit(fn, u, dest, i, emit): i for i, u in todo}
+            futs = {ex.submit(fn, u, dest, i, emit, source_url): i
+                     for i, u in todo}
             for f in as_completed(futs):
                 i = futs[f]
                 try:
@@ -178,13 +183,15 @@ def localize_article(article: Article, config: Config, progress=None,
     emit(f"图片 {len(imgs)} 张，视频 {len(article.videos or [])} 个"
          f"（并发 {workers}）")
     article.images = _download_set(imgs, dest, folder, _download_image,
-                                   workers, emit)
+                                   workers, emit,
+                                   source_url=article.url)
 
     if download_videos and article.videos:
         # yt-dlp spawns subprocesses — cap video concurrency lower.
         vworkers = max(1, min(workers, 2))
         article.videos = _download_set(article.videos, dest, folder,
-                                       _download_video, vworkers, emit)
+                                       _download_video, vworkers, emit,
+                                       source_url=article.url)
 
     return article
 
