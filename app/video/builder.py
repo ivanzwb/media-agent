@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -370,73 +371,101 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
     # Ordered pool of available images, used to auto-fill scenes whose `media`
     # the LLM left as none/invalid — so the video never goes all black.
     img_pool = [image_map[k] for k in sorted(image_map)]
-    auto = 0
     # Track each source video's playback position so consecutive scenes on the
     # same video continue instead of restarting, and freeze on the last frame
     # once the footage runs out. Total durations cached to avoid re-probing.
     video_pos: dict[str, float] = {}
     video_total: dict[str, float] = {}
 
-    clips: list[Path] = []
-
     total = len(scenes)
-    for i, sc in enumerate(scenes):
-        emit(f"合成分镜 {i + 1}/{total}")
-        scene_type = sc.get("type", "normal")
-        narration = sc.get("narration", "")
-        media = str(sc.get("media", "none"))
+    clips: list[Path | None] = [None] * total
 
-        # Audio resolution (same for all scene types)
+    def _scene_audio(i: int):
+        sc = scenes[i]
         audio = None
         if sc.get("audio"):
             cand = work_dir / sc["audio"]
             if cand.exists():
                 audio = cand
-        duration = probe_duration(audio) if audio else None
-        if not duration:
-            duration = max(2.0, len(narration) * 0.25)
+        dur = probe_duration(audio) if audio else None
+        if not dur:
+            dur = max(2.0, len(sc.get("narration", "")) * 0.25)
+        return audio, dur
 
+    def _is_video_scene(i: int) -> bool:
+        sc = scenes[i]
+        if sc.get("type") in ("intro", "outro"):
+            return False
+        media = str(sc.get("media", "none"))
+        vidx = _idx(media, "video:")
+        src_video = video_map.get(vidx) if vidx else None
+        return bool(src_video and Path(src_video).exists())
+
+    def _build_image_clip(i: int) -> None:
+        """Render+encode one non-video scene.  No shared mutable state."""
+        sc = scenes[i]
+        audio, duration = _scene_audio(i)
         clip = work_dir / f"clip-{i}.mp4"
+        scene_type = sc.get("type", "normal")
 
         if scene_type == "intro":
-            # Branded title screen
             title = script.get("title") or script.get("article_title") or ""
             frame = render_intro_frame(
                 title, brand_name, work_dir / f"intro-{i}.png")
             _make_clip(frame, audio, duration, clip)
         elif scene_type == "outro":
-            # Thank-you screen
             frame = render_outro_frame(
                 brand_name, work_dir / f"outro-{i}.png")
             _make_clip(frame, audio, duration, clip)
         else:
-            # Normal scene: video background with subtitle overlay
-            vidx = _idx(media, "video:")
-            src_video = video_map.get(vidx) if vidx else None
-            if src_video and Path(src_video).exists():
-                overlay = render_subtitle_overlay(
-                    narration, work_dir / f"ov-{i}.png")
-                key = str(src_video)
-                if key not in video_total:
-                    video_total[key] = probe_duration(src_video) or 0.0
-                total_src = video_total[key]
-                offset = video_pos.get(key, 0.0)
-                seek = _seek_for(offset, total_src)
-                _make_video_clip(src_video, overlay, audio, duration, clip,
-                                 fit=fit, seek=seek)
-                video_pos[key] = offset + duration
-            else:
-                # Still image background with subtitle band
-                iidx = _idx(media, "image:")
-                bg = image_map.get(iidx) if iidx else None
-                if bg is None and img_pool:
-                    bg = img_pool[auto % len(img_pool)]
-                    auto += 1
-                frame = render_frame(narration,
-                                     work_dir / f"frame-{i}.png", bg_image=bg,
-                                     fit=fit)
-                _make_clip(frame, audio, duration, clip)
-        clips.append(clip)
+            iidx = _idx(str(sc.get("media", "none")), "image:")
+            bg = image_map.get(iidx) if iidx else None
+            if bg is None and img_pool:
+                bg = img_pool[i % len(img_pool)]
+            frame = render_frame(sc.get("narration", ""),
+                                 work_dir / f"frame-{i}.png", bg_image=bg,
+                                 fit=fit)
+            _make_clip(frame, audio, duration, clip)
+
+    def _build_video_clip(i: int) -> None:
+        """Render+encode one video-background scene.
+        Called in scene order per video source (seek position is stateful)."""
+        sc = scenes[i]
+        audio, duration = _scene_audio(i)
+        narration = sc.get("narration", "")
+        media = str(sc.get("media", "none"))
+        clip = work_dir / f"clip-{i}.mp4"
+        vidx = _idx(media, "video:")
+        src_video = video_map.get(vidx)
+        overlay = render_subtitle_overlay(
+            narration, work_dir / f"ov-{i}.png")
+        key = str(src_video)
+        if key not in video_total:
+            video_total[key] = probe_duration(src_video) or 0.0
+        offset = video_pos.get(key, 0.0)
+        seek = _seek_for(offset, video_total[key])
+        _make_video_clip(src_video, overlay, audio, duration, clip,
+                         fit=fit, seek=seek)
+        video_pos[key] = offset + duration
+
+    # Identify scenes that need sequential video-seek ordering
+    video_scenes = [i for i in range(total) if _is_video_scene(i)]
+    image_scenes = [i for i in range(total) if not _is_video_scene(i)]
+
+    # Phase 1 — image / intro / outro scenes: fully independent, parallel
+    if image_scenes and emit:
+        emit(f"合成分镜画面 {len(image_scenes)} 个（并行）…")
+    with ThreadPoolExecutor(max_workers=min(len(image_scenes) if image_scenes else 1, 4)) as pool:
+        for _ in pool.map(_build_image_clip, image_scenes):
+            pass
+
+    # Phase 2 — video-background scenes: sequential per video source
+    for i in video_scenes:
+        if emit:
+            emit(f"合成分镜 {i + 1}/{total}（视频背景）")
+        _build_video_clip(i)
+
+    clips = [work_dir / f"clip-{i}.mp4" for i in range(total)]
 
     emit("拼接所有分镜…")
     list_file = work_dir / "concat.txt"
