@@ -21,6 +21,7 @@ from app.images.base import get_image_provider
 from app.llm.base import get_provider
 from app.models import Article, Draft
 from app.pipeline.adapter import adapt, PLATFORMS
+from app.platforms.registry import list_all as list_platforms
 from app.pipeline.images import attach_cover
 from app.pipeline.narration import (
     generate_narration, load_narration, save_scenes, resynth_scenes)
@@ -296,6 +297,7 @@ def create_app(config: Config | None = None,
             "article_title": (title_candidates[0] if title_candidates else ""),
             "tts_provider": config.tts_provider,
             "tts_voice": config.tts_voice,
+            "platforms": list_platforms(),
             "active": "drafts"})
 
     @app.post("/drafts/{draft_id}")

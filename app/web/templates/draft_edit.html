@@ -52,11 +52,11 @@
       </select>
       <button type="submit" class="btn primary" form="edit-form">保存</button>
       <span class="tb-sep">|</span>
-      <span class="tb-label">生成平台适配版本：</span>
-      {% for p, label in [('wechat', '公众号'), ('xiaohongshu', '小红书'), ('zhihu', '知乎')] %}
+      <span class="tb-label">同步到平台：</span>
+      {% for p in platforms %}
       <form method="post" action="/drafts/{{ draft.id }}/adapt" class="tb-form">
-        <input type="hidden" name="platform" value="{{ p }}"/>
-        <button type="submit" class="btn small">{{ label }}</button>
+        <input type="hidden" name="platform" value="{{ p.id }}"/>
+        <button type="submit" class="btn small">{{ p.label }}</button>
       </form>
       {% endfor %}
       <a class="btn small" href="/drafts">返回列表</a>
@@ -112,6 +112,15 @@
 <video controls preload="metadata" class="explainer-video"
        src="/videos/draft-{{ draft.id }}/video.mp4"></video>
 <p><a class="btn small" href="/videos/draft-{{ draft.id }}/video.mp4" download>下载 mp4</a></p>
+{% endif %}
+{% if has_video %}
+<div class="adapt-row" style="margin-top:14px">
+  <span class="tb-label" style="margin-right:8px">同步到平台：</span>
+  {% for p in platforms %}
+  <a class="btn small" href="{{ p.publish_url }}" target="_blank" rel="noopener"
+     onclick="syncToPlatform('{{ p.id }}', {{ draft.id }})">{{ p.label }}</a>
+  {% endfor %}
+</div>
 {% endif %}
 </div><!-- /tab-video -->
 
@@ -466,5 +475,15 @@
     showTab(_tabFromHash(), false);
   });
   showTab(_tabFromHash(), false);
+
+  async function syncToPlatform(platformId, draftId) {
+    // Copy current article body to clipboard, then platform URL opens via link
+    const titleEl = document.querySelector('.title-cn-input');
+    const title = titleEl?.value || '';
+    const body = window.easyMDE ? easyMDE.value() : (document.getElementById('editor')?.value || '');
+    try {
+      await navigator.clipboard.writeText(title + '\n\n' + body);
+    } catch (_) { /* ignore */ }
+  }
 </script>
 {% endblock %}
