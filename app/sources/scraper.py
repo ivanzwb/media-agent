@@ -54,6 +54,16 @@ _NON_ARTICLE_SEGMENTS: set[str] = {
     "patents", "trademarks", "licensing",
     "recognition", "testimonials", "clients",
     "data-privacy", "gdpr", "ccpa",
+    # Compound variants — exact-match set can't catch "terms-of-use" via "terms"
+    "terms-of-use", "terms-of-service", "terms-and-conditions",
+    "privacy-policy", "privacy-statement", "privacy-notice",
+    "privacy-policies",
+    "cookie-policy", "cookie-preferences", "cookie-settings",
+    "code-of-conduct", "code-of-ethics",
+    "return-policy", "refund-policy", "cancellation-policy",
+    "anti-corruption", "anti-bribery", "anti-harassment",
+    "community-guidelines",
+    "data-processing-agreement", "service-level-agreement",
 }
 
 # Terms that indicate a blog / news / article INDEX page when they appear
