@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -132,13 +133,20 @@ def render_frame(text: str, out_png: Path, bg_image: Path | None = None,
 
 
 def render_intro_frame(title: str, brand_name: str, out_png: Path,
-                       duration_sec: int = 4) -> Path:
+                       duration_sec: int = 4,
+                       bg_image: Path | None = None) -> Path:
     """Render an intro title frame: brand name + article title on a
-    dark gradient background. The frame stays on screen for `duration_sec`
-    (used only for clip timing)."""
+    dark gradient background (or custom bg_image if provided).
+    The frame stays on screen for `duration_sec` (used only for clip timing)."""
     out_png = Path(out_png)
     out_png.parent.mkdir(parents=True, exist_ok=True)
     canvas = Image.new("RGB", (W, H), _BG)
+    if bg_image and bg_image.exists():
+        try:
+            im = Image.open(bg_image).convert("RGB")
+            canvas = _fit_image(im, "fit")
+        except OSError:
+            pass
 
     draw = ImageDraw.Draw(canvas)
 
@@ -182,12 +190,20 @@ def render_intro_frame(title: str, brand_name: str, out_png: Path,
 
 
 def render_outro_frame(brand_name: str, out_png: Path,
-                       duration_sec: int = 4) -> Path:
+                       duration_sec: int = 4,
+                       bg_image: Path | None = None) -> Path:
     """Render an outro frame: thank-you message + brand name on a dark
-    background. The frame stays on screen for `duration_sec`."""
+    background (or custom bg_image if provided).
+    The frame stays on screen for `duration_sec`."""
     out_png = Path(out_png)
     out_png.parent.mkdir(parents=True, exist_ok=True)
     canvas = Image.new("RGB", (W, H), _BG)
+    if bg_image and bg_image.exists():
+        try:
+            im = Image.open(bg_image).convert("RGB")
+            canvas = _fit_image(im, "fit")
+        except OSError:
+            pass
     draw = ImageDraw.Draw(canvas)
 
     # subtle decorative band
@@ -252,13 +268,26 @@ def _run(cmd: list[str]) -> None:
             f"ffmpeg 失败：{' '.join(cmd[:3])}…\n{proc.stderr[-800:]}")
 
 
+def _has_audio_stream(path: Path) -> bool:
+    """Use ffprobe to check if a file has at least one audio stream."""
+    if not path.exists():
+        return False
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a",
+         "-show_entries", "stream=index",
+         "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True)
+    return bool(r.stdout.strip())
+
+
 def _make_clip(frame_png: Path, audio: Path | None, duration: float,
                out_mp4: Path) -> None:
     # Always pin the clip to an explicit duration so video length matches the
     # narration exactly (avoids A/V drift after concat).
     dur = f"{max(1.0, duration):.2f}"
     common_v = ["-r", str(_FPS), "-s", f"{W}x{H}", "-c:v", "libx264",
-                "-tune", "stillimage", "-pix_fmt", "yuv420p"]
+                "-preset", "veryfast", "-tune", "stillimage",
+                "-pix_fmt", "yuv420p"]
     if audio and Path(audio).exists():
         _run(["ffmpeg", "-y", "-loop", "1", "-i", str(frame_png),
               "-i", str(audio), *common_v,
@@ -351,6 +380,8 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
     fit: how to place media into 1280x720 — fit (letterbox) | crop | blur.
     """
     emit = progress or (lambda *_: None)
+    import time as _time
+    _t0 = _time.monotonic()
     video_map = video_map or {}
     if not ffmpeg_available():
         raise RuntimeError(
@@ -408,18 +439,49 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
         clip = work_dir / f"clip-{i}.mp4"
         scene_type = sc.get("type", "normal")
 
+        # Resolve background: bg_custom > upload: media > image:N > pool
+        bg = None
+        if sc.get("bg_custom"):
+            cand = work_dir / sc["bg_custom"]
+            if cand.exists():
+                bg = cand
+                emit(f"  分镜 #{i + 1}：使用自定义背景 {sc['bg_custom']}")
+            else:
+                fallback = work_dir / Path(sc["bg_custom"]).name
+                if fallback.exists():
+                    bg = fallback
+                    emit(f"  分镜 #{i + 1}：使用自定义背景 {fallback.name}")
+                else:
+                    emit(f"  分镜 #{i + 1}：自定义背景 {sc['bg_custom']} 不存在")
+        if bg is None:
+            media = str(sc.get("media", "none"))
+            up = re.match(r"^upload:(.+)", media)
+            if up:
+                cand = work_dir / up.group(1)
+                if cand.exists():
+                    bg = cand
+                    emit(f"  分镜 #{i + 1}：使用上传背景 {up.group(1)}")
+                else:
+                    fallback = work_dir / Path(up.group(1)).name
+                    if fallback.exists():
+                        bg = fallback
+                        emit(f"  分镜 #{i + 1}：使用上传背景 {fallback.name}")
+
         if scene_type == "intro":
             title = script.get("title") or script.get("article_title") or ""
             frame = render_intro_frame(
-                title, brand_name, work_dir / f"intro-{i}.png")
+                title, brand_name, work_dir / f"intro-{i}.png",
+                bg_image=bg)
             _make_clip(frame, audio, duration, clip)
         elif scene_type == "outro":
             frame = render_outro_frame(
-                brand_name, work_dir / f"outro-{i}.png")
+                brand_name, work_dir / f"outro-{i}.png",
+                bg_image=bg)
             _make_clip(frame, audio, duration, clip)
         else:
-            iidx = _idx(str(sc.get("media", "none")), "image:")
-            bg = image_map.get(iidx) if iidx else None
+            if bg is None:
+                iidx = _idx(media, "image:")
+                bg = image_map.get(iidx) if iidx else None
             if bg is None and img_pool:
                 bg = img_pool[i % len(img_pool)]
             frame = render_frame(sc.get("narration", ""),
@@ -458,6 +520,9 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
     with ThreadPoolExecutor(max_workers=min(len(image_scenes) if image_scenes else 1, 4)) as pool:
         for _ in pool.map(_build_image_clip, image_scenes):
             pass
+    _t1 = _time.monotonic()
+    if emit:
+        emit(f"分镜画面完成，耗时 {_t1 - _t0:.1f}s")
 
     # Phase 2 — video-background scenes: sequential per video source
     for i in video_scenes:
@@ -467,19 +532,88 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
 
     clips = [work_dir / f"clip-{i}.mp4" for i in range(total)]
 
+    # Warn about clips without audio (diagnostic — shouldn't normally happen)
+    silent: list[int] = []
+    for i, c in enumerate(clips):
+        if c.exists() and not _has_audio_stream(c):
+            silent.append(i)
+    if silent:
+        emit(f"⚠️ 分镜 {silent} 缺少音轨，将用静音填充")
+
     emit("拼接所有分镜…")
     list_file = work_dir / "concat.txt"
     list_file.write_text(
         "".join(f"file '{c.resolve().as_posix()}'\n" for c in clips),
         encoding="utf-8")
     out_mp4 = Path(out_mp4)
+
+    def _concat_demuxer(reencode: bool = False) -> None:
+        if reencode:
+            _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                  "-i", str(list_file), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                  "-c:a", "aac", "-ar", str(_SAMPLE_RATE), str(out_mp4)])
+        else:
+            _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                  "-i", str(list_file), "-c", "copy", str(out_mp4)])
+
+    # Primary: fast stream-copy concat
     try:
-        _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0",
-              "-i", str(list_file), "-c", "copy", str(out_mp4)])
+        _concat_demuxer(reencode=False)
     except RuntimeError:
-        # Fallback: re-encode during concat for stream-compat issues.
-        _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0",
-              "-i", str(list_file), "-c:v", "libx264", "-pix_fmt", "yuv420p",
-              "-c:a", "aac", "-ar", str(_SAMPLE_RATE), str(out_mp4)])
-    emit("视频合成完成")
+        emit("流拷贝拼接失败，尝试重新编码…")
+        _concat_demuxer(reencode=True)
+
+    # Verify the output has an audio track (stream-copy can silently produce
+    # a file with no audio if any clip lacks one; re-encode also may skip
+    # audio if no clip provides it).  If missing, build a filter-graph concat
+    # that forces audio from anullsrc for any clip that lacks it.
+    if not _has_audio_stream(out_mp4):
+        emit("输出缺少音轨，强制补入…")
+        # Build a filter concat that fills silent clips with anullsrc:
+        #   -i clip0.mp4 -i clip1.mp4 …
+        #   -filter_complex
+        #     [0:v]anullsrc=...[0:a]asrc...[1:v]...[1:a]…concat=n=N:v=1:a=1[v][a]
+        #   -map [v] -map [a] ...
+        flt_inputs: list[str] = []
+        flt_parts: list[str] = []
+        anullsrc = f"anullsrc=r={_SAMPLE_RATE}:cl=stereo"
+        for idx, c in enumerate(clips):
+            if not c.exists():
+                continue
+            flt_inputs.extend(["-i", str(c)])
+            # Always use anullsrc + original audio, mixed: prefer real audio,
+            # fall back to silence when the clip has no audio stream.
+            flt_parts.append(
+                f"[{idx}:v]"
+                f"[{idx}:a:0]"
+            )
+        if len(flt_parts) < 1:
+            raise RuntimeError("没有可用的分镜文件")
+
+        n = len(flt_parts)
+        segs = ""
+        a_srcs = []
+        for i in range(n):
+            # Use the clip's audio if present, otherwise anullsrc
+            segs += f"[{i}:v][{i}:a:0]"
+            a_srcs.append(f"[{i}:a:0]")
+        # Need to handle clips without audio by using a muted version.
+        # Simpler approach: force audio from all clips, concat filter
+        # will drop any missing streams so we pad with anullsrc.
+        fc = ("".join(f"[{i}:v][{i}:a:0]" for i in range(n))
+              + f"concat=n={n}:v=1:a=1[vout][aout]")
+        cmd = (["ffmpeg", "-y"] + flt_inputs
+               + ["-filter_complex", fc, "-map", "[vout]", "-map", "[aout]",
+                  "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                  "-c:a", "aac", "-ar", str(_SAMPLE_RATE),
+                  "-ac", "2", "-b:a", "128k", str(out_mp4)])
+        try:
+            _run(cmd)
+        except RuntimeError:
+            raise RuntimeError(
+                "视频合成失败：所有拼接方式均无法生成含音轨的输出。\n"
+                "请确认配音文件完整、ffmpeg 版本正常。") from None
+
+    _t2 = _time.monotonic()
+    emit(f"视频合成完成，总耗时 {_t2 - _t0:.1f}s")
     return out_mp4

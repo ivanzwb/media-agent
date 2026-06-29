@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +24,63 @@ logger = logging.getLogger(__name__)
 
 _MODEL = None
 _WHISPER = None
+_MODEL_LOCK = threading.Lock()
+_WHISPER_LOCK = threading.Lock()
+_INFERENCE_LOCK = threading.Lock()
+_PROMPT_LOCK = threading.Lock()  # serialize _prompt_text init across threads
 _DEFAULT_MODEL = "FunAudioLLM/CosyVoice2-0.5B"
+
+
+# ------------------------------------------------------------------
+# Monkey-patch: PyTorch >= 2.4 — CosyVoice2 creates the model with
+# init_empty_weights() (meta device), then:
+#   1. load_state_dict() silently fails on meta params (weights not loaded)
+#   2. model.to(device) raises "Cannot copy out of meta tensor; no data!"
+#
+# Fix: patch load_state_dict to pass assign=True for meta params,
+#      and patch to() to fall back to to_empty() for meta → real device.
+# ------------------------------------------------------------------
+def _install_meta_device_patch():
+    import torch
+    if getattr(torch.nn.Module, "_cosyvoice_patched", False):
+        return
+
+    # patch 1: to() → to_empty() when moving from meta device
+    _orig_to = torch.nn.Module.to
+
+    def _patched_to(self, *args, **kwargs):
+        try:
+            return _orig_to(self, *args, **kwargs)
+        except RuntimeError as e:
+            if "meta tensor" in str(e) or "to_empty" in str(e):
+                device = (args[0] if args
+                          else kwargs.get("device", "cuda"))
+                return self.to_empty(device)
+            raise
+
+    torch.nn.Module.to = _patched_to
+
+    # patch 2: load_state_dict — when model params are on meta device,
+    #          normal copy is a no-op; use assign=True to materialize.
+    _orig_load_state_dict = torch.nn.Module.load_state_dict
+
+    def _patched_load_state_dict(self, state_dict, strict=True, assign=False):
+        # Detect meta params → force assign=True so weights are materialized
+        if not assign:
+            try:
+                p = next(self.parameters())
+                if p.device.type == "meta":
+                    assign = True
+            except StopIteration:
+                pass
+        return _orig_load_state_dict(self, state_dict, strict=strict,
+                                     assign=assign)
+
+    torch.nn.Module.load_state_dict = _patched_load_state_dict
+    torch.nn.Module._cosyvoice_patched = True
+
+
+_install_meta_device_patch()
 
 
 class CosyVoiceTTS:
@@ -43,8 +100,7 @@ class CosyVoiceTTS:
         self.speaker_wav = speaker_wav
         self.model_name = model or _DEFAULT_MODEL
         self._model_dir: str | None = None  # resolved local path
-        self._spk_id: str | None = None     # set after first add_zero_shot_spk
-        self._prompt_text: str = ""          # whisper transcription of ref audio
+        self._prompt_text: str | None = None  # whisper transcription, lazy init
 
     # ------------------------------------------------------------------
     # Model loading (lazy, process-global singleton)
@@ -107,7 +163,12 @@ class CosyVoiceTTS:
 
     def _get_model(self):
         global _MODEL
-        if _MODEL is None:
+        if _MODEL is not None:
+            return _MODEL
+        with _MODEL_LOCK:
+            # double-check after acquiring lock
+            if _MODEL is not None:
+                return _MODEL
             try:
                 # CosyVoice2 is the latest model supporting zero-shot cloning
                 from cosyvoice.cli.cosyvoice import CosyVoice2
@@ -140,7 +201,11 @@ class CosyVoiceTTS:
     def _get_whisper():
         """Lazy-loaded process-global whisper model for transcribing reference audio."""
         global _WHISPER
-        if _WHISPER is None:
+        if _WHISPER is not None:
+            return _WHISPER
+        with _WHISPER_LOCK:
+            if _WHISPER is not None:
+                return _WHISPER
             import whisper
             logger.info("加载 Whisper tiny 模型（用于参考音频转写）…")
             _WHISPER = whisper.load_model("tiny")
@@ -156,15 +221,36 @@ class CosyVoiceTTS:
         align the reference speech tokens during inference.  Without it
         the generated audio is garbled/stretched.
 
-        Returns the transcribed text (best guess), or empty string on failure.
+        PyTorch 2.x ``scaled_dot_product_attention`` on CUDA has a shape
+        assertion bug (``key.size(1) == value.size(1)``) on short audio
+        clips when FlashAttention or MemEfficientAttention backends are
+        active.  We wrap the call with ``sdp_kernel`` to force the safe
+        Math (vanilla bmm) backend.
         """
         try:
-            # whisper works best with 16kHz audio
+            import torch
+            from contextlib import nullcontext
             model = CosyVoiceTTS._get_whisper()
-            result = model.transcribe(wav_path, language="zh", task="transcribe",
-                                      verbose=False, fp16=True)
+            # Disable flash/mem-efficient attention (triggers SDPA shape
+            # assertion on short audio with CUDA + PyTorch ≥ 2.0).
+            try:
+                sdp_ctx = torch.backends.cuda.sdp_kernel(
+                    enable_flash=False,
+                    enable_mem_efficient=False,
+                    enable_math=True,
+                )
+            except AttributeError:
+                sdp_ctx = nullcontext()
+            with sdp_ctx:
+                result = model.transcribe(
+                    wav_path, language="zh", task="transcribe",
+                    verbose=None, fp16=False,
+                )
             text = result.get("text", "").strip()
-            logger.info("参考音频转写结果: 「%s」", text)
+            if text:
+                logger.info("参考音频转写结果: 「%s」", text)
+            else:
+                logger.warning("参考音频转写结果为空")
             return text
         except Exception as e:
             logger.warning("参考音频转写失败: %s", e)
@@ -222,48 +308,35 @@ class CosyVoiceTTS:
         model = self._get_model()
         prompt_wav = self._resolve_ref_wav(self.speaker_wav)
 
-        # --- Speaker embedding caching ---
+        # Transcribe reference audio once for prompt_text (needed for
+        # CosyVoice2 zero-shot LLM alignment).  We do NOT use
+        # add_zero_shot_spk / zero_shot_spk_id caching here because
+        # CosyVoice2's internal spk2info dict is not reliably shared
+        # across threads under ThreadPoolExecutor.
         #
-        # CosyVoice's inference_zero_shot() calls frontend_zero_shot() which
-        # re-processes the reference audio EVERY invocation — 3 expensive
-        # operations:
-        #   1) _extract_speech_feat()  — audio feature extraction
-        #   2) _extract_speech_token() — ONNX speech tokenizer (CUDA)
-        #   3) _extract_spk_embedding() — ONNX campplus speaker embed (CPU)
-        #
-        # We use add_zero_shot_spk() to run these ONCE and cache in
-        # model.frontend.spk2info.  Subsequent calls pass zero_shot_spk_id
-        # so frontend_zero_shot() skips redundant processing entirely.
-        #
-        if self._spk_id is None:
-            self._spk_id = str(id(self.speaker_wav))
-            # --- Transcribe reference audio for proper prompt_text ---
-            #
-            # CosyVoice's zero-shot LLM needs prompt_text (transcript of the
-            # reference speech) to align reference speech tokens.  Without it
-            # the LLM generates garbled tokens → stretched/gibberish audio.
-            #
-            self._prompt_text = self._transcribe_ref_audio(prompt_wav)
-            if self._prompt_text:
-                logger.info("参考音频转写完成（%d 字），注册说话人…", len(self._prompt_text))
-                model.add_zero_shot_spk(self._prompt_text, prompt_wav, self._spk_id)
-            else:
-                # Fallback: register with empty text — will work but quality
-                # will be poor (the underlying issue we're fixing).
-                logger.warning("参考音频转写失败，使用空文本注册（音质可能受损）")
-                model.add_zero_shot_spk("", prompt_wav, self._spk_id)
-            logger.info("声音特征已注册（spk_id=%s），后续分镜跳过参考音频处理",
-                        self._spk_id)
+        # Guard with _PROMPT_LOCK — ThreadPoolExecutor can call
+        # synthesize() from N threads simultaneously; without this lock
+        # every thread would hammer whisper concurrently.
+        if self._prompt_text is None:
+            with _PROMPT_LOCK:
+                if self._prompt_text is None:
+                    self._prompt_text = self._transcribe_ref_audio(prompt_wav)
+                    if self._prompt_text:
+                        logger.info("参考音频转写完成（%d 字）",
+                                    len(self._prompt_text))
+                    else:
+                        logger.warning("参考音频转写失败，使用空文本（音质可能受损）")
+                        self._prompt_text = ""
 
-        for result in model.inference_zero_shot(
-            tts_text=text,
-            prompt_text=self._prompt_text,
-            prompt_wav=prompt_wav,
-            zero_shot_spk_id=self._spk_id,
-            stream=False,
-        ):
-            audio = result["tts_speech"]  # shape: [1, samples]
-            sf.write(str(path), audio.squeeze(0).numpy(), model.sample_rate)
+        with _INFERENCE_LOCK:
+            for result in model.inference_zero_shot(
+                tts_text=text,
+                prompt_text=self._prompt_text,
+                prompt_wav=prompt_wav,
+                stream=False,
+            ):
+                audio = result["tts_speech"]  # shape: [1, samples]
+                sf.write(str(path), audio.squeeze(0).numpy(), model.sample_rate)
 
         if not path.exists():
             raise RuntimeError(

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import secrets
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from app.config import Config
@@ -12,7 +11,7 @@ from app.pipeline.script import build_script
 from app.store import Store
 from app.tts.base import TTSProvider
 
-_MEDIA_RE = re.compile(r"^(image|video):\d+$")
+_MEDIA_RE = re.compile(r"^(image|video):\d+$|^upload:.+$")
 
 
 def _noop(*_a, **_k) -> None:
@@ -77,23 +76,16 @@ def generate_narration(draft_id: int, store: Store, llm: LLMProvider,
     out_dir = config.videos_dir / f"draft-{draft_id}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    emit(f"共 {len(scenes)} 个分镜，开始并行配音…")
-
-    def synth_one(i_sc):
-        i, sc = i_sc
+    emit(f"共 {len(scenes)} 个分镜，开始逐段配音…")
+    for i, sc in enumerate(scenes):
+        emit(f"配音 {i + 1}/{len(scenes)}：{sc['narration'][:30]}")
         try:
             audio = tts.synthesize(sc["narration"], out_dir / f"scene-{i}")
-            return i, audio.name, None
-        except Exception as e:  # noqa: BLE001
-            return i, None, str(e)
-
-    with ThreadPoolExecutor(max_workers=min(len(scenes), 6)) as pool:
-        for i, fname, err in pool.map(synth_one, enumerate(scenes)):
-            if err:
-                scenes[i]["audio"] = None
-                scenes[i]["audio_error"] = err
-            else:
-                scenes[i]["audio"] = fname
+            sc["audio"] = audio.name
+        except Exception as e:  # noqa: BLE001 - surface per-scene failures
+            sc["audio"] = None
+            sc["audio_error"] = str(e)
+            emit(f"  配音失败：{e}")
 
     script["draft_id"] = draft_id
     if tts_provider is not None:
@@ -124,6 +116,13 @@ def _save_script(draft_id: int, script: dict, config: Config) -> None:
         json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _extract_upload(media: str) -> str | None:
+    """Extract upload filename from an 'upload:xxx' media value."""
+    if media.startswith("upload:"):
+        return media[len("upload:"):]
+    return None
+
+
 def save_scenes(draft_id: int, scenes: list, config: Config) -> dict:
     """Persist edited scenes (narration/visual/media/audio) to script.json,
     keeping the existing images/videos asset lists."""
@@ -143,8 +142,18 @@ def save_scenes(draft_id: int, scenes: list, config: Config) -> dict:
         }
         if sc.get("audio_error"):
             item["audio_error"] = sc["audio_error"]
+        if sc.get("bg_custom"):
+            item["bg_custom"] = sc["bg_custom"]
         clean.append(item)
     script["scenes"] = clean
+    # Collect all upload references into a flat list so the frontend
+    # doesn't need to derive it from scenes (avoids disappearing uploads).
+    uploads: list[str] = []
+    for it in clean:
+        p = it.get("bg_custom") or _extract_upload(it.get("media", ""))
+        if p and p not in uploads:
+            uploads.append(p)
+    script["uploads"] = uploads
     _save_script(draft_id, script, config)
     return script
 
@@ -163,25 +172,20 @@ def resynth_scenes(draft_id: int, indices: list[int], tts: TTSProvider,
     out_dir.mkdir(parents=True, exist_ok=True)
 
     targets = [i for i in indices if 0 <= i < len(scenes)]
-    emit(f"重新配音 {len(targets)} 个分镜（并行）…")
-
-    def synth_one(i):
+    emit(f"重新配音 {len(targets)} 个分镜…")
+    for i in targets:
         sc = scenes[i]
-        stem = out_dir / f"scene-{i}-{secrets.token_hex(3)}"
+        emit(f"配音 #{i + 1}：{sc.get('narration', '')[:30]}")
         try:
+            # unique name so reordered/edited scenes don't clobber each other
+            stem = out_dir / f"scene-{i}-{secrets.token_hex(3)}"
             audio = tts.synthesize(sc.get("narration", ""), stem)
-            return i, audio.name, None
+            sc["audio"] = audio.name
+            sc.pop("audio_error", None)
         except Exception as e:  # noqa: BLE001
-            return i, None, str(e)
-
-    with ThreadPoolExecutor(max_workers=min(len(targets), 6)) as pool:
-        for i, fname, err in pool.map(synth_one, targets):
-            if err:
-                scenes[i]["audio"] = None
-                scenes[i]["audio_error"] = err
-            else:
-                scenes[i]["audio"] = fname
-                scenes[i].pop("audio_error", None)
+            sc["audio"] = None
+            sc["audio_error"] = str(e)
+            emit(f"  失败：{e}")
 
     if tts_provider is not None:
         script["tts_provider"] = tts_provider

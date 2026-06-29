@@ -67,7 +67,7 @@ def create_app(config: Config | None = None,
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.scheduler = start_if_enabled(get_store(), run_now)
+        app.state.scheduler = start_if_enabled(get_store(), _scheduled_run)
         yield
         sched = getattr(app.state, "scheduler", None)
         if sched is not None and sched.running:
@@ -118,6 +118,32 @@ def create_app(config: Config | None = None,
                 del run_state["logs"][:-500]
             if stats is not None:
                 run_state["stats"] = dict(stats)
+
+    def _scheduled_run():
+        """Scheduler callback — mirrors trigger_run so scheduled runs
+        show real-time progress and disable the Run Now button."""
+        with run_lock:
+            if run_state["running"]:
+                return  # already running, skip this cycle
+            run_state.update(running=True, error=None, stats={}, logs=[],
+                             started_at=datetime.now().isoformat(timespec="seconds"),
+                             finished_at=None)
+        try:
+            _log("开始定时运行流水线")
+            stats = run_now(progress=_log)
+            with run_lock:
+                if stats:
+                    run_state["stats"] = dict(stats)
+            _log("定时运行成功结束", run_state["stats"])
+        except Exception as e:  # noqa: BLE001 - surface to UI log
+            with run_lock:
+                run_state["error"] = str(e)
+            _log(f"定时运行出错：{e}")
+        finally:
+            with run_lock:
+                run_state["running"] = False
+                run_state["finished_at"] = datetime.now().isoformat(
+                    timespec="seconds")
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
@@ -765,7 +791,12 @@ def create_app(config: Config | None = None,
     async def api_save_script(draft_id: int, request: Request):
         data = await request.json()
         script = save_scenes(draft_id, data.get("scenes", []), config)
-        return {"ok": True, "scenes": script.get("scenes", [])}
+        saved = script.get("scenes", [])
+        # Log first scene's bg_custom for debugging
+        if saved:
+            s0 = saved[0]
+            print(f"[save_script] scene[0] bg_custom={s0.get('bg_custom')!r}  media={s0.get('media')!r}", flush=True)
+        return {"ok": True, "scenes": saved}
 
     @app.post("/api/script/{draft_id}/resynth")
     async def api_resynth_script(draft_id: int, request: Request):
@@ -804,6 +835,30 @@ def create_app(config: Config | None = None,
 
         threading.Thread(target=worker, daemon=True).start()
         return {"started": True, "running": True}
+
+    @app.post("/api/script/{draft_id}/upload-bg")
+    async def api_upload_bg(draft_id: int, file: UploadFile = File(...)):
+        """Upload a custom background image for a scene.
+
+        Saves to *data/videos/draft-{id}/bg-{uuid}.ext* and returns the
+        relative path the frontend can embed in a scene's *bg_custom* field.
+        """
+        import uuid
+        from fastapi.responses import JSONResponse
+
+        out_dir = config.videos_dir / f"draft-{draft_id}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        ext = (Path(file.filename or "image.jpg").suffix
+               if file.filename else ".jpg")
+        name = f"bg-{uuid.uuid4().hex[:12]}{ext}"
+        dest = out_dir / name
+
+        content = await file.read()
+        dest.write_bytes(content)
+
+        return {"ok": True, "path": name,
+                "url": f"/videos/draft-{draft_id}/{name}"}
 
     # ---- available TTS voices for the per-draft voice selector ----
     _KITTEN_PROFILES = [
@@ -913,6 +968,14 @@ def create_app(config: Config | None = None,
         def worker():
             try:
                 rc = Config.load(store=get_store())
+                # Debug: peek at script.json before building
+                import json as _json
+                _sp = rc.videos_dir / f"draft-{draft_id}" / "script.json"
+                if _sp.exists():
+                    _s = _json.loads(_sp.read_text("utf-8"))
+                    for _si, _sc in enumerate(_s.get("scenes", [])):
+                        if _sc.get("bg_custom"):
+                            print(f"[build_video] scene[{_si}] bg_custom={_sc['bg_custom']!r}  exists={(_sp.parent / _sc['bg_custom']).exists()}", flush=True)
                 build_explainer_video(draft_id, rc, progress=_vid_log)
                 with vid_lock:
                     vid_state["done"] = True

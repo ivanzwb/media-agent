@@ -168,8 +168,8 @@
         if (s.error) {
           document.getElementById('nar-status').textContent = '生成失败：' + s.error;
         } else {
-          document.getElementById('nar-status').textContent = '完成，刷新查看分镜与配音';
-          window.location.reload();
+          document.getElementById('nar-status').textContent = '完成 ✓';
+          se_load();
         }
       }
     } catch (e) {
@@ -210,8 +210,17 @@
         if (s.error) {
           document.getElementById('vid-status').textContent = '合成失败：' + s.error;
         } else {
-          document.getElementById('vid-status').textContent = '完成，刷新查看视频';
-          window.location.reload();
+          document.getElementById('vid-status').textContent = '合成完成 ✓';
+          // Reload scene data + video player without full page reload,
+          // avoiding the server-side ConnectionResetError noise from
+          // window.location.reload().
+          se_load();
+          const player = document.getElementById('vid-player');
+          if (player) {
+            player.src = '/videos/draft-' + draftId + '/video.mp4?_=' + Date.now();
+            player.style.display = 'block';
+            player.load();
+          }
         }
       }
     } catch (e) {
@@ -223,6 +232,13 @@
     const btn = document.getElementById('vid-btn');
     btn.disabled = true;
     document.getElementById('vid-status').textContent = '⏳ 合成中…';
+    // Auto-save scenes so the server reads the latest data (bg uploads, edits).
+    try {
+      await fetch('/api/script/' + draftId, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenes: sceneState.scenes })
+      });
+    } catch (_) { /* non-fatal — server script.json may be stale */ }
     try {
       const data = await (await fetch('/drafts/' + draftId + '/video', {method: 'POST'})).json();
       if (data.started === false) {
@@ -234,7 +250,7 @@
 
   // ---- editable narration scene editor (issue #6) ----
   const SCENE_DRAFT = {{ draft.id }};
-  let sceneState = { scenes: [], images: [], videos: [], orig: [] };
+  let sceneState = { scenes: [], images: [], videos: [], orig: [], uploads: [] };
 
   function se_esc(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;')
@@ -246,6 +262,18 @@
     catch (e) { return String(u); }
   }
 
+  function se_bgCustomName(p) {
+    // p is like "bg-abc123.jpg" → short display name
+    const s = String(p || '');
+    return s.replace(/^bg-/i, '').replace(/^bg_/i, '');
+  }
+  function se_uploadMedia(path) {
+    // Normalise a bg_custom path to upload:media syntax.
+    // "bg-xxx.jpg" → "upload:bg-xxx.jpg"
+    if (!path) return '';
+    if (/^upload:/.test(path)) return path;
+    return 'upload:' + path;
+  }
   function se_mediaOptions(selected) {
     let o = '<option value="none"' + (selected === 'none' ? ' selected' : '') +
       '>none（纯色/自动配图）</option>';
@@ -259,14 +287,31 @@
       o += '<option value="' + v + '"' + (selected === v ? ' selected' : '') +
         '>▶ ' + v + '（' + se_esc(se_base(u)) + '）</option>';
     });
+    // Uploaded backgrounds — from a dedicated list (not derived from scenes)
+    // so they persist even when no scene currently references them.
+    sceneState.uploads.forEach(function (path) {
+      const v = se_uploadMedia(path);
+      o += '<option value="' + v + '"' + (selected === v ? ' selected' : '') +
+        '>☝ ' + se_esc(se_bgCustomName(path)) + '</option>';
+    });
     return o;
   }
-  function se_thumb(media) {
-    let m = /^image:(\d+)$/.exec(media || '');
+  function se_thumb(i) {
+    const sc = sceneState.scenes[i];
+    const media = sc.media || 'none';
+    // Check upload: prefix, then bg_custom fallback (backward compat)
+    let path = null;
+    let m = /^upload:(.+)$/.exec(media);
+    if (m) path = m[1];
+    if (!path && sc.bg_custom) path = sc.bg_custom;
+    if (path) {
+      return '<img class="scene-thumb" src="/videos/draft-' + SCENE_DRAFT + '/' + path + '"/>';
+    }
+    m = /^image:(\d+)$/.exec(media);
     if (m && sceneState.images[+m[1] - 1]) {
       return '<img class="scene-thumb" src="' + sceneState.images[+m[1] - 1] + '"/>';
     }
-    m = /^video:(\d+)$/.exec(media || '');
+    m = /^video:(\d+)$/.exec(media);
     if (m && sceneState.videos[+m[1] - 1]) {
       return '<span class="muted">▶ ' + se_esc(se_base(sceneState.videos[+m[1] - 1])) + '</span>';
     }
@@ -292,7 +337,11 @@
         '<input value="' + se_attr(sc.visual || '') + '" oninput="se_set(' + i + ',\'visual\',this.value)"/>' +
         '<label class="muted">背景素材</label>' +
         '<div class="scene-media"><select onchange="se_media(' + i + ',this.value)">' +
-        se_mediaOptions(sc.media || 'none') + '</select> ' + se_thumb(sc.media || 'none') + '</div>' +
+        se_mediaOptions(sc.media || 'none') + '</select> ' + se_thumb(i) +
+        '<span style="margin-left:6px">' +
+        '<button type="button" class="btn small" onclick="se_uploadBg(' + i + ')">上传</button>' +
+        (sc.bg_custom ? '<button type="button" class="btn small danger" onclick="se_removeBg(' + i + ')" style="margin-left:4px">清除</button>' : '') +
+        '</span></div>' +
         '<div class="scene-audio">' + (sc.audio ?
           '<audio controls preload="none" src="/videos/draft-' + SCENE_DRAFT + '/' + sc.audio + '"></audio>' +
           '<button type="button" class="btn small" onclick="se_resynth(' + i + ')" style="margin-left:6px">重新配音</button>' :
@@ -311,7 +360,53 @@
   }
 
   function se_set(i, f, v) { sceneState.scenes[i][f] = v; }
-  function se_media(i, v) { sceneState.scenes[i].media = v; se_render(); }
+  function se_media(i, v) {
+    sceneState.scenes[i].media = v;
+    var m = /^upload:(.+)$/.exec(v);
+    if (m) {
+      // Sync bg_custom so the builder picks it up on intro/outro scenes.
+      sceneState.scenes[i].bg_custom = m[1];
+    } else {
+      // Selecting non-upload media: clear stale bg_custom so se_thumb
+      // correctly falls through to image:/video: thumbnail logic.
+      delete sceneState.scenes[i].bg_custom;
+    }
+    se_render();
+  }
+  function se_removeBg(i) {
+    delete sceneState.scenes[i].bg_custom;
+    sceneState.scenes[i].media = 'none';
+    se_render();
+  }
+  function se_uploadBg(i) {
+    const draftId = SCENE_DRAFT;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/webp,image/gif';
+    input.onchange = async function () {
+      if (!input.files || !input.files[0]) return;
+      const fd = new FormData();
+      fd.append('file', input.files[0]);
+      try {
+        const r = await (await fetch('/api/script/' + draftId + '/upload-bg', {
+          method: 'POST', body: fd,
+        })).json();
+        if (r.ok) {
+          sceneState.scenes[i].bg_custom = r.path;
+          sceneState.scenes[i].media = 'upload:' + r.path;
+          if (!sceneState.uploads.includes(r.path)) {
+            sceneState.uploads.push(r.path);
+          }
+          se_render();
+        } else {
+          alert('上传失败：' + (r.message || '未知错误'));
+        }
+      } catch (e) {
+        alert('上传失败：' + (e.message || e));
+      }
+    };
+    input.click();
+  }
   function se_move(i, d) {
     const j = i + d, a = sceneState.scenes, o = sceneState.orig;
     if (j < 0 || j >= a.length) return;
@@ -443,6 +538,14 @@
       sceneState.images = s.images || [];
       sceneState.videos = s.videos || [];
       sceneState.orig = sceneState.scenes.map(function (x) { return x.narration; });
+      // Populate uploads from server data (fallback: derive from scenes)
+      sceneState.uploads = s.uploads || [];
+      if (sceneState.uploads.length === 0) {
+        sceneState.scenes.forEach(function (sc) {
+          const p = sc.bg_custom || (/^upload:(.+)$/.exec(sc.media || '') || [])[1];
+          if (p && !sceneState.uploads.includes(p)) sceneState.uploads.push(p);
+        });
+      }
       se_render();
     } catch (e) { /* ignore */ }
   }
