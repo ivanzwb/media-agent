@@ -54,10 +54,7 @@
       <span class="tb-sep">|</span>
       <span class="tb-label">同步到平台：</span>
       {% for p in platforms %}
-      <form method="post" action="/drafts/{{ draft.id }}/adapt" class="tb-form">
-        <input type="hidden" name="platform" value="{{ p.id }}"/>
-        <button type="submit" class="btn small">{{ p.label }}</button>
-      </form>
+      <button type="button" class="btn small" onclick="adaptToPlatform('{{ p.id }}', {{ draft.id }})">{{ p.label }}</button>
       {% endfor %}
       <a class="btn small" href="/drafts">返回列表</a>
     </div>
@@ -484,6 +481,39 @@
     try {
       await navigator.clipboard.writeText(title + '\n\n' + body);
     } catch (_) { /* ignore */ }
+  }
+
+  async function adaptToPlatform(platformId, draftId) {
+    // Call backend to LLM-adapt content for target platform, copy to clipboard,
+    // then open the platform's editor page.
+    const btn = event.target;
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ 适配中…';
+    try {
+      const formData = new FormData();
+      formData.set('platform', platformId);
+      const resp = await fetch('/drafts/' + draftId + '/adapt', {
+        method: 'POST', body: formData
+      });
+      if (!resp.ok) {
+        alert('适配失败：' + resp.status);
+        return;
+      }
+      const data = await resp.json();
+      const title = (data.title_candidates && data.title_candidates[0]) || '';
+      const body = data.body_md || '';
+      await navigator.clipboard.writeText(title + '\n\n' + body);
+      if (data.publish_url) {
+        window.open(data.publish_url, '_blank', 'noopener');
+      }
+      btn.textContent = '✅ 已复制';
+      setTimeout(function () { btn.textContent = origText; btn.disabled = false; }, 2000);
+    } catch (e) {
+      btn.textContent = origText;
+      btn.disabled = false;
+      alert('适配请求失败：' + e.message);
+    }
   }
 </script>
 {% endblock %}

@@ -146,8 +146,7 @@ def _extract_json(text: str) -> dict | None:
             return None
 
 
-def rewrite(article: Article, provider: LLMProvider,
-            platform: str = "master") -> Draft:
+def rewrite(article: Article, provider: LLMProvider) -> Draft:
     videos = getattr(article, "videos", []) or []
     manifest_text, media_map = _build_manifest(article.images, videos)
 
@@ -189,7 +188,6 @@ def rewrite(article: Article, provider: LLMProvider,
 
     return Draft(
         article_id=article.id or 0,
-        platform=platform,
         title_candidates=title_candidates,
         body_md=body_with_source,
         topic=article.topic or "uncategorized",

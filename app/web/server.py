@@ -21,7 +21,7 @@ from app.images.base import get_image_provider
 from app.llm.base import get_provider
 from app.models import Article, Draft
 from app.pipeline.adapter import adapt, PLATFORMS
-from app.platforms.registry import list_all as list_platforms
+from app.platforms.registry import get as get_platform, list_all as list_platforms
 from app.pipeline.images import attach_cover
 from app.pipeline.narration import (
     generate_narration, load_narration, save_scenes, resynth_scenes)
@@ -228,8 +228,8 @@ def create_app(config: Config | None = None,
             model=run_config.image_model,
             base_url=run_config.image_api_base or run_config.llm_api_base)
 
-        # Overwrite semantics: replace any existing master draft.
-        old = store.get_master_draft_for_article(article_id)
+        # Overwrite semantics: replace any existing draft.
+        old = store.get_draft_for_article(article_id)
         if old:
             store.delete_draft(old["id"])
 
@@ -1006,10 +1006,9 @@ def create_app(config: Config | None = None,
     @app.post("/drafts/{draft_id}/adapt")
     def draft_adapt(draft_id: int, platform: str = Form(...)):
         store = get_store()
-        row = store.get_draft(draft_id)
         meta = store.read_draft_body(draft_id)
-        if not row or not meta:
-            return HTMLResponse("draft not found", status_code=404)
+        if not meta:
+            return JSONResponse({"error": "draft not found"}, status_code=404)
         titles = meta.get("title_candidates") or ["稿件"]
         run_config = Config.load(store=store)
         provider = get_provider(run_config.llm_provider,
@@ -1018,23 +1017,18 @@ def create_app(config: Config | None = None,
                                 base_url=run_config.llm_api_base)
         result = adapt(meta.get("body_md", ""), titles[0], platform, provider)
 
-        # Append promotion footer to all platform drafts if configured
+        # Append promotion footer if configured
         footer = run_config.promotion_footer
         if footer:
             result["body_md"] = result["body_md"].rstrip() + f"\n\n---\n{footer}\n"
 
-        new_draft = Draft(
-            article_id=row["article_id"], platform=platform,
-            title_candidates=result["title_candidates"],
-            body_md=result["body_md"],
-            topic=meta.get("topic", "uncategorized"),
-            source_url=meta.get("source_url", ""),
-            source_name=meta.get("source_name", ""),
-            cover_image=meta.get("cover_image"),
-            title_cn=meta.get("title_cn") or None)
-        sanitize_draft(new_draft, load_words(run_config))
-        saved = store.save_draft(new_draft)
-        return RedirectResponse(url=f"/drafts/{saved.id}/edit", status_code=303)
+        p = get_platform(platform)
+        return JSONResponse({
+            "title_candidates": result["title_candidates"],
+            "body_md": result["body_md"],
+            "publish_url": p.publish_url if p else None,
+            "platform_label": p.label if p else platform,
+        })
 
     def _voice_display_name(voice_id: str, config) -> str:
         """Resolve a voice ID to its display name, falling back to the raw value."""

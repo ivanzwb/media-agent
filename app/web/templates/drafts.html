@@ -9,13 +9,12 @@
   {% endfor %}
 </div>
 <table>
-    <thead><tr><th>#</th><th>状态</th><th>平台</th><th>中文标题</th><th>文件</th><th>更新时间</th><th></th></tr></thead>
+    <thead><tr><th>#</th><th>状态</th><th>中文标题</th><th>文件</th><th>更新时间</th><th></th></tr></thead>
   <tbody>
   {% for d in drafts %}
     <tr>
       <td>{{ d.id }}</td>
       <td><span class="badge {{ d.status }}">{{ d.status }}</span></td>
-      <td>{{ d.platform }}</td>
       <td>{{ d.title_cn or d.display_title or '—' }}</td>
       <td class="path">{{ d.draft_path }}</td>
       <td>{{ d.updated_at }}</td>

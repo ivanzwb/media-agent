@@ -96,7 +96,6 @@ def _append_prompt(draft: Draft, store: Store) -> None:
         topic=meta.get("topic", ""),
         source_url=meta.get("source_url", ""),
         source_name=meta.get("source_name", ""),
-        platform=draft.platform,
         status=meta.get("status", "drafted"),
     )
     prompt_block = inject_image_prompt(prompt_draft)

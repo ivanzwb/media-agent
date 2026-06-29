@@ -24,7 +24,7 @@ def test_download_skips_empty(tmp_path):
 
 
 def test_attach_cover_sets_path_and_writes(tmp_path):
-    draft = Draft(article_id=1, platform="master",
+    draft = Draft(article_id=1,
                   title_candidates=["震撼AI新闻"], body_md="b", topic="AI",
                   source_url="https://x.com/a", source_name="X")
     out = attach_cover(draft, MockImageProvider(), tmp_path)

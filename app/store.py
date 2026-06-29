@@ -80,7 +80,7 @@ class Store:
         topic = draft.topic or "uncategorized"
         slug = _slug(draft.title_candidates[0] if draft.title_candidates
                      else "draft")[:60]
-        rel = Path("drafts") / topic / f"{draft.article_id}-{draft.platform}-{slug}.md"
+        rel = Path("drafts") / topic / f"{draft.article_id}-{slug}.md"
         abs_path = self.config.data_dir / rel
         abs_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -89,7 +89,6 @@ class Store:
             "topic": draft.topic,
             "source_url": draft.source_url,
             "source_name": draft.source_name,
-            "platform": draft.platform,
             "cover_image": draft.cover_image,
             "flagged_claims": draft.flagged_claims,
             "sensitive_hits": getattr(draft, "sensitive_hits", []) or [],
@@ -103,10 +102,10 @@ class Store:
 
         cur = self.conn.execute(
             """INSERT INTO drafts
-            (article_id, platform, draft_path, cover_image, title_cn,
+            (article_id, draft_path, cover_image, title_cn,
              status, updated_at)
-            VALUES (?,?,?,?,?,?,?)""",
-            (draft.article_id, draft.platform, draft.draft_path,
+            VALUES (?,?,?,?,?,?)""",
+            (draft.article_id, draft.draft_path,
              draft.cover_image, draft.title_cn, draft.status,
              datetime.now(timezone.utc).isoformat()))
         self.conn.commit()
@@ -173,19 +172,19 @@ class Store:
         abs_path.write_text(frontmatter.dumps(post), encoding="utf-8")
 
     def drafts_by_article(self) -> dict[int, int]:
-        """Map article_id -> a draft id (preferring the master draft)."""
+        """Map article_id -> a draft id."""
         rows = self.conn.execute(
-            "SELECT id, article_id, platform FROM drafts ORDER BY id").fetchall()
+            "SELECT id, article_id FROM drafts ORDER BY id").fetchall()
         out: dict[int, int] = {}
         for r in rows:
             aid = r["article_id"]
-            if aid not in out or r["platform"] == "master":
+            if aid not in out:
                 out[aid] = r["id"]
         return out
 
-    def get_master_draft_for_article(self, article_id: int):
+    def get_draft_for_article(self, article_id: int):
         return self.conn.execute(
-            "SELECT * FROM drafts WHERE article_id=? AND platform='master' "
+            "SELECT * FROM drafts WHERE article_id=? "
             "ORDER BY id DESC LIMIT 1", (article_id,)).fetchone()
 
     def delete_draft(self, draft_id: int) -> None:

@@ -50,7 +50,7 @@ def test_exists_by_fingerprint(tmp_path):
 def test_save_draft_writes_md(tmp_path):
     store = make_store(tmp_path)
     art = store.save_article(sample_article())
-    draft = Draft(article_id=art.id, platform="master",
+    draft = Draft(article_id=art.id,
                   title_candidates=["T1", "T2"], body_md="## Hook\ntext",
                   topic="AI", source_url=art.url, source_name=art.source_name)
     saved = store.save_draft(draft)

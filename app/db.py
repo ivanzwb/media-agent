@@ -29,7 +29,6 @@ CREATE TABLE IF NOT EXISTS articles (
 CREATE TABLE IF NOT EXISTS drafts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     article_id INTEGER NOT NULL,
-    platform TEXT NOT NULL DEFAULT 'master',
     draft_path TEXT,
     cover_image TEXT,
     title_cn TEXT,
@@ -65,4 +64,9 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE drafts ADD COLUMN title_cn TEXT")
     except sqlite3.OperationalError:
         pass  # column already exists
+    # Migrate: drop platform column (no longer needed)
+    try:
+        conn.execute("ALTER TABLE drafts DROP COLUMN platform")
+    except sqlite3.OperationalError:
+        pass  # column may not exist (SQLite < 3.35 or already dropped)
     conn.commit()

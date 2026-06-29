@@ -43,7 +43,7 @@ def test_load_words_merges_custom(tmp_path):
 
 
 def test_sanitize_draft_cleans_body_and_titles():
-    d = Draft(article_id=1, platform="master",
+    d = Draft(article_id=1,
               title_candidates=["最好的方案", "普通标题"],
               body_md="本产品100%有效，全网最低", topic="AI",
               source_url="", source_name="")

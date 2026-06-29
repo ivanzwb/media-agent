@@ -25,7 +25,7 @@ def sample_article(url="https://x.com/a", topic="AI", title="Big AI News"):
 
 
 def seed_draft(store, art):
-    draft = Draft(article_id=art.id, platform="master",
+    draft = Draft(article_id=art.id,
                   title_candidates=["T1", "T2"], body_md="## Hook\ntext",
                   topic="AI", source_url=art.url, source_name=art.source_name)
     return store.save_draft(draft)

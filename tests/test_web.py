@@ -26,7 +26,7 @@ def seed(store):
         raw_summary=None, fetched_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
         topic="AI"))
     draft = store.save_draft(Draft(
-        article_id=art.id, platform="master", title_candidates=["原标题"],
+        article_id=art.id, title_candidates=["原标题"],
         body_md="## 钩子\n正文内容", topic="AI", source_url=art.url,
         source_name=art.source_name, flagged_claims=["可疑说法X"]))
     return art, draft
@@ -177,21 +177,21 @@ def test_archive_rewrite_article(tmp_path):
         published_at=datetime(2026, 1, 1, tzinfo=timezone.utc), images=[],
         raw_summary=None, fetched_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
         topic="AI"))
-    assert store.get_master_draft_for_article(art.id) is None
+    assert store.get_draft_for_article(art.id) is None
 
     r = client.post(f"/archive/{art.id}/rewrite")
     assert r.status_code == 200
     data = r.json()
     assert data["ok"] is True
     assert data["draft_id"]
-    # now there is a master draft for this article
-    assert store.get_master_draft_for_article(art.id) is not None
-    # rewrite again should overwrite (still exactly one master draft)
+    # now there is a draft for this article
+    assert store.get_draft_for_article(art.id) is not None
+    # rewrite again should overwrite (still exactly one draft)
     r2 = client.post(f"/archive/{art.id}/rewrite")
     assert r2.json()["ok"] is True
-    masters = [d for d in store.list_drafts()
-               if d["article_id"] == art.id and d["platform"] == "master"]
-    assert len(masters) == 1
+    drafts_for_article = [d for d in store.list_drafts()
+               if d["article_id"] == art.id]
+    assert len(drafts_for_article) == 1
 
 
 def test_export_config(tmp_path):
@@ -279,13 +279,15 @@ def test_sources_search_adds(tmp_path, monkeypatch):
     assert any(s.url == "https://kw.com/" for s in cfg.sources)
 
 
-def test_draft_adapt_creates_platform_draft(tmp_path):
+def test_draft_adapt_returns_json(tmp_path):
     client, store, _ = make_client(tmp_path)
     art, draft = seed(store)
-    before = len(store.list_drafts())
     r = client.post(f"/drafts/{draft.id}/adapt",
-                    data={"platform": "xiaohongshu"}, follow_redirects=False)
-    assert r.status_code == 303
-    drafts = store.list_drafts()
-    assert len(drafts) == before + 1
-    assert any(d["platform"] == "xiaohongshu" for d in drafts)
+                    data={"platform": "xiaohongshu"})
+    assert r.status_code == 200
+    data = r.json()
+    assert "body_md" in data
+    assert "title_candidates" in data
+    assert "publish_url" in data
+    # Should NOT create a new draft
+    assert len(store.list_drafts()) == 1

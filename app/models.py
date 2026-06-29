@@ -61,7 +61,6 @@ class Article:
 @dataclass
 class Draft:
     article_id: int
-    platform: str
     title_candidates: list[str]
     body_md: str
     topic: str
