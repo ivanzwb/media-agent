@@ -254,14 +254,15 @@ def create_app(config: Config | None = None,
             model=run_config.image_model,
             base_url=run_config.image_api_base or run_config.llm_api_base)
 
-        # Overwrite semantics: replace any existing draft.
-        old = store.get_draft_for_article(article_id)
-        if old:
-            store.delete_draft(old["id"])
-
+        # Create-then-delete: save new draft first, then remove old one.
+        # This prevents draft loss if rewrite() or save_draft() fails.
         draft = rewrite(art, provider)
         sanitize_draft(draft, load_words(run_config))
         saved = store.save_draft(draft)
+
+        old = store.get_draft_for_article(article_id)
+        if old and old["id"] != saved.id:
+            store.delete_draft(old["id"])
         if image_provider is not None:
             attach_cover(saved, image_provider, store.config.images_dir)
             if saved.cover_image:
