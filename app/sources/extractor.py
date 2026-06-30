@@ -157,62 +157,81 @@ def _content_fallback(html: str) -> str:
     return "\n\n".join(texts)
 
 
+# An optionally backslash-escaped quote. Lets the JSON patterns below also
+# match dates embedded in JS hydration blobs (Next.js RSC ``self.__next_f``,
+# ``__NEXT_DATA__``, Nuxt, etc.) where the JSON is serialized inside a JS
+# string and every quote is escaped as ``\"``.
+_Q = r'\\?["\']'
+# Date-ish value: digits + the punctuation found in ISO 8601 / common dates.
+_DATEVAL = r'([0-9T:.+\-/ ]{6,40}Z?)'
+
+
+def _meta_patterns(attr_value: str) -> list[str]:
+    """Regexes for ``<meta property|name|itemprop="attr_value" content=...>``
+    matching either attribute order (content before or after the key)."""
+    return [
+        rf'<meta\b[^>]*?(?:property|name|itemprop)=["\']{attr_value}["\']'
+        rf'[^>]*?\bcontent=["\']([^"\']+)["\']',
+        rf'<meta\b[^>]*?\bcontent=["\']([^"\']+)["\'][^>]*?'
+        rf'(?:property|name|itemprop)=["\']{attr_value}["\']',
+    ]
+
+
+def _json_key_pattern(key: str) -> str:
+    """Match ``"key":"<date>"`` inside JSON / JS blobs, tolerating escaped
+    quotes (``\\"key\\":\\"...\\"``)."""
+    return rf'{_Q}{key}{_Q}\s*:\s*{_Q}{_DATEVAL}'
+
+
+def _build_date_patterns() -> list[str]:
+    """Priority-ordered date patterns: trustworthy *published* signals first,
+    then created/modified timestamps as a last resort."""
+    pats: list[str] = []
+    # 1. Strongest: explicit "published" meta (OpenGraph / article / og).
+    for v in ("(?:og:|article:)?published_time", "article:published",
+              "og:published_time"):
+        pats += _meta_patterns(v)
+    # 2. schema.org microdata <meta itemprop="datePublished">.
+    pats += _meta_patterns("datePublished")
+    # 3. JSON-LD / JS-hydration "published" keys (escaped-quote tolerant).
+    #    NOTE: this is what recovers dates on Next.js/Sanity sites where the
+    #    only date lives in the RSC stream as e.g. \"publishedOn\":\"...\".
+    for k in ("datePublished", "publishedOn", "publishedAt", "publishDate",
+              "published_time", "firstPublishedAt", "pubDate", "postDate",
+              "publication_date"):
+        pats.append(_json_key_pattern(k))
+    # 4. Common CMS meta names.
+    for v in ("pubdate", "publishdate", "date", r"dc\.date", r"dc\.date\.issued",
+              "sailthru.date", "parsely-pub-date", "article.published"):
+        pats += _meta_patterns(v)
+    # 5. <time datetime="..."> — usually the publish date (sometimes a comment
+    #    timestamp), so it sits below the explicit signals above.
+    pats.append(r'<time\b[^>]*?\bdatetime=["\']([^"\']+)["\']')
+    # 6. Last resort: created / modified timestamps.
+    for k in ("dateCreated", "dateModified", "_createdAt", "_updatedAt",
+              "createdAt", "modified_time"):
+        pats.append(_json_key_pattern(k))
+    for v in ("article:modified_time", "og:updated_time"):
+        pats += _meta_patterns(v)
+    return pats
+
+
+_DATE_PATTERNS: list[str] = _build_date_patterns()
+
+
 def _date_from_html(html: str) -> datetime | None:
-    """Extract a publish/creation date from HTML meta tags, attributes, and
-    structured data."""
-    candidates: list[str] = []
+    """Extract a publish (or, failing that, created/modified) date.
 
-    # 1. Open Graph / article meta: <meta property="article:published_time">
-    for m in re.finditer(
-        r'<meta\b[^>]*?(?:property|name)=["\'](?:article:)?published_time["\']'
-        r'\s+content=["\']([^"\']+)["\'][^>]*/?>',
-        html, re.I,
-    ):
-        candidates.append(m.group(1))
-    for m in re.finditer(
-        r'<meta\b[^>]*?content=["\']([^"\']+)["\'][^>]*?'
-        r'(?:property|name)=["\'](?:article:)?published_time["\'][^>]*/?>',
-        html, re.I,
-    ):
-        candidates.append(m.group(1))
-
-    # 2. <meta name="pubdate" content="...">
-    for m in re.finditer(
-        r'<meta\b[^>]*?name=["\']pubdate["\']\s+content=["\']([^"\']+)["\'][^>]*/?>',
-        html, re.I,
-    ):
-        candidates.append(m.group(1))
-
-    # 3. <meta name="dc.date" content="..."> (Dublin Core)
-    for m in re.finditer(
-        r'<meta\b[^>]*?name=["\']dc\.date["\']\s+content=["\']([^"\']+)["\'][^>]*/?>',
-        html, re.I,
-    ):
-        candidates.append(m.group(1))
-
-    # 4. <time datetime="..."> — schema.org / HTML5
-    for m in re.finditer(
-        r'<time\b[^>]*?datetime=["\']([^"\']+)["\']',
-        html, re.I,
-    ):
-        candidates.append(m.group(1))
-
-    # 5. JSON-LD (schema.org) — naive regex for "datePublished"
-    for m in re.finditer(
-        r'"datePublished"\s*:\s*"([^"]+)"',
-        html,
-    ):
-        candidates.append(m.group(1))
-    for m in re.finditer(
-        r'"dateCreated"\s*:\s*"([^"]+)"',
-        html,
-    ):
-        candidates.append(m.group(1))
-
-    for raw in candidates:
-        parsed = parse_date(raw)
-        if parsed is not None:
-            return parsed
+    Scans, in priority order: OpenGraph/article meta, schema.org microdata,
+    JSON-LD and JS-hydration blobs (Next.js RSC / ``__NEXT_DATA__`` — including
+    backslash-escaped JSON), common CMS meta names, ``<time>`` elements, and
+    finally created/modified timestamps. Returns the first value that parses.
+    """
+    for pat in _DATE_PATTERNS:
+        for m in re.finditer(pat, html, re.I):
+            parsed = parse_date(m.group(1))
+            if parsed is not None:
+                return parsed
     return None
 
 

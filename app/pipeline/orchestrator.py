@@ -28,10 +28,10 @@ def _fetch_source(src) -> list[Article]:
             return scrape_list(
                 src.url, src.name, include_pattern=src.include_pattern,
                 exclude_pattern=src.exclude_pattern,
-                max_pages=getattr(src, "max_pages", 1) or 1,
-                render_js=getattr(src, "render_js", False))
+                max_pages=getattr(src, "max_pages", 3) or 3,
+                render_js=getattr(src, "render_js", True))
         art = scrape_single(src.url, src.name,
-                            render_js=getattr(src, "render_js", False))
+                            render_js=getattr(src, "render_js", True))
         return [art] if art else []
     return []
 

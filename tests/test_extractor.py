@@ -2,7 +2,7 @@ from pathlib import Path
 
 from app.sources.extractor import (
     extract_from_html, _videos_with_placeholders, _images_from_html,
-    _videos_from_html)
+    _videos_from_html, _date_from_html)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_article.html"
 
@@ -113,3 +113,56 @@ def test_extract_collects_videos():
     assert "https://www.youtube.com/embed/xyz" in vids
     assert any("clip.mp4" in v for v in vids)  # relative -> absolute
     assert all("ads.example.com" not in v for v in vids)
+
+
+# ── date extraction ───────────────────────────────────────────────────────
+
+def test_date_from_standard_meta_and_jsonld():
+    cases = [
+        '<meta property="article:published_time" content="2024-05-13T10:30:00Z"/>',
+        '<meta content="2024-05-13T10:30:00+00:00" property="article:published_time">',
+        '<meta itemprop="datePublished" content="2024-05-13">',
+        '<meta name="parsely-pub-date" content="2024-05-13T10:30:00Z">',
+        '<script type="application/ld+json">{"@type":"NewsArticle",'
+        '"datePublished":"2024-05-13T10:30:00.000Z"}</script>',
+        '<time datetime="2024-05-13T10:30:00">May 13</time>',
+        '<meta name="pubdate" content="2024年5月13日">',
+    ]
+    for html in cases:
+        dt = _date_from_html(html)
+        assert dt is not None, html
+        assert (dt.year, dt.month, dt.day) == (2024, 5, 13), html
+
+
+def test_date_from_js_hydration_blob_escaped_quotes():
+    """Next.js RSC / __NEXT_DATA__ embed JSON as an escaped JS string, so the
+    date appears as \\"publishedOn\\":\\"...\\" — the original regex missed it,
+    which is why every article showed '-' for published time."""
+    html = (
+        r'<script>self.__next_f.push([1,"6:[\"$\",\"$L15\",null,'
+        r'{\"post\":{\"_createdAt\":\"2024-06-17T18:08:09Z\",'
+        r'\"publishedOn\":\"2024-06-21T03:28:00.000Z\"}}"])</script>'
+    )
+    dt = _date_from_html(html)
+    assert dt is not None
+    assert (dt.year, dt.month, dt.day) == (2024, 6, 21)
+
+
+def test_date_prefers_published_over_created_modified():
+    html = (
+        r'{\"_createdAt\":\"2020-01-01T00:00:00Z\",'
+        r'\"_updatedAt\":\"2025-09-09T00:00:00Z\",'
+        r'\"publishedAt\":\"2024-06-21T03:28:00Z\"}'
+    )
+    dt = _date_from_html(html)
+    assert dt is not None and dt.year == 2024 and dt.month == 6
+
+
+def test_date_falls_back_to_created_when_no_published():
+    html = r'{\"_createdAt\":\"2024-01-02T00:00:00Z\"}'
+    dt = _date_from_html(html)
+    assert dt is not None and (dt.year, dt.month, dt.day) == (2024, 1, 2)
+
+
+def test_date_none_when_absent():
+    assert _date_from_html("<html><body><p>no date here</p></body></html>") is None

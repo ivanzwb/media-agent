@@ -87,24 +87,25 @@ def test_discover_links_finds_single_and_unquoted(monkeypatch):
 
 
 def test_is_non_article_three_tier():
-    """Verify the three-tier URL rejection logic:
+    """Verify the URL rejection tiers:
 
     Tier 1 — asset extensions.
-    Tier 2 — ANY segment matches _NON_ARTICLE_SEGMENTS.
-    Tier 3 — terminal segment in _NON_ARTICLE_TERMINAL AND depth ≤2.
+    Tier 2 — ANY segment in _HARD_NON_ARTICLE (legal/auth) — any depth.
+    Tier 3 — ANY segment in _SOFT_NON_ARTICLE (org sections) — only depth ≤2.
+    Tier 4 — terminal segment in _NON_ARTICLE_TERMINAL AND depth ≤2.
     """
     # ── Tier 1: asset files ─────────────────────────────────────────
     assert _is_non_article("https://x.com/files/a.pdf")
 
-    # ── Tier 2: ANY segment in strict blocklist → reject ────────────
-    assert _is_non_article("https://x.com/about")            # direct
-    assert _is_non_article("https://x.com/careers")          # direct
-    assert _is_non_article("https://x.com/about-us/team")    # middle segment
-    assert _is_non_article("https://x.com/awards/2025")       # add-on term
+    # ── Tier 2/3: shallow non-article sections → reject ─────────────
+    assert _is_non_article("https://x.com/about")            # direct (soft, depth 1)
+    assert _is_non_article("https://x.com/careers")          # direct (soft, depth 1)
+    assert _is_non_article("https://x.com/about-us/team")    # soft, depth 2
+    assert _is_non_article("https://x.com/awards/2025")       # soft, depth 2
     assert _is_non_article(
-        "https://x.com/about-us/achievement-awards")          # the 3gpp case
+        "https://x.com/about-us/achievement-awards")          # soft, depth 2
 
-    # ── Tier 3: container landing pages (terminal + shallow) ───────
+    # ── Tier 4: container landing pages (terminal + shallow) ───────
     assert _is_non_article("https://x.com/news")             # depth 1
     assert _is_non_article("https://x.com/events")            # depth 1
     assert _is_non_article("https://x.com/quantum/blog")      # depth 2
@@ -116,6 +117,26 @@ def test_is_non_article_three_tier():
     assert not _is_non_article("https://x.com/research/some-paper")      # depth 2, terminal not blocked
     assert not _is_non_article("https://x.com/quantum/blog/some-post")   # depth 3
     assert not _is_non_article("https://x.com/news-events/3gpp-news/release-18")  # depth 3
+
+
+def test_is_non_article_soft_denylist_is_depth_aware():
+    """Owner P0: an org section in a DEEP path must NOT drop a real article."""
+    # soft segment ("company", "products") deep in the path → kept
+    assert not _is_non_article("https://x.com/company/blog/announcing-gpt-5")
+    assert not _is_non_article("https://x.com/products/2024/launch-story")
+    assert not _is_non_article("https://x.com/about/engineering/scaling-our-db")
+    # but still blocked when shallow
+    assert _is_non_article("https://x.com/company")
+    assert _is_non_article("https://x.com/company/overview")
+
+
+def test_is_non_article_hard_denylist_any_depth():
+    """Legal/auth/account pages are never articles, even deeply nested."""
+    assert _is_non_article("https://x.com/legal/terms-of-use")
+    assert _is_non_article("https://x.com/help/legal/privacy-policy")
+    assert _is_non_article("https://x.com/a/b/c/login")
+    assert _is_non_article("https://x.com/account/settings/password")
+    assert _is_non_article("https://x.com/x/y/cookie-policy")
 
 
 def test_pagination_links_detected():
@@ -152,6 +173,76 @@ def test_scrape_list_follows_pagination(monkeypatch):
     urls = {a.url for a in arts}
     assert "https://x.com/research/a" in urls   # page 1
     assert "https://x.com/research/b" in urls   # page 2
+
+
+def test_scrape_list_falls_back_to_sitemap(monkeypatch):
+    # List page has NO article links (e.g. JS-rendered) -> fallback to sitemap.
+    pages = {
+        "https://e.com/blog": "<html><body><nav>no article links</nav></body></html>",
+        "https://e.com/robots.txt": "Sitemap: https://e.com/sitemap.xml\n",
+        "https://e.com/sitemap.xml": (
+            "<urlset>"
+            "<url><loc>https://e.com/posts/a</loc></url>"
+            "<url><loc>https://e.com/posts/b</loc></url>"
+            "</urlset>"),
+    }
+    monkeypatch.setattr("app.sources.scraper._fetch_html",
+                        lambda url, **k: pages.get(url, ""))
+
+    from app.models import Article
+    from datetime import datetime, timezone
+
+    def fake_single(link, source_name, **k):
+        return Article(title=link, content_md="x", url=link,
+                       source_name=source_name, source_type="scrape",
+                       published_at=None, images=[], raw_summary=None,
+                       fetched_at=datetime.now(timezone.utc))
+    monkeypatch.setattr("app.sources.scraper.scrape_single", fake_single)
+
+    arts = scrape_list("https://e.com/blog", "E", max_pages=1, delay=0)
+    urls = {a.url for a in arts}
+    assert "https://e.com/posts/a" in urls
+    assert "https://e.com/posts/b" in urls
+
+
+def test_fetch_html_retries_transient_then_succeeds(monkeypatch):
+    import httpx
+    from app.sources import scraper
+    monkeypatch.setattr(scraper.time, "sleep", lambda *_: None)
+    calls = {"n": 0}
+
+    class R:
+        text = "OK"
+
+        def raise_for_status(self):
+            ...
+
+    def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise httpx.TimeoutException("boom")
+        return R()
+    monkeypatch.setattr(scraper.httpx, "get", flaky)
+    assert scraper._fetch_html("https://x.com/a", retries=3) == "OK"
+    assert calls["n"] == 3   # retried twice, succeeded on 3rd
+
+
+def test_fetch_html_no_retry_on_4xx(monkeypatch):
+    import pytest
+    import httpx
+    from app.sources import scraper
+    monkeypatch.setattr(scraper.time, "sleep", lambda *_: None)
+    calls = {"n": 0}
+
+    def get404(*a, **k):
+        calls["n"] += 1
+        req = httpx.Request("GET", "https://x.com/b")
+        resp = httpx.Response(404, request=req)
+        raise httpx.HTTPStatusError("404", request=req, response=resp)
+    monkeypatch.setattr(scraper.httpx, "get", get404)
+    with pytest.raises(httpx.HTTPStatusError):
+        scraper._fetch_html("https://x.com/b", retries=3)
+    assert calls["n"] == 1   # 4xx is permanent — no retries
 
 
 def test_scrape_single_builds_article(monkeypatch):

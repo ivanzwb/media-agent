@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import time
 from datetime import datetime, timezone
@@ -8,7 +9,10 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from app.models import Article
+from app.sources import feed_discovery
 from app.sources.extractor import extract_from_html
+
+logger = logging.getLogger(__name__)
 
 _UA_STR = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
            "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -28,42 +32,57 @@ def _hrefs(html: str) -> list[str]:
         out.append(m.group(1) or m.group(2) or m.group(3) or "")
     return out
 
-# Path segments that almost never point to an article.  ANY segment in this set
-# causes the URL to be rejected — this catches /about-us/achievement-awards
-# (where "about-us" matches) while keeping /blog-releases/release-notes.
+# Two-tier denylist of path segments that don't point to an article.
 #
-# NOTE: terms like "events", "news", "blog" are deliberately NOT here —
-# /events/ai-summit-2026 and /news/gpt-5 are valid articles.  They live in
-# _NON_ARTICLE_TERMINAL instead, where only shallow index pages are blocked.
-_NON_ARTICLE_SEGMENTS: set[str] = {
-    "about", "about-us", "contact", "contact-us", "careers", "career",
-    "jobs", "privacy", "terms", "tos", "legal", "policy", "policies",
-    "cookie", "cookies", "pricing", "plans", "login", "signin", "sign-in",
-    "signup", "sign-up", "register", "account", "subscribe", "newsletter",
-    "sitemap", "search", "tag", "tags", "category", "categories",
-    "author", "authors", "rss", "feed", "feeds", "faq", "faqs", "support",
-    "help", "press", "press-kit", "media-kit", "brand", "security",
-    "status", "download", "downloads", "products", "product", "solutions",
-    "company", "team", "partners", "investors",
-    "trust", "compliance", "responsible-disclosure",
-    # Additional common non-article sections
-    "awards", "award", "achievement", "achievements",
-    "leadership", "management", "board", "governance",
-    "affiliates", "services", "service",
-    "locations", "offices", "office",
-    "patents", "trademarks", "licensing",
-    "recognition", "testimonials", "clients",
-    "data-privacy", "gdpr", "ccpa",
-    # Compound variants — exact-match set can't catch "terms-of-use" via "terms"
+# WHY TWO TIERS: a single "reject if ANY segment matches" rule was both too
+# greedy and too weak.  It dropped real articles like /company/blog/announce-x
+# (because "company" matched) while a deeply-nested article under an org
+# section was indistinguishable from a person/landing page.  Splitting fixes
+# this:
+#
+#   _HARD_NON_ARTICLE  — legal / auth / account / commerce pages that are NEVER
+#       an article, even when deeply nested.  Rejected at ANY depth.
+#       e.g. /help/legal/terms-of-use  →  rejected
+#
+#   _SOFT_NON_ARTICLE  — organizational sections that are usually landing pages
+#       but often PARENT real articles.  Rejected only on shallow paths (≤2
+#       segments); deeper URLs are presumed articles and kept.
+#       e.g. /about-us/team            →  rejected (depth 2)
+#            /company/blog/announce-x  →  kept     (depth 3)
+#
+# NOTE: terms like "events", "news", "blog" live in _NON_ARTICLE_TERMINAL, not
+# here — /news/gpt-5 is a valid article; only bare index pages are blocked.
+_HARD_NON_ARTICLE: set[str] = {
+    "privacy", "terms", "tos", "legal", "login", "signin", "sign-in",
+    "signup", "sign-up", "register", "account", "subscribe", "unsubscribe",
+    "newsletter", "cart", "checkout", "password", "logout",
+    "cookie", "cookies", "gdpr", "ccpa", "data-privacy",
+    # Compound legal/policy variants (exact-match can't catch these via "terms")
     "terms-of-use", "terms-of-service", "terms-and-conditions",
-    "privacy-policy", "privacy-statement", "privacy-notice",
-    "privacy-policies",
+    "privacy-policy", "privacy-statement", "privacy-notice", "privacy-policies",
     "cookie-policy", "cookie-preferences", "cookie-settings",
     "code-of-conduct", "code-of-ethics",
     "return-policy", "refund-policy", "cancellation-policy",
     "anti-corruption", "anti-bribery", "anti-harassment",
     "community-guidelines",
     "data-processing-agreement", "service-level-agreement",
+}
+
+_SOFT_NON_ARTICLE: set[str] = {
+    "about", "about-us", "contact", "contact-us", "careers", "career",
+    "jobs", "policy", "policies", "pricing", "plans",
+    "sitemap", "search", "tag", "tags", "category", "categories",
+    "author", "authors", "rss", "feed", "feeds", "faq", "faqs", "support",
+    "help", "press", "press-kit", "media-kit", "brand", "security",
+    "status", "download", "downloads", "products", "product", "solutions",
+    "company", "team", "partners", "investors",
+    "trust", "compliance", "responsible-disclosure",
+    "awards", "award", "achievement", "achievements",
+    "leadership", "management", "board", "governance",
+    "affiliates", "services", "service",
+    "locations", "offices", "office",
+    "patents", "trademarks", "licensing",
+    "recognition", "testimonials", "clients",
 }
 
 # Terms that indicate a blog / news / article INDEX page when they appear
@@ -94,11 +113,13 @@ def _is_non_article(absolute: str) -> bool:
     """Return True if *absolute* URL almost certainly does not point to an
     individual article page.
 
-    Three-tier rejection:
+    Rejection tiers (see denylist comments above):
       1. Asset file extension (*.pdf, *.jpg …).
-      2. ANY path segment matches ``_NON_ARTICLE_SEGMENTS``.
-      3. Terminal segment matches ``_NON_ARTICLE_TERMINAL`` **and** the
-         path is shallow (≤2 segments deep).
+      2. ANY segment in ``_HARD_NON_ARTICLE`` (legal/auth/account) — any depth.
+      3. ANY segment in ``_SOFT_NON_ARTICLE`` (org sections) **only** when the
+         path is shallow (≤2 segments); deeper URLs are presumed articles.
+      4. Terminal segment in ``_NON_ARTICLE_TERMINAL`` (blog/news index) **and**
+         the path is shallow (≤2 segments).
     """
     path = urlparse(absolute).path.lower()
     segments = [s for s in path.split("/") if s]
@@ -106,6 +127,7 @@ def _is_non_article(absolute: str) -> bool:
         return True  # bare domain / homepage
 
     last = segments[-1]
+    shallow = len(segments) <= 2  # noqa: PLR2004
 
     # ── Tier 1: asset files ─────────────────────────────────────────
     if "." in last:
@@ -113,19 +135,24 @@ def _is_non_article(absolute: str) -> bool:
         if ext in _ASSET_EXTS:
             return True
 
-    # ── Tier 2: any segment matches a non‑article keyword ────────────
-    # cat /about-us/achievement-awards  (about-us matches)
-    # cat /careers/software-engineer    (careers matches)
-    # keep /news-events/3gpp-news/release-18
+    # ── Tier 2: hard denylist — reject at ANY depth ─────────────────
+    # /privacy, /help/legal/terms-of-use, /x/y/privacy-policy …
     for seg in segments:
-        if seg in _NON_ARTICLE_SEGMENTS:
+        if seg in _HARD_NON_ARTICLE:
             return True
 
-    # ── Tier 3: terminal segment is a container / index page ────────
+    # ── Tier 3: soft denylist — reject only on shallow paths ────────
+    # /about-us/team            → blocked (depth 2)
+    # /company/blog/announce-x  → kept    (depth 3 — soft seg ignored)
+    if shallow:
+        for seg in segments:
+            if seg in _SOFT_NON_ARTICLE:
+                return True
+
+    # ── Tier 4: terminal segment is a container / index page ────────
     # /quantum/blog               → blocked  (depth 2)
-    # /blog                        → blocked  (depth 1)
     # /quantum/blog/post-slug      → accepted (depth 3)
-    if last in _NON_ARTICLE_TERMINAL and len(segments) <= 2:
+    if last in _NON_ARTICLE_TERMINAL and shallow:
         return True
 
     return False
@@ -151,6 +178,7 @@ def discover_links(html: str, base_url: str,
         if exclude_pattern and exclude_pattern in absolute:
             continue
         if _is_non_article(absolute):
+            logger.debug("discover_links: skip non-article url %s", absolute)
             continue
         # Normalize: strip trailing slash so /path/ and /path are identical
         absolute = absolute.rstrip("/")
@@ -180,16 +208,41 @@ def _render_with_playwright(url: str, timeout: float) -> str | None:
 
 
 def _fetch_html(url: str, render_js: bool = False,
-                timeout: float = 20.0) -> str:
+                timeout: float = 20.0, retries: int = 3) -> str:
     """Fetch page HTML. With render_js, use Playwright (if available) for
-    SPA/SSR sites, falling back to a plain httpx request."""
+    SPA/SSR sites, falling back to a plain httpx request.
+
+    Transient failures (timeouts, connection errors, 5xx, 429) are retried up
+    to ``retries`` times with exponential backoff. Permanent failures (4xx
+    other than 429) are raised immediately without retrying.
+    """
     if render_js:
         html = _render_with_playwright(url, timeout)
         if html:
             return html
-    resp = httpx.get(url, timeout=timeout, follow_redirects=True, headers=_UA)
-    resp.raise_for_status()
-    return resp.text
+
+    last_exc: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            resp = httpx.get(url, timeout=timeout, follow_redirects=True,
+                             headers=_UA)
+            resp.raise_for_status()
+            return resp.text
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code
+            last_exc = exc
+            # 4xx (except 429) are permanent — don't waste retries on them.
+            if code < 500 and code != 429:  # noqa: PLR2004
+                raise
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            last_exc = exc
+        if attempt < retries:
+            backoff = 0.5 * (2 ** (attempt - 1))  # 0.5s, 1s, 2s, …
+            logger.debug("fetch retry %d/%d for %s after %s (%.1fs backoff)",
+                         attempt, retries, url, last_exc, backoff)
+            time.sleep(backoff)
+    assert last_exc is not None
+    raise last_exc
 
 
 def _pagination_links(html: str, base_url: str) -> list[str]:
@@ -208,6 +261,63 @@ def _pagination_links(html: str, base_url: str) -> list[str]:
             seen.add(absolute)
             out.append(absolute)
     return out
+
+
+def _discover_via_feeds_and_sitemap(
+        base_url: str, page_html: str, include_pattern: str | None,
+        exclude_pattern: str | None, timeout: float = 20.0) -> list[str]:
+    """Fallback article discovery (②-2/②-3) when HTML link scraping found
+    nothing: try the page's declared RSS/Atom feeds, then the site sitemap.
+
+    RSS/Atom entries are curated lists of articles, so the ``_is_non_article``
+    URL heuristic is *not* applied to them; sitemap URLs are broader, so it is.
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _accept(link: str, drop_non_article: bool) -> bool:
+        if not link or link in seen:
+            return False
+        if include_pattern and include_pattern not in link:
+            return False
+        if exclude_pattern and exclude_pattern in link:
+            return False
+        if drop_non_article and _is_non_article(link):
+            return False
+        return True
+
+    # 1. RSS / Atom autodiscovery from the list page.
+    try:
+        for feed_url in feed_discovery.find_feed_urls(page_html or "", base_url):
+            try:
+                xml = _fetch_html(feed_url, render_js=False, timeout=timeout)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("feed fetch failed %s: %s", feed_url, exc)
+                continue
+            for link in feed_discovery.feed_entry_links(xml):
+                if _accept(link, drop_non_article=False):
+                    seen.add(link)
+                    found.append(link)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("rss discovery failed for %s: %s", base_url, exc)
+
+    # 2. Sitemap (only if RSS yielded nothing).
+    if not found:
+        try:
+            def _fetch(u: str) -> str:
+                return _fetch_html(u, render_js=False, timeout=timeout)
+            for link in feed_discovery.sitemap_urls(
+                    base_url, _fetch, include_pattern=include_pattern):
+                if _accept(link, drop_non_article=True):
+                    seen.add(link)
+                    found.append(link)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("sitemap discovery failed for %s: %s", base_url, exc)
+
+    if found:
+        logger.info("fallback discovery (feed/sitemap) found %d links for %s",
+                    len(found), base_url)
+    return found
 
 
 def _is_article_content(data: dict) -> bool:
@@ -231,9 +341,25 @@ def _is_article_content(data: dict) -> bool:
 
 
 def scrape_single(url: str, source_name: str, timeout: float = 20.0,
-                  render_js: bool = False) -> Article | None:
+                  render_js: bool = True) -> Article | None:
     html = _fetch_html(url, render_js=render_js, timeout=timeout)
     data = extract_from_html(html, url=url)
+
+    # Auto-fallback (②-1 / ①-4): if a non-rendered fetch produced no usable
+    # article OR no publish date, retry once with JS rendering — recovers SPA
+    # content and JS-injected dates (e.g. Next.js hydration).
+    if not render_js and (not _is_article_content(data)
+                          or not data.get("published_at")):
+        try:
+            html2 = _fetch_html(url, render_js=True, timeout=timeout)
+        except Exception:  # noqa: BLE001
+            html2 = ""
+        if html2 and html2 != html:
+            data2 = extract_from_html(html2, url=url)
+            # prefer the rendered result if it is (now) a valid article
+            if _is_article_content(data2):
+                data = data2
+
     if not data["content_md"] or not _is_article_content(data):
         return None
     return Article(
@@ -253,7 +379,8 @@ def scrape_single(url: str, source_name: str, timeout: float = 20.0,
 def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
                 exclude_pattern: str | None = None,
                 max_articles: int = 10, delay: float = 1.0,
-                max_pages: int = 1, render_js: bool = False) -> list[Article]:
+                max_pages: int = 3, render_js: bool = True,
+                timeout: float = 20.0) -> list[Article]:
     # Discover article links across the list page and (optionally) its
     # paginated siblings, then scrape each discovered article.
     article_links: list[str] = []
@@ -261,6 +388,7 @@ def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
     visited_pages: set[str] = set()
     queue: list[str] = [url]
     source_normalized = url.rstrip("/")
+    seed_html = ""
     pages = 0
     max_pages = max(1, max_pages)
 
@@ -271,9 +399,13 @@ def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
         visited_pages.add(page_url)
         pages += 1
         try:
-            html = _fetch_html(page_url, render_js=render_js)
-        except Exception:
+            html = _fetch_html(page_url, render_js=render_js, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("scrape_list: failed to fetch list page %s: %s",
+                           page_url, exc)
             continue
+        if page_url == url:
+            seed_html = html
         for link in discover_links(html, base_url=page_url,
                                    include_pattern=include_pattern,
                                    exclude_pattern=exclude_pattern):
@@ -288,13 +420,29 @@ def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
                 if nxt not in visited_pages and nxt not in queue:
                     queue.append(nxt)
 
+    # Fallback discovery: HTML link scraping found nothing (e.g. JS-rendered
+    # list page that even rendering missed) — try RSS/Atom + sitemap.
+    if not article_links:
+        for link in _discover_via_feeds_and_sitemap(
+                url, seed_html, include_pattern, exclude_pattern,
+                timeout=timeout):
+            if link in seen_links or link.rstrip("/") == source_normalized:
+                continue
+            seen_links.add(link)
+            article_links.append(link)
+
     articles: list[Article] = []
     for link in article_links[:max_articles]:
         try:
-            art = scrape_single(link, source_name, render_js=render_js)
+            art = scrape_single(link, source_name, render_js=render_js,
+                                timeout=timeout)
             if art:
                 articles.append(art)
-        except Exception:
+            else:
+                logger.debug("scrape_list: %s yielded no article "
+                             "(filtered or empty content)", link)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("scrape_list: failed to scrape %s: %s", link, exc)
             continue
         time.sleep(delay)
     return articles
