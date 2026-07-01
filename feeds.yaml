@@ -41,7 +41,6 @@ topics:
   - Neuralink
   - Synchron
   - BrainGate
-  - Kernel
   - Neurable
   - NextMind
   - OpenBCI
@@ -182,7 +181,6 @@ topics:
   - PoW
   - 权益证明
   - Proof of Stake
-  - PoS
   - 委托权益证明
   - Delegated Proof of Stake
   - DPoS
@@ -219,7 +217,6 @@ topics:
   - Agent评测
   - 智能体
   - LLM Agent
-  - ReAct
   - AI Agents
   - 多智能体系统
   - 函数调用
@@ -236,7 +233,7 @@ topics:
   - Sim-to-Real
   - 遥操作
   - Physical Intelligence
-  - Figure
+  - Figure AI
   - Tesla Optimus
   - 具身人工智能
   - 机器人学习
@@ -260,7 +257,7 @@ topics:
   - 灵巧手
   - SLAM
   - 宇树
-  - Figure
+  - Figure AI
   - 服务机器人
   - 工业机器人
   - 机器人 Robot
@@ -535,25 +532,25 @@ topics:
   - Drone Delivery
 - name: AR/VR
   keywords:
-  - AR (增强现实)
-  - VR (虚拟现实)
-  - Mixed Reality (混合现实)
-  - Metaverse (元宇宙)
+  - AR
+  - VR
+  - Mixed Reality
+  - Metaverse
   - Apple Vision Pro
-  - Extended Reality (XR)
-  - Spatial Computing (空间计算)
+  - Extended Reality
+  - Spatial Computing
   - Meta Quest
-  - 头戴式显示器 (Head-Mounted Display)
+  - Head-Mounted Display
   - Microsoft HoloLens
-  - AR眼镜 (AR Glasses)
-  - 眼动追踪 (Eye Tracking)
-  - 沉浸式体验 (Immersive Experience)
-  - 手势识别 (Hand Tracking)
+  - AR Glasses
+  - Eye Tracking
+  - Immersive Experience
+  - Hand Tracking
   - HTC Vive
   - PSVR2
-  - Pico (字节跳动)
-  - Digital Twin (数字孪生)
-  - 光波导 (Waveguide)
+  - Pico
+  - Digital Twin
+  - Waveguide
   - ARKit
 sources:
 - name: Updates | Neuralink
@@ -563,6 +560,7 @@ sources:
   - 脑机接口
   enabled: true
   mode: list
+  include_pattern: /blog/
 - name: 3GPP News
   type: scrape
   url: https://www.3gpp.org/news-events/3gpp-news
@@ -570,6 +568,7 @@ sources:
   - 5G通信
   enabled: true
   mode: list
+  include_pattern: /news-events/3gpp-news/
 - name: IBM Quantum Computing | Blog
   type: scrape
   url: https://www.ibm.com/quantum/blog
@@ -577,6 +576,7 @@ sources:
   - 量子计算
   enabled: true
   mode: list
+  include_pattern: /quantum/blog/
 - name: Intel Newsroom Home
   type: rss
   url: https://newsroom.intel.com/feed
@@ -595,6 +595,7 @@ sources:
   - 5G通信
   enabled: true
   mode: list
+  include_pattern: /news/onq/
 - name: BLOG | Samsung Research
   type: scrape
   url: https://research.samsung.com/blog
@@ -602,6 +603,7 @@ sources:
   - 6G研发
   enabled: true
   mode: list
+  include_pattern: /blog/
 - name: Latest News | Samsung Semiconductor Global
   type: scrape
   url: https://semiconductor.samsung.com/newsroom/
@@ -609,6 +611,7 @@ sources:
   - 芯片制造
   enabled: true
   mode: list
+  include_pattern: /newsroom/
 - name: Research \ Anthropic
   type: scrape
   url: https://www.anthropic.com/research
@@ -616,6 +619,7 @@ sources:
   - 人工智能
   enabled: true
   mode: list
+  include_pattern: /research/
 - name: Press releases | ASML - Supplying the semiconductor industry
   type: scrape
   url: https://www.asml.com/en/news/press-releases
@@ -623,6 +627,7 @@ sources:
   - 芯片制造
   enabled: true
   mode: list
+  include_pattern: /en/news/press-releases/
 - name: News - Developer Bosch IoT Suite
   type: scrape
   url: https://bosch-iot-suite.com/news/
@@ -630,6 +635,7 @@ sources:
   - 物联网
   enabled: true
   mode: list
+  include_pattern: /news/
 - name: News — Google DeepMind
   type: scrape
   url: https://deepmind.google/discover/blog/
@@ -637,6 +643,7 @@ sources:
   - 人工智能
   enabled: true
   mode: list
+  include_pattern: /discover/blog/
 - name: Home | Ethereum Foundation Blog
   type: rss
   url: https://blog.ethereum.org/en/feed.xml
@@ -650,6 +657,7 @@ sources:
   - 云计算
   enabled: true
   mode: list
+  include_pattern: /blogs/
 - name: Huawei BLOG
   type: scrape
   url: https://blog.huawei.com/
@@ -670,6 +678,7 @@ sources:
   - 区块链技术
   enabled: true
   mode: list
+  include_pattern: /blog/
 - name: Microsoft Azure Blog
   type: rss
   url: https://azure.microsoft.com/en-us/blog/feed/
@@ -694,6 +703,7 @@ sources:
   - 6G研发
   enabled: true
   mode: list
+  include_pattern: /global/about/news/
 - name: Blog | Chainlink
   type: scrape
   url: https://blog.chain.link/
@@ -701,6 +711,7 @@ sources:
   - 区块链技术
   enabled: true
   mode: list
+  include_pattern: /blog/
 - name: '6G: The Future of Mobile Connectivity &amp; Wireless Tech | Qualcomm'
   type: scrape
   url: https://www.qualcomm.com/research/6g
@@ -708,6 +719,7 @@ sources:
   - 6G研发
   enabled: true
   mode: list
+  include_pattern: /research/6g/
 - name: Press - ZTE Press Release - ZTE Offical Website
   type: scrape
   url: https://www.zte.com.cn/global/about/news
@@ -715,6 +727,7 @@ sources:
   - 5G通信
   enabled: true
   mode: list
+  include_pattern: /global/about/news/
 - name: Apple Vision Pro News - Newsroom - Apple
   type: rss
   url: https://www.apple.com/newsroom/rss-feed.rss
@@ -728,6 +741,7 @@ sources:
   - 脑机接口
   enabled: true
   mode: list
+  include_pattern: /blog/
 - name: Polygon Blog — Payments, Stablecoins &amp; Blockchain Infrastructure Insights
   type: scrape
   url: https://polygon.technology/blog/
@@ -735,6 +749,7 @@ sources:
   - 区块链技术
   enabled: true
   mode: list
+  include_pattern: /blog/
 - name: MediaTek | Official Insights from MediaTek Inc
   type: rss
   url: https://www.mediatek.com/tek-talk-blogs/rss.xml
@@ -755,8 +770,10 @@ sources:
 - name: Media Center | News &amp; Notices | NTT DOCOMO
   type: scrape
   url: https://www.docomo.ne.jp/english/info/media_center/
+  include_pattern: /english/info/media_center/
   topics:
-  - 6G研发
+  - 通信
+  - 人形机器人
   enabled: true
   mode: list
 - name: VIVE Blog - VR News, Views &amp; Breakthroughs from HTC
@@ -790,6 +807,7 @@ sources:
   - 云计算
   enabled: true
   mode: list
+  include_pattern: /cloud/blog/
 - name: Arm Community
   type: scrape
   url: https://community.arm.com/arm-community-blogs/b/internet-of-things-blog
@@ -797,6 +815,7 @@ sources:
   - 物联网
   enabled: true
   mode: list
+  include_pattern: /arm-community-blogs/b/internet-of-things-blog/
 - name: Blog - Electric Coin Company
   type: rss
   url: https://electriccoin.co/feed/
@@ -838,6 +857,7 @@ sources:
   - 云计算
   enabled: true
   mode: list
+  include_pattern: /en/blog/
 - name: Think | IBM
   type: scrape
   url: https://www.ibm.com/blogs/internet-of-things/
@@ -845,6 +865,7 @@ sources:
   - 物联网
   enabled: true
   mode: list
+  include_pattern: /think/
 - name: Home | IPFS Blog &amp; News
   type: rss
   url: https://blog.ipfs.tech/index.xml
@@ -858,6 +879,7 @@ sources:
   - 虚拟现实
   enabled: true
   mode: list
+  include_pattern: /en-us/hololens/blog/
 - name: Newsroom | Magic Leap | Augmented Reality Optics News
   type: scrape
   url: https://www.magicleap.com/en-us/news
@@ -865,6 +887,7 @@ sources:
   - 虚拟现实
   enabled: true
   mode: list
+  include_pattern: /en-us/news/
 - name: Varjo Insider Blog
   type: rss
   url: https://varjo.com/blog/rss.xml
@@ -878,6 +901,7 @@ sources:
   - 人工智能
   enabled: true
   mode: list
+  include_pattern: /blog/
 - name: Microsoft Azure Quantum Blog
   type: rss
   url: https://azure.microsoft.com/en-us/blog/quantum/feed/
@@ -893,6 +917,7 @@ sources:
   - 自动驾驶
   enabled: true
   mode: list
+  include_pattern: /blog/
 - name: AWS Quantum Technologies Blog
   type: rss
   url: https://aws.amazon.com/blogs/quantum-computing/feed/
@@ -906,6 +931,7 @@ sources:
   - 自动驾驶
   enabled: true
   mode: list
+  include_pattern: /news/
 - name: IonQ Newsroom and Media Resources
   type: scrape
   url: https://ionq.com/news
@@ -913,6 +939,7 @@ sources:
   - 量子计算
   enabled: true
   mode: list
+  include_pattern: /news/
 - name: Rigetti Computing news | Rigetti Computing
   type: scrape
   url: https://www.rigetti.com/news
@@ -920,6 +947,7 @@ sources:
   - 量子计算
   enabled: true
   mode: list
+  include_pattern: /news/
 - name: Latest thinking in AI, autonomous vehicles, research &amp; life at Wayve
   type: rss
   url: https://wayve.ai/wp-content/themes/wayve/rss-feed.php
@@ -933,6 +961,7 @@ sources:
   - 量子计算
   enabled: true
   mode: list
+  include_pattern: /news/
 - name: DJI - The World Leader in Camera Drones/Quadcopters for Aerial Photography
   type: scrape
   url: https://www.dji.com/newsroom
@@ -940,6 +969,7 @@ sources:
   - 低空经济
   enabled: true
   mode: list
+  include_pattern: /newsroom/
 - name: ITER Newsline archive
   type: scrape
   url: https://www.iter.org/newsline
@@ -947,6 +977,7 @@ sources:
   - 核聚变
   enabled: true
   mode: list
+  include_pattern: /newsline/
 - name: EHang | News Center
   type: scrape
   url: https://www.ehang.com/news/
@@ -954,6 +985,7 @@ sources:
   - 低空经济
   enabled: true
   mode: list
+  include_pattern: /news/
 - name: Newsroom \ Anthropic
   type: scrape
   url: https://www.anthropic.com/news/
@@ -961,6 +993,7 @@ sources:
   - ChatGPT与对话AI
   enabled: true
   mode: list
+  include_pattern: /news/
 - name: NVIDIA Blog
   type: rss
   url: https://blogs.nvidia.com/feed/
@@ -979,6 +1012,7 @@ sources:
   - 具身智能
   enabled: true
   mode: list
+  include_pattern: /blog/
 - name: Newsroom \ Anthropic
   type: scrape
   url: https://www.anthropic.com/blog/
@@ -986,6 +1020,7 @@ sources:
   - 人工智能大模型
   enabled: true
   mode: list
+  include_pattern: /blog/
 - name: News &#038; Events &#8211; Materials Science &amp; Engineering
   type: rss
   url: https://mse.berkeley.edu/feed/
@@ -1004,6 +1039,7 @@ sources:
   - 生成式AI应用
   enabled: true
   mode: list
+  include_pattern: /news/
 - name: All News | News &amp; Events | Materials Science &amp; Engineering | Northwester
   type: scrape
   url: https://www.mccormick.northwestern.edu/materials-science/news-events/
@@ -1011,6 +1047,7 @@ sources:
   - 新材料
   enabled: true
   mode: list
+  include_pattern: /materials-science/news-events/
 - name: '- Archives Page 1 | NVIDIA Blog'
   type: rss
   url: https://blogs.nvidia.com/blog/category/robotics/feed/
@@ -1024,6 +1061,7 @@ sources:
   - 商业航天
   enabled: true
   mode: list
+  include_pattern: /updates/
 - name: News Desk | ORNL
   type: scrape
   url: https://www.ornl.gov/news
@@ -1031,6 +1069,7 @@ sources:
   - 新材料
   enabled: true
   mode: list
+  include_pattern: /news/
 - name: Newsroom | Virgin Galactic
   type: scrape
   url: https://www.virgingalactic.com/news
@@ -1038,6 +1077,7 @@ sources:
   - 商业航天
   enabled: true
   mode: list
+  include_pattern: /news/
 - name: Blogs | Boston Dynamics
   type: scrape
   url: https://bostondynamics.com/blog/
@@ -1045,6 +1085,7 @@ sources:
   - 机器人
   enabled: true
   mode: list
+  include_pattern: /blog/
 - name: Home | Max Planck Institute for Sustainable Materials
   type: scrape
   url: https://www.mpie.de/2281/en/news
@@ -1052,6 +1093,7 @@ sources:
   - 新材料
   enabled: true
   mode: list
+  include_pattern: /2281/en/news/
 - name: Updates
   type: rss
   url: https://www.relativityspace.com/updates?format=rss
@@ -1065,6 +1107,7 @@ sources:
   - 生物科技
   enabled: true
   mode: list
+  include_pattern: /news/
 - name: Latest News - Firefly Aerospace
   type: rss
   url: https://fireflyspace.com/feed/
@@ -1083,6 +1126,7 @@ sources:
   - 具身智能
   enabled: true
   mode: list
+  include_pattern: /blog/
 - name: News
   type: rss
   url: https://www.sanger.ac.uk/feed/
@@ -1096,6 +1140,7 @@ sources:
   - AI Agent
   enabled: true
   mode: list
+  include_pattern: /
 - name: Newsroom
   type: scrape
   url: https://www.axiomspace.com/news
@@ -1103,6 +1148,7 @@ sources:
   - 商业航天
   enabled: true
   mode: list
+  include_pattern: /news/
 - name: News 2026  | NIMS
   type: scrape
   url: https://www.nims.go.jp/eng/news/index.html
@@ -1110,6 +1156,7 @@ sources:
   - 新材料
   enabled: true
   mode: list
+  include_pattern: /eng/news/
 - name: News | Cold Spring Harbor Laboratory
   type: rss
   url: https://www.cshl.edu/feed/
@@ -1146,6 +1193,7 @@ sources:
   - ChatGPT与对话AI
   enabled: true
   mode: list
+  include_pattern: /
 - name: News | Department of Materials Science & Metallurgy
   type: rss
   url: https://www.msm.cam.ac.uk/news/feed
@@ -1159,6 +1207,7 @@ sources:
   - AR/VR
   enabled: true
   mode: list
+  include_pattern: /en-us/hololens/blog/
 - name: Artificial Intelligence
   type: rss
   url: https://aws.amazon.com/blogs/machine-learning/feed/
@@ -1190,6 +1239,7 @@ sources:
   - 机器人
   enabled: true
   mode: list
+  include_pattern: /news/
 - name: Newsroom | Editas Medicine
   type: scrape
   url: https://www.editasmedicine.com/news/
@@ -1197,6 +1247,7 @@ sources:
   - 生物科技
   enabled: true
   mode: list
+  include_pattern: /news/
 - name: XREAL Blog | Explore &amp; Share
   type: scrape
   url: https://www.xreal.com/blog/
@@ -1204,6 +1255,7 @@ sources:
   - AR/VR
   enabled: true
   mode: list
+  include_pattern: /blog/
 - name: www.picoxr.com
   type: scrape
   url: https://www.picoxr.com/news/
@@ -1211,6 +1263,7 @@ sources:
   - AR/VR
   enabled: true
   mode: list
+  include_pattern: /news/
 - name: Blog | Protocol Labs
   type: rss
   url: https://protocol.ai/rss.xml
@@ -1224,6 +1277,7 @@ sources:
   - 新能源
   enabled: true
   mode: list
+  include_pattern: /en/news/
 - name: News &amp; Updates &mdash; Stability AI
   type: rss
   url: https://stability.ai/news-updates?format=rss
@@ -1237,6 +1291,7 @@ sources:
   - 机器人
   enabled: true
   mode: list
+  include_pattern: /blog/
 - name: Blog
   type: scrape
   url: https://www.graphcore.ai/posts
@@ -1244,6 +1299,7 @@ sources:
   - AI芯片
   enabled: true
   mode: list
+  include_pattern: /posts/
 - name: 'Category: Robotics | NVIDIA Technical Blog'
   type: rss
   url: https://developer.nvidia.com/blog/category/robotics/feed/
@@ -1257,6 +1313,7 @@ sources:
   - 新能源
   enabled: true
   mode: list
+  include_pattern: /global/en/news/
 - name: DeepSeek | 深度求索
   type: scrape
   url: https://www.deepseek.com/
@@ -1264,3 +1321,4 @@ sources:
   - 智能制造
   enabled: true
   mode: list
+  include_pattern: /blog/

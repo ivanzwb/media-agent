@@ -64,6 +64,21 @@
   </div>
 </div>
 
+<!-- Rewrite Progress Panel (matches run-panel style) -->
+<div id="rewrite-panel" class="run-panel" style="display:none; z-index:60">
+  <div class="run-panel-head">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="run-glow running" id="rewrite-glow"></span>
+      <span id="rewrite-title">转写中…</span>
+    </div>
+    <div>
+      <span id="rewrite-stats" class="run-stats"></span>
+      <button type="button" class="run-close" onclick="cancelRewritePoll()">×</button>
+    </div>
+  </div>
+  <pre id="rewrite-logs" class="run-logs"></pre>
+</div>
+
 <script>
 
 function viewArticle(id) {
@@ -112,22 +127,82 @@ async function refetchArticle(id) {
   }
 }
 
+// ---- rewrite progress polling ----
+let rewritePollTimer = null;
+let rewriteArticleId = null;
+
+function showRewritePanel(id) {
+  document.getElementById('rewrite-title').textContent = '转写中…';
+  document.getElementById('rewrite-stats').textContent = '';
+  document.getElementById('rewrite-logs').textContent = '';
+  document.getElementById('rewrite-panel').style.display = 'flex';
+  const glow = document.getElementById('rewrite-glow');
+  glow.className = 'run-glow running';
+}
+
+function hideRewritePanel() {
+  document.getElementById('rewrite-panel').style.display = 'none';
+}
+
+function cancelRewritePoll() {
+  if (rewritePollTimer) clearTimeout(rewritePollTimer);
+  rewritePollTimer = null;
+  rewriteArticleId = null;
+  hideRewritePanel();
+}
+
+async function pollRewrite() {
+  const id = rewriteArticleId;
+  if (!id) return;
+  try {
+    const s = await (await fetch('/api/rewrite-status?article_id=' + id)).json();
+    const logs = document.getElementById('rewrite-logs');
+    const atBottom = logs.scrollTop + logs.clientHeight >= logs.scrollHeight - 20;
+    logs.textContent = (s.logs || []).join('\n');
+    if (atBottom) logs.scrollTop = logs.scrollHeight;
+
+    if (s.done) {
+      const glow = document.getElementById('rewrite-glow');
+      if (s.draft_id) {
+        glow.className = 'run-glow done';
+        document.getElementById('rewrite-title').textContent = '转写完成，跳转中…';
+        setTimeout(function () {
+          cancelRewritePoll();
+          window.location = '/drafts/' + s.draft_id + '/edit';
+        }, 800);
+      } else {
+        glow.className = 'run-glow error';
+        document.getElementById('rewrite-title').textContent = '转写失败：' + (s.error || '未知错误');
+        rewritePollTimer = null;
+        rewriteArticleId = null;
+      }
+      return;
+    }
+    if (s.running) {
+      rewritePollTimer = setTimeout(pollRewrite, 1200);
+    }
+  } catch (e) {
+    rewritePollTimer = setTimeout(pollRewrite, 2000);
+  }
+}
+
 async function rewriteArticle(id, isRewrite) {
   if (isRewrite && !confirm('重写会覆盖该文章已有的主稿草稿，确定吗？')) return;
   const cell = document.getElementById('art-actions-' + id);
-  const prev = cell.innerHTML;
   cell.innerHTML = '<span class="muted">⏳ 转写中…</span>';
   try {
     const resp = await fetch('/archive/' + id + '/rewrite', {method: 'POST'});
     const data = await resp.json();
-    if (data.ok && data.draft_id) {
-      window.location = '/drafts/' + data.draft_id + '/edit';
-    } else {
-      cell.innerHTML = prev;
-      alert('转写失败：' + (data.error || '未知错误'));
+    if (data.started === false) {
+      cell.innerHTML = '<span class="muted">已有任务在进行</span>';
+      return;
     }
+    // Start polling progress
+    rewriteArticleId = id;
+    showRewritePanel(id);
+    pollRewrite();
   } catch (e) {
-    cell.innerHTML = prev;
+    cell.innerHTML = '<span class="muted">请求失败</span>';
     alert('转写请求失败');
   }
 }

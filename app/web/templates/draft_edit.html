@@ -89,7 +89,19 @@
   </button>
   <span id="nar-status" class="muted"></span>
 </div>
-<pre id="nar-logs" class="run-logs" style="display:none; max-height:200px; margin-top:10px"></pre>
+<div id="nar-panel" class="run-panel" style="display:none; position:static; width:100%; box-shadow:none; animation:none; max-height:none; margin-top:10px">
+  <div class="run-panel-head">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="run-glow running" id="nar-glow"></span>
+      <span id="nar-title">生成讲解脚本+配音</span>
+    </div>
+    <div>
+      <span id="nar-stats" class="run-stats"></span>
+      <button type="button" class="run-close" onclick="document.getElementById('nar-panel').style.display='none'">×</button>
+    </div>
+  </div>
+  <pre id="nar-logs" class="run-logs" style="max-height:200px"></pre>
+</div>
 
 <div id="scene-editor" data-draft="{{ draft.id }}"
      data-has="{{ '1' if narration and narration.scenes else '' }}"
@@ -104,7 +116,19 @@
   <span id="vid-status" class="muted"></span>
 </div>
 <p class="muted" style="margin:6px 0 0">需先「生成讲解脚本+配音」，并本地安装 ffmpeg。</p>
-<pre id="vid-logs" class="run-logs" style="display:none; max-height:200px; margin-top:10px"></pre>
+<div id="vid-panel" class="run-panel" style="display:none; position:static; width:100%; box-shadow:none; animation:none; max-height:none; margin-top:10px">
+  <div class="run-panel-head">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="run-glow running" id="vid-glow"></span>
+      <span id="vid-title">合成讲解视频（mp4）</span>
+    </div>
+    <div>
+      <span id="vid-stats" class="run-stats"></span>
+      <button type="button" class="run-close" onclick="document.getElementById('vid-panel').style.display='none'">×</button>
+    </div>
+  </div>
+  <pre id="vid-logs" class="run-logs" style="max-height:200px"></pre>
+</div>
 {% if has_video %}
 <video controls preload="metadata" class="explainer-video"
        src="/videos/draft-{{ draft.id }}/video.mp4"></video>
@@ -153,11 +177,23 @@
   } catch (e) { /* ignore */ }
 
   let narTimer = null;
+  function narShowPanel() {
+    const p = document.getElementById('nar-panel');
+    p.style.display = 'flex';
+    document.getElementById('nar-glow').className = 'run-glow running';
+    document.getElementById('nar-title').textContent = '生成讲解脚本+配音';
+    document.getElementById('nar-stats').textContent = '';
+  }
+  function narSetDone(ok, msg) {
+    const glow = document.getElementById('nar-glow');
+    glow.className = ok ? 'run-glow done' : 'run-glow error';
+    document.getElementById('nar-title').textContent = msg;
+  }
   async function pollNarration(draftId) {
     try {
       const s = await (await fetch('/api/narration-status?draft_id=' + draftId)).json();
+      narShowPanel();
       const logs = document.getElementById('nar-logs');
-      logs.style.display = 'block';
       logs.textContent = (s.logs || []).join('\n');
       logs.scrollTop = logs.scrollHeight;
       if (s.running) {
@@ -166,8 +202,10 @@
         const btn = document.getElementById('nar-btn');
         btn.disabled = false;
         if (s.error) {
+          narSetDone(false, '生成失败：' + s.error);
           document.getElementById('nar-status').textContent = '生成失败：' + s.error;
         } else {
+          narSetDone(true, '生成完成 ✓');
           document.getElementById('nar-status').textContent = '完成 ✓';
           se_load();
         }
@@ -181,6 +219,7 @@
     const btn = document.getElementById('nar-btn');
     btn.disabled = true;
     document.getElementById('nar-status').textContent = '⏳ 生成中…';
+    narShowPanel();
     const voice = se_getVoice();
     const params = new URLSearchParams();
     if (voice.tts_provider) params.set('tts_provider', voice.tts_provider);
@@ -196,11 +235,23 @@
   }
 
   let vidTimer = null;
+  function vidShowPanel() {
+    const p = document.getElementById('vid-panel');
+    p.style.display = 'flex';
+    document.getElementById('vid-glow').className = 'run-glow running';
+    document.getElementById('vid-title').textContent = '合成讲解视频（mp4）';
+    document.getElementById('vid-stats').textContent = '';
+  }
+  function vidSetDone(ok, msg) {
+    const glow = document.getElementById('vid-glow');
+    glow.className = ok ? 'run-glow done' : 'run-glow error';
+    document.getElementById('vid-title').textContent = msg;
+  }
   async function pollVideo(draftId) {
     try {
       const s = await (await fetch('/api/video-status?draft_id=' + draftId)).json();
+      vidShowPanel();
       const logs = document.getElementById('vid-logs');
-      logs.style.display = 'block';
       logs.textContent = (s.logs || []).join('\n');
       logs.scrollTop = logs.scrollHeight;
       if (s.running) {
@@ -208,8 +259,10 @@
       } else {
         document.getElementById('vid-btn').disabled = false;
         if (s.error) {
+          vidSetDone(false, '合成失败：' + s.error);
           document.getElementById('vid-status').textContent = '合成失败：' + s.error;
         } else {
+          vidSetDone(true, '合成完成 ✓');
           document.getElementById('vid-status').textContent = '合成完成 ✓';
           // Reload scene data + video player without full page reload,
           // avoiding the server-side ConnectionResetError noise from
@@ -232,6 +285,7 @@
     const btn = document.getElementById('vid-btn');
     btn.disabled = true;
     document.getElementById('vid-status').textContent = '⏳ 合成中…';
+    vidShowPanel();
     // Auto-save scenes so the server reads the latest data (bg uploads, edits).
     try {
       await fetch('/api/script/' + draftId, {

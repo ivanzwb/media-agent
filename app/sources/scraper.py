@@ -66,6 +66,10 @@ _HARD_NON_ARTICLE: set[str] = {
     "anti-corruption", "anti-bribery", "anti-harassment",
     "community-guidelines",
     "data-processing-agreement", "service-level-agreement",
+    "channel",  # /blog/channel/category  — always a category index, never an
+                #   article, even when nested (e.g. /en/blog/channel/ai).
+                #   Some sites use "channel" to prefix article slugs — those
+                #   aren't real article pages either (they are category pages).
 }
 
 _SOFT_NON_ARTICLE: set[str] = {
@@ -189,22 +193,43 @@ def discover_links(html: str, base_url: str,
 
 
 def _render_with_playwright(url: str, timeout: float) -> str | None:
-    """Render a JS-heavy page with Playwright if it's installed; else None."""
+    """Render a JS-heavy page with Playwright if it's installed; else None.
+
+    Uses ``wait_until="load"`` (not ``"networkidle"``) because modern sites
+    with analytics/tracking scripts rarely reach network-idle within a
+    reasonable timeout.
+    """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         return None
+
+    def _do_launch(p, **kwargs):
+        browser = p.chromium.launch(headless=True, **kwargs)
+        page = browser.new_page(user_agent=_UA_STR)
+        page.goto(url, wait_until="load",
+                  timeout=int(timeout * 1000))
+        # Extra wait for client-side rendering (Webflow, Next.js, etc.)
+        page.wait_for_timeout(3000)
+        html = page.content()
+        browser.close()
+        return html
+
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page(user_agent=_UA_STR)
-            page.goto(url, wait_until="networkidle",
-                      timeout=int(timeout * 1000))
-            html = page.content()
-            browser.close()
-            return html
-    except Exception:
-        return None
+            return _do_launch(p)
+    except Exception as exc:
+        logger.warning(
+            "Playwright default launch failed for %s: %s. "
+            "Trying channel='chrome' …", url, exc)
+        try:
+            with sync_playwright() as p:
+                return _do_launch(p, channel="chrome")
+        except Exception as exc2:
+            logger.warning(
+                "Playwright channel='chrome' also failed for %s: %s",
+                url, exc2)
+            return None
 
 
 def _fetch_html(url: str, render_js: bool = False,

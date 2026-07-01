@@ -1,17 +1,28 @@
 from __future__ import annotations
 
+import re
+
 from app.feeds import Topic
 from app.llm.base import LLMProvider, Message
 from app.models import Article
 
 UNCATEGORIZED = "uncategorized"
 
+# Keywords shorter than this get word-boundary matching to avoid false
+# positives from substring matches (e.g. "AR" matching "large").
+_SHORT_KW_LEN = 4
+
 
 def _keyword_match(article: Article, topics: list[Topic]) -> str | None:
     haystack = f"{article.title}\n{article.content_md}".lower()
     for topic in topics:
         for kw in topic.keywords:
-            if kw.lower() in haystack:
+            pattern = re.escape(kw.lower())
+            # Short keywords must match as whole words to avoid false positives
+            # like "AR" matching "large", "start", "required" etc.
+            if len(kw) <= _SHORT_KW_LEN:
+                pattern = r"\b" + pattern + r"\b"
+            if re.search(pattern, haystack):
                 return topic.name
     return None
 

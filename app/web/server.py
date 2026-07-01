@@ -244,34 +244,79 @@ def create_app(config: Config | None = None,
             fetched_at=datetime.now(tz=timezone.utc), topic=row["topic"],
             archive_path=row["archive_path"], id=row["id"], videos=videos)
 
-        run_config = Config.load(store=store)
-        provider = get_provider(run_config.llm_provider,
-                                run_config.llm_api_key, run_config.llm_model,
-                                base_url=run_config.llm_api_base)
-        image_provider = get_image_provider(
-            run_config.image_provider,
-            run_config.image_api_key or run_config.llm_api_key,
-            model=run_config.image_model,
-            base_url=run_config.image_api_base or run_config.llm_api_base)
+        st = _rewrite_state(article_id)
+        lk = rewrite_locks[article_id]
+        with lk:
+            if st["running"]:
+                return {"started": False, "running": True,
+                        "message": "该文章已有转写任务在进行"}
+            st.update(running=True, logs=[], error=None, done=False,
+                      draft_id=None)
 
-        # Create-then-delete: save new draft first, then remove old one.
-        # This prevents draft loss if rewrite() or save_draft() fails.
-        draft = rewrite(art, provider)
-        sanitize_draft(draft, load_words(run_config))
-        saved = store.save_draft(draft)
+        def worker():
+            try:
+                _rewrite_log(article_id, "构建 LLM provider…")
+                ws = get_store()
+                run_config = Config.load(store=ws)
+                provider = get_provider(
+                    run_config.llm_provider, run_config.llm_api_key,
+                    run_config.llm_model, base_url=run_config.llm_api_base)
+                image_provider = get_image_provider(
+                    run_config.image_provider,
+                    run_config.image_api_key or run_config.llm_api_key,
+                    model=run_config.image_model,
+                    base_url=run_config.image_api_base
+                           or run_config.llm_api_base)
 
-        old = store.get_draft_for_article(article_id)
-        if old and old["id"] != saved.id:
-            store.delete_draft(old["id"])
-        if image_provider is not None:
-            attach_cover(saved, image_provider, store.config.images_dir)
-            if saved.cover_image:
-                store.set_draft_cover(saved.id, saved.cover_image)
-            else:
-                _append_prompt(saved, store)
-        else:
-            _append_prompt(saved, store)
-        return {"ok": True, "draft_id": saved.id}
+                _rewrite_log(article_id, "正在调用 LLM 进行转写…")
+                draft = rewrite(art, provider)
+                _rewrite_log(article_id, "转写完成，进行敏感词过滤…")
+                sanitize_draft(draft, load_words(run_config))
+
+                _rewrite_log(article_id, "保存草稿…")
+                saved = ws.save_draft(draft)
+
+                old = ws.get_draft_for_article(article_id)
+                if old and old["id"] != saved.id:
+                    ws.delete_draft(old["id"])
+
+                if image_provider is not None:
+                    _rewrite_log(article_id, "生成封面…")
+                    attach_cover(saved, image_provider,
+                                 ws.config.images_dir)
+                    if saved.cover_image:
+                        ws.set_draft_cover(saved.id, saved.cover_image)
+                    else:
+                        _append_prompt(saved, ws)
+                else:
+                    _append_prompt(saved, ws)
+
+                with rewrite_locks[article_id]:
+                    st["draft_id"] = saved.id
+                _rewrite_log(article_id, f"转写完成 ✓ 草稿 #{saved.id}")
+            except Exception as e:  # noqa: BLE001
+                _rewrite_log(article_id, f"出错：{e}")
+                with rewrite_locks[article_id]:
+                    st["error"] = str(e)
+            finally:
+                with rewrite_locks[article_id]:
+                    st["running"] = False
+                    st["done"] = True
+
+        threading.Thread(target=worker, daemon=True).start()
+        return {"started": True, "running": True}
+
+    @app.get("/api/rewrite-status")
+    def api_rewrite_status(article_id: int):
+        st = _rewrite_state(article_id)
+        with rewrite_locks[article_id]:
+            return {
+                "running": st["running"],
+                "done": st["done"],
+                "error": st["error"],
+                "draft_id": st["draft_id"],
+                "logs": list(st["logs"]),
+            }
 
     @app.get("/drafts", response_class=HTMLResponse)
     def drafts_list(request: Request, status: str | None = None):
@@ -711,6 +756,28 @@ def create_app(config: Config | None = None,
                 "logs": list(run_state["logs"]),
                 "error": run_state["error"],
             }
+
+    # ---- rewrite progress (per-article) ----
+    rewrite_main_lock = threading.Lock()
+    rewrite_states: dict[int, dict] = {}
+    rewrite_locks: dict[int, threading.Lock] = {}
+
+    def _rewrite_state(article_id: int) -> dict:
+        with rewrite_main_lock:
+            if article_id not in rewrite_states:
+                rewrite_states[article_id] = {"running": False, "logs": [],
+                                              "error": None, "done": False,
+                                              "draft_id": None}
+                rewrite_locks[article_id] = threading.Lock()
+            return rewrite_states[article_id]
+
+    def _rewrite_log(article_id: int, msg: str) -> None:
+        st = _rewrite_state(article_id)
+        line = f"{datetime.now().strftime('%H:%M:%S')} {msg}"
+        with rewrite_locks[article_id]:
+            st["logs"].append(line)
+            if len(st["logs"]) > 300:
+                del st["logs"][:-300]
 
     # ---- narration / explainer-video generation ----
     # Per-draft state tracking: different drafts can run concurrently.
