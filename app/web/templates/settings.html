@@ -12,6 +12,7 @@
   <a href="#sec-sensitive">敏感词</a>
   <a href="#sec-collect">采集</a>
   <a href="#sec-schedule">定时</a>
+  <a href="#sec-wechat">公众号</a>
   <a href="#sec-export">导出/导入</a>
 </nav>
 
@@ -501,6 +502,46 @@ function cancelRecording() {
       <textarea name="promotion_footer" id="promotion_footer" rows="3"
                 placeholder="关注我们，获取更多前沿资讯&#10;---&#10;如果觉得有帮助，欢迎点赞、分享">{{ promotion_footer }}</textarea>
       <span class="field-desc">所有草稿（主稿 + 各平台适配稿）末尾自动追加此文案，支持 Markdown 格式。留空则不追加。</span>
+    </div>
+  </fieldset>
+
+  <fieldset class="settings-section" id="sec-wechat">
+    <legend>微信公众号（一键发布）</legend>
+    <p class="field-desc">
+      在草稿页可一键把「图文」推送到公众号草稿箱或直接发布，并把讲解视频上传到素材库。
+      需<strong>已认证的服务号</strong>，并在公众号后台
+      「设置与开发 → 基本配置」获取 AppID/AppSecret，同时把本服务所在机器的
+      <strong>公网 IP 加入 IP 白名单</strong>。注意：通过接口发布的图文
+      <strong>不会展示在公众号主页信息流</strong>（仅可用于菜单/链接分享）。
+    </p>
+
+    <div class="field">
+      <label for="wechat_appid">AppID <span class="env-hint">MEDIA_AGENT_WECHAT_APPID</span></label>
+      <input type="text" name="wechat_appid" id="wechat_appid"
+             value="{{ wechat_appid }}" placeholder="wx..." autocomplete="off"
+             style="max-width:360px"/>
+    </div>
+
+    <div class="field">
+      <label for="wechat_appsecret">AppSecret <span class="env-hint">MEDIA_AGENT_WECHAT_APPSECRET</span></label>
+      <div class="api-key-row">
+        <input type="password" name="wechat_appsecret" id="wechat_appsecret"
+               placeholder="{% if wx_secret_set %}留空则不修改{% else %}公众号 AppSecret{% endif %}"
+               autocomplete="off"/>
+        {% if wx_secret_set %}
+        <span class="key-badge set">已设置</span>
+        <code class="key-masked">{{ wx_secret_masked }}</code>
+        {% else %}
+        <span class="key-badge unset">未设置</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="wechat_author">默认作者 <span class="env-hint">MEDIA_AGENT_WECHAT_AUTHOR</span></label>
+      <input type="text" name="wechat_author" id="wechat_author"
+             value="{{ wechat_author }}" placeholder="发布图文时显示的作者名（可留空）"
+             style="max-width:360px"/>
     </div>
   </fieldset>
 

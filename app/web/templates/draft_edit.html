@@ -66,6 +66,12 @@
       {% for p in platforms %}
       <button type="button" class="btn small" onclick="adaptToPlatform('{{ p.id }}', {{ draft.id }})">{{ p.label }}</button>
       {% endfor %}
+      <span class="tb-sep">|</span>
+      <span class="tb-label">公众号一键发布：</span>
+      <button type="button" class="btn small primary" title="先保存草稿，再推送图文到公众号草稿箱"
+              onclick="publishWeChat({{ draft.id }}, 'draft', 'article')">推送草稿箱</button>
+      <button type="button" class="btn small" title="创建草稿并直接发布（不可撤回）"
+              onclick="publishWeChat({{ draft.id }}, 'publish', 'article')">直接发布</button>
       <a class="btn small" href="javascript:void(0)" onclick="goBackOrList()">返回列表</a>
     </div>
 
@@ -151,6 +157,39 @@
   <a class="btn small" href="{{ p.publish_url }}" target="_blank" rel="noopener"
      onclick="syncToPlatform('{{ p.id }}', {{ draft.id }})">{{ p.label }}</a>
   {% endfor %}
+  <span class="tb-sep">|</span>
+  <button type="button" class="btn small primary"
+          title="上传该视频到公众号素材库（≤10MB MP4）"
+          onclick="publishWeChat({{ draft.id }}, 'draft', 'video')">上传视频到公众号素材库</button>
+  <button type="button" class="btn small"
+          title="生成视频号文案并打开视频号助手发表页（半自动，无封号风险）"
+          onclick="prepareChannels({{ draft.id }})">视频号发布（半自动）</button>
+</div>
+<div id="channels-panel" class="run-panel" style="display:none; margin-top:12px">
+  <div style="display:flex; justify-content:space-between; align-items:center">
+    <strong>视频号半自动发布</strong>
+    <button type="button" class="run-close"
+            onclick="document.getElementById('channels-panel').style.display='none'">×</button>
+  </div>
+  <ol style="margin:8px 0; padding-left:20px; line-height:1.8">
+    <li>已在新标签页打开「视频号助手」发表页，文案已复制到剪贴板。</li>
+    <li>把视频文件拖到视频号上传区：
+      <a id="ch-video-link" class="btn small" href="#" download>下载视频</a>
+      <div class="muted" id="ch-video-path" style="font-size:12px; margin-top:4px"></div>
+    </li>
+    <li>在简介框粘贴文案（Ctrl+V）；如需改动见下方，改完点「复制文案」再粘贴。</li>
+    <li>选封面、加话题后点「发表」。</li>
+  </ol>
+  <label class="muted">标题（视频号无独立标题栏，可放到简介首行）</label>
+  <input type="text" id="ch-title" style="width:100%; margin-bottom:8px"/>
+  <label class="muted">文案（简介 + 话题标签）</label>
+  <textarea id="ch-caption" rows="5" style="width:100%"></textarea>
+  <div style="margin-top:8px">
+    <button type="button" class="btn small primary" onclick="copyChannelsCaption()">复制文案</button>
+    <a id="ch-open" class="btn small"
+       href="https://channels.weixin.qq.com/platform/post/create"
+       target="_blank" rel="noopener">重新打开发表页</a>
+  </div>
 </div>
 {% endif %}
 </div><!-- /tab-video -->
@@ -794,6 +833,90 @@
       btn.textContent = prevText;
       btn.disabled = false;
       alert('转写请求失败');
+    }
+  }
+
+  // One-click publish to WeChat Official Account.
+  // kind: 'article' (图文) | 'video'; mode: 'draft' (草稿箱) | 'publish' (直接发布)
+  async function publishWeChat(draftId, mode, kind) {
+    const label = kind === 'video' ? '上传视频到公众号素材库'
+      : (mode === 'publish' ? '直接发布到公众号' : '推送到公众号草稿箱');
+    if (mode === 'publish' && kind !== 'video' &&
+        !confirm('确定直接发布到公众号？发布后无法撤回。\n（建议先「保存」草稿最新内容）')) return;
+    const btn = event.target;
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ ' + label + '…';
+    let data;
+    try {
+      const fd = new FormData();
+      fd.set('mode', mode);
+      fd.set('kind', kind);
+      const resp = await fetch('/drafts/' + draftId + '/publish/wechat', {
+        method: 'POST', body: fd
+      });
+      data = await resp.json();
+    } catch (e) {
+      btn.textContent = origText; btn.disabled = false;
+      alert(label + '请求失败：' + e.message);
+      return;
+    }
+    btn.textContent = origText; btn.disabled = false;
+    if (data && data.ok) {
+      let msg = '✅ ' + label + '成功。';
+      if (data.draft_media_id) msg += '\n草稿 media_id: ' + data.draft_media_id;
+      if (data.publish_id) msg += '\n发布任务 publish_id: ' + data.publish_id;
+      if (data.media_id) msg += '\n素材 media_id: ' + data.media_id;
+      if (data.note) msg += '\n\n' + data.note;
+      alert(msg);
+    } else {
+      alert('❌ ' + label + '失败：' + ((data && data.error) || '未知错误'));
+    }
+  }
+
+  // 视频号 half-auto: generate caption, copy it, open 视频号助手 create page.
+  async function prepareChannels(draftId) {
+    const btn = event.target;
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ 生成文案…';
+    let data;
+    try {
+      const resp = await fetch('/drafts/' + draftId + '/wechat-channels/prepare',
+        { method: 'POST' });
+      data = await resp.json();
+    } catch (e) {
+      btn.disabled = false; btn.textContent = orig;
+      alert('生成失败：' + e.message);
+      return;
+    }
+    btn.disabled = false; btn.textContent = orig;
+    if (!data || !data.ok) {
+      alert('生成失败：' + ((data && data.error) || '未知错误'));
+      return;
+    }
+    if (!data.has_video) {
+      alert('还没有讲解视频，请先在本页上方「生成视频」。');
+      return;
+    }
+    document.getElementById('ch-title').value = data.title || '';
+    document.getElementById('ch-caption').value = data.caption || '';
+    const link = document.getElementById('ch-video-link');
+    if (data.video_url) link.href = data.video_url;
+    document.getElementById('ch-video-path').textContent =
+      data.video_local_path ? ('本地文件：' + data.video_local_path) : '';
+    document.getElementById('channels-panel').style.display = 'block';
+    try { await navigator.clipboard.writeText(data.caption || ''); } catch (_) { }
+    window.open(data.create_url, '_blank', 'noopener');
+  }
+
+  async function copyChannelsCaption() {
+    const t = document.getElementById('ch-caption').value;
+    try {
+      await navigator.clipboard.writeText(t);
+      alert('文案已复制，去视频号简介框粘贴即可。');
+    } catch (e) {
+      alert('复制失败：' + e.message);
     }
   }
 </script>

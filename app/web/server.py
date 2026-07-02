@@ -1172,6 +1172,86 @@ def create_app(config: Config | None = None,
             "platform_label": p.label if p else platform,
         })
 
+    @app.post("/drafts/{draft_id}/publish/wechat")
+    def draft_publish_wechat(draft_id: int, mode: str = Form("draft"),
+                             kind: str = Form("article")):
+        """One-click publish a draft to a WeChat Official Account.
+
+        kind=article: 图文 -> mode "draft" (草稿箱) or "publish" (草稿+发布).
+        kind=video:   upload the generated mp4 to 素材库.
+        """
+        store = get_store()
+        meta = store.read_draft_body(draft_id)
+        if not meta:
+            return JSONResponse({"error": "draft not found"}, status_code=404)
+        run_config = Config.load(store=store)
+        from app.wechat import get_wechat_client, WeChatError
+        from app.wechat.publish import publish_article, upload_video
+        client = get_wechat_client(run_config)
+        if client is None:
+            return JSONResponse(
+                {"ok": False,
+                 "error": "未配置公众号 AppID/AppSecret，请到「设置」页填写。"},
+                status_code=400)
+        try:
+            if kind == "video":
+                result = upload_video(client, run_config, draft_id, meta)
+            else:
+                result = publish_article(client, run_config, meta, mode=mode)
+        except WeChatError as exc:
+            return JSONResponse(
+                {"ok": False,
+                 "error": f"微信接口错误 {exc.errcode}: {exc.errmsg}"},
+                status_code=502)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)},
+                                status_code=500)
+        if result.get("ok") and result.get("mode") == "publish":
+            try:
+                store.set_draft_status(draft_id, "published")
+            except Exception:                       # noqa: BLE001
+                pass
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+
+    @app.post("/drafts/{draft_id}/wechat-channels/prepare")
+    def draft_channels_prepare(draft_id: int):
+        """Prepare a half-automatic 视频号 (Channels) publish.
+
+        WeChat has no server API to post a video to 视频号, so we only generate
+        the caption + locate the video file; the UI copies the caption and
+        opens 视频号助手 for the user to drag in the file and paste.
+        """
+        store = get_store()
+        meta = store.read_draft_body(draft_id)
+        if not meta:
+            return JSONResponse({"ok": False, "error": "draft not found"},
+                                status_code=404)
+        run_config = Config.load(store=store)
+        provider = None
+        try:
+            provider = get_provider(run_config.llm_provider,
+                                    run_config.llm_api_key,
+                                    run_config.llm_model,
+                                    base_url=run_config.llm_api_base)
+        except Exception:                           # noqa: BLE001
+            provider = None
+        from app.wechat.channels import (
+            build_channels_caption, CHANNELS_CREATE_URL)
+        cap = build_channels_caption(meta, provider)
+        mp4 = video_path(draft_id, config)
+        has_video = mp4 is not None
+        return JSONResponse({
+            "ok": True,
+            "title": cap["title"],
+            "description": cap["description"],
+            "hashtags": cap["hashtags"],
+            "caption": cap["caption"],
+            "create_url": CHANNELS_CREATE_URL,
+            "has_video": has_video,
+            "video_url": f"/videos/draft-{draft_id}/video.mp4" if has_video else None,
+            "video_local_path": str(mp4) if has_video else None,
+        })
+
     def _voice_display_name(voice_id: str, config) -> str:
         """Resolve a voice ID to its display name, falling back to the raw value."""
         if not voice_id:
@@ -1236,6 +1316,15 @@ def create_app(config: Config | None = None,
         else:
             tts_masked = ""
 
+        # WeChat AppSecret mask
+        wx_secret_val = store.get_setting("wechat_appsecret")
+        wx_secret_set = bool(wx_secret_val and wx_secret_val.strip())
+        if wx_secret_set:
+            wx_secret_masked = (wx_secret_val[:4] + "..." + wx_secret_val[-4:]
+                                if len(wx_secret_val) > 8 else "****")
+        else:
+            wx_secret_masked = ""
+
         return templates.TemplateResponse(request, "settings.html", {
             "llm_provider": db_llm_provider or config.llm_provider,
             "llm_model": db_llm_model or (config.llm_model or ""),
@@ -1268,6 +1357,12 @@ def create_app(config: Config | None = None,
             "api_key_masked": masked,
             "img_key_set": img_key_set,
             "img_key_masked": img_masked,
+            "wechat_appid": (store.get_setting("wechat_appid") or
+                             (config.wechat_appid or "")),
+            "wechat_author": (store.get_setting("wechat_author") or
+                              (config.wechat_author or "")),
+            "wx_secret_set": wx_secret_set,
+            "wx_secret_masked": wx_secret_masked,
             "schedule_cron": store.get_setting("schedule_cron", ""),
             "schedule_enabled": store.get_setting("schedule_enabled", "0") == "1",
             "active": "settings"})
@@ -1294,6 +1389,9 @@ def create_app(config: Config | None = None,
                        sensitive_level: str = Form(""),
                        sensitive_words: str = Form(""),
                        promotion_footer: str = Form(""),
+                       wechat_appid: str = Form(""),
+                       wechat_appsecret: str = Form(""),
+                       wechat_author: str = Form(""),
                        schedule_cron: str = Form(""),
                       schedule_enabled: str = Form("0")):
         store = get_store()
@@ -1315,6 +1413,8 @@ def create_app(config: Config | None = None,
             "sensitive_level": sensitive_level.strip(),
             "sensitive_words": sensitive_words.strip(),
             "promotion_footer": promotion_footer.strip(),
+            "wechat_appid": wechat_appid.strip(),
+            "wechat_author": wechat_author.strip(),
         }
         for db_key, value in str_fields.items():
             if value:
@@ -1337,6 +1437,11 @@ def create_app(config: Config | None = None,
         tts_api_key = tts_api_key.strip()
         if tts_api_key:
             store.set_setting("tts_api_key", tts_api_key)
+
+        # WeChat AppSecret: only save if explicitly provided (secret)
+        wx_secret = wechat_appsecret.strip()
+        if wx_secret:
+            store.set_setting("wechat_appsecret", wx_secret)
 
         # Integer fields: only save if explicitly provided
         if max_age_days.strip():

@@ -68,6 +68,55 @@ def test_archive_lists_and_filters(tmp_path):
     assert "GPT-5 breakthrough" in r2.text
 
 
+def test_publish_wechat_requires_credentials(tmp_path):
+    # No WeChat AppID/AppSecret configured -> 400 with a helpful message.
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    r = client.post(f"/drafts/{draft.id}/publish/wechat",
+                    data={"mode": "draft", "kind": "article"})
+    assert r.status_code == 400
+    assert r.json()["ok"] is False
+    assert "AppID" in r.json()["error"]
+
+
+def test_publish_wechat_article_happy_path(tmp_path, monkeypatch):
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    store.set_setting("wechat_appid", "wx123")
+    store.set_setting("wechat_appsecret", "secret")
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+    # get_wechat_client (re-exported from app.wechat) returns a truthy client;
+    # publish_article is mocked so no real network happens.
+    monkeypatch.setattr("app.wechat.get_wechat_client",
+                        lambda cfg: FakeClient())
+    monkeypatch.setattr("app.wechat.publish.publish_article",
+                        lambda cli, cfg, meta, mode="draft": {
+                            "ok": True, "draft_media_id": "DRAFT1",
+                            "title": "原标题", "mode": mode})
+    r = client.post(f"/drafts/{draft.id}/publish/wechat",
+                    data={"mode": "draft", "kind": "article"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert r.json()["draft_media_id"] == "DRAFT1"
+
+
+def test_channels_prepare_returns_caption(tmp_path):
+    # 视频号 half-auto prepare: returns a caption + the create URL. No video
+    # was generated, so has_video is False (still ok=True).
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    r = client.post(f"/drafts/{draft.id}/wechat-channels/prepare")
+    assert r.status_code == 200
+    j = r.json()
+    assert j["ok"] is True
+    assert j["title"]
+    assert j["create_url"].startswith("https://channels.weixin.qq.com")
+    assert j["has_video"] is False
+
+
 def test_draft_edit_and_save(tmp_path):
     client, store, _ = make_client(tmp_path)
     art, draft = seed(store)

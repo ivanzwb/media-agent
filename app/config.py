@@ -53,6 +53,9 @@ class Config:
     sensitive_level: str | None = None  # off | basic | standard | strict
     sensitive_words: str | None = None  # user custom list (comma/newline)
     promotion_footer: str | None = None  # promotion footer appended to drafts
+    wechat_appid: str | None = None      # WeChat Official Account AppID
+    wechat_appsecret: str | None = None  # WeChat Official Account AppSecret
+    wechat_author: str | None = None     # default author shown on published 图文
 
     @property
     def archive_dir(self) -> Path:
@@ -115,6 +118,9 @@ class Config:
             sensitive_level=os.environ.get("MEDIA_AGENT_SENSITIVE_LEVEL"),
             sensitive_words=os.environ.get("MEDIA_AGENT_SENSITIVE_WORDS"),
             promotion_footer=os.environ.get("MEDIA_AGENT_PROMOTION_FOOTER"),
+            wechat_appid=os.environ.get("MEDIA_AGENT_WECHAT_APPID"),
+            wechat_appsecret=os.environ.get("MEDIA_AGENT_WECHAT_APPSECRET"),
+            wechat_author=os.environ.get("MEDIA_AGENT_WECHAT_AUTHOR"),
         )
         if store is not None:
             config._apply_db_overrides(store)
@@ -141,6 +147,9 @@ class Config:
             "sensitive_level": "sensitive_level",
             "sensitive_words": "sensitive_words",
             "promotion_footer": "promotion_footer",
+            "wechat_appid": "wechat_appid",
+            "wechat_appsecret": "wechat_appsecret",
+            "wechat_author": "wechat_author",
         }
         for attr, db_key in str_overrides.items():
             val = store.get_setting(db_key)
