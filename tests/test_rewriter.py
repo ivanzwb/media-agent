@@ -62,7 +62,7 @@ def test_rewrite_preserves_images_and_videos():
     provider = MockProvider(responses=[rewrite_json, json.dumps({"flagged_claims": []})])
     draft = rewrite(art, provider)
     assert "https://x.com/pic1.png" in draft.body_md
-    assert "配图（来自原文）" in draft.body_md
+    assert "配图" not in draft.body_md  # removed in favour of bare image appending
     assert "youtube.com/embed/abc123" in draft.body_md
     assert "视频（来自原文）" in draft.body_md
 
@@ -85,9 +85,9 @@ def test_rewrite_backfills_placeholders_in_body():
     assert "![](https://x.com/pic1.png)" in b
     assert b.index("pic1.png") < b.index("段落二")
     assert "youtube.com/embed/abc" in b
-    # unused IMG2 still appended at the end under the fallback section
+    # unused IMG2 still appended at the end (without the old "配图" header)
     assert "pic2.png" in b
-    assert "配图（来自原文）" in b
+    assert "配图（来自原文）" not in b
 
 
 def test_rewrite_drops_unknown_placeholders():

@@ -141,8 +141,8 @@ def _build_manifest(images: list[str], videos: list[str]):
             lines.append(f"[[{tok}]] - {_hint(u)}")
     if media_map:
         lines.append(
-            "规则：原样保留占位符文字（如 [[IMG1]]），不要编造不存在的图片/"
-            "视频；未使用的会自动附在文末。")
+            "规则：每张图片都必须在正文最相关的位置插入占位符（如 [[IMG1]]），"
+            "不要编造不存在的图片/视频，不要把所有图片堆在文末。")
     return "\n".join(lines), media_map
 
 
@@ -174,8 +174,7 @@ def _media_block(images: list[str], videos: list[str], existing: str) -> str:
     vids = [u for u in _unique(videos or []) if u not in existing][:_MAX_VID]
     parts: list[str] = []
     if imgs:
-        parts.append("\n\n## 配图（来自原文）\n")
-        parts.extend(f"![]({u})" for u in imgs)
+        parts.extend(f"\n\n![]({u})" for u in imgs)
     if vids:
         parts.append("\n\n## 视频（来自原文）\n")
         parts.extend(_video_embed(u) for u in vids)

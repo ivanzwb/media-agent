@@ -20,6 +20,8 @@ _VIDEO_HINTS = (
 _IMAGE_EXTS = ("png", "jpg", "jpeg", "webp", "gif", "avif")
 # m3u8 = HLS playlist (streams .ts segments); downloaded via yt-dlp + ffmpeg.
 _VIDEO_EXTS = ("mp4", "webm", "mov", "m4v", "ogv", "m3u8")
+# Max images that get [[IMG:N]] position placeholders. Matches rewriter _MAX_IMG.
+_MAX_IMG_PLACEHOLDERS = 12
 
 
 def _attr(tag: str, name: str) -> str | None:
@@ -37,6 +39,98 @@ def _media_urls_by_ext(html: str, exts: tuple[str, ...]) -> list[str]:
         r'["\']([^"\']*\.(?:' + "|".join(exts) + r')[^"\']*)["\']',
         re.I)
     return [m.group(1) for m in pat.finditer(html)]
+
+
+def _images_with_placeholders(html: str, base_url: str | None = None
+                              ) -> tuple[str, list[str]]:
+    """Replace visible <img>/<picture>/<figure> with [[IMG:N]] text placeholders
+    (in document order via a single left-to-right pass, up to
+    _MAX_IMG_PLACEHOLDERS) so trafilatura keeps them in the markdown body at
+    their original positions.
+
+    Uses a combined regex to process all image-containing elements in document
+    order (NOT grouped by element type), ensuring the returned image URL list
+    matches the order images appear in the source HTML.
+
+    Returns (modified_html, ordered_unique_image_urls).
+    """
+    imgs: list[str] = []
+    index: dict[str, int] = {}
+
+    def _idx(src: str) -> int:
+        full = urljoin(base_url, src) if base_url else src
+        if full not in index:
+            if len(imgs) >= _MAX_IMG_PLACEHOLDERS:
+                return -1  # past limit, keep original tag
+            index[full] = len(imgs)
+            imgs.append(full)
+        return index[full]
+
+    def _img_url(tag: str) -> str | None:
+        u = (_attr(tag, "src") or _attr(tag, "data-src")
+             or _attr(tag, "data-original"))
+        if not u:
+            ss = _attr(tag, "srcset") or _attr(tag, "data-srcset")
+            if ss:
+                u = ss.split(",")[0].strip().split(" ")[0]
+        return u if (u and not u.startswith("data:")) else None
+
+    # Combined left-to-right scan: matches <figure>, <picture>, or standalone
+    # <img> in document order, whichever comes first at each position.
+    # Named groups let the repl function know which type was matched.
+    _IMG_PAT = re.compile(
+        r'(?P<figure><figure[\s\S]*?</figure>)'
+        r'|(?P<picture><picture[\s\S]*?</picture>)'
+        r'|(?P<img><img\b[^>]*>)',
+        re.I)
+
+    def _repl(m):
+        block = m.group(0)
+        if m.lastgroup == 'figure':
+            img_m = re.search(r'<img\b[^>]*>', block, re.I)
+            if img_m:
+                u = _img_url(img_m.group(0))
+                if u:
+                    idx = _idx(u)
+                    if idx >= 0:
+                        cap_m = re.search(
+                            r'<figcaption[^>]*>(.*?)</figcaption>',
+                            block, re.I | re.DOTALL)
+                        if cap_m:
+                            caption = re.sub(r'<[^>]+>', '',
+                                             cap_m.group(1)).strip()
+                            if caption:
+                                return (f"<p>[[IMG:{idx}]]</p>\n"
+                                        f"<p><em>{caption}</em></p>")
+                        return f"<p>[[IMG:{idx}]]</p>"
+            return block
+        elif m.lastgroup == 'picture':
+            img_m = re.search(r'<img\b[^>]*>', block, re.I)
+            if img_m:
+                u = _img_url(img_m.group(0))
+                if u:
+                    idx = _idx(u)
+                    return (f"<p>[[IMG:{idx}]]</p>"
+                            if idx >= 0 else block)
+            ss_m = re.search(
+                r'<source[^>]+srcset=["\']([^"\']+)["\']', block, re.I)
+            if ss_m:
+                u = ss_m.group(1).split(",")[0].strip().split(" ")[0]
+                idx = _idx(u)
+                return (f"<p>[[IMG:{idx}]]</p>"
+                        if idx >= 0 else block)
+            return block
+        elif m.lastgroup == 'img':
+            u = _img_url(block)
+            if u:
+                idx = _idx(u)
+                if idx >= 0:
+                    return f"<p>[[IMG:{idx}]]</p>"
+            return block
+        return block
+
+    out = _IMG_PAT.sub(_repl, html)
+    return out, imgs
 
 
 def _images_from_html(html: str) -> list[str]:
@@ -248,9 +342,12 @@ def _date_from_html(html: str) -> datetime | None:
 
 
 def extract_from_html(html: str, url: str) -> dict:
-    # Insert [[VIDEO:N]] placeholders where videos appear, so they stay in the
-    # body at their original position instead of being dumped at the end.
-    html_pl, videos = _videos_with_placeholders(html, base_url=url)
+    # Insert [[IMG:N]] placeholders where images appear, so they stay in the
+    # markdown body at their original position instead of being stripped.
+    html_pl, images = _images_with_placeholders(html, base_url=url)
+
+    # Insert [[VIDEO:N]] placeholders where videos appear.
+    html_pl, videos = _videos_with_placeholders(html_pl, base_url=url)
 
     content_md = ""
     # ── 1. readability-lxml: extract main article HTML (removes nav/sidebar) ──
@@ -275,7 +372,22 @@ def extract_from_html(html: str, url: str) -> dict:
     if not content_md.strip():
         content_md = _content_fallback(html)
 
-    images = [urljoin(url, u) for u in _images_from_html(html)]
+    # ── 4. Re-inject orphaned image placeholders ──
+    # If readability/trafilatura stripped some [[IMG:N]] (e.g. hero image
+    # outside the main content element), prepend them at the very top in
+    # document order.  The old "insert before next surviving image" logic
+    # produced correct index order but wrong article position — a stripped
+    # hero image would end up sandwiched next to an inline image rather
+    # than at the top of the article where it belongs.
+    orphans: list[str] = []
+    for i in range(len(images)):
+        placeholder = f"[[IMG:{i}]]"
+        if placeholder not in content_md:
+            orphans.append(placeholder)
+    if orphans:
+        content_md = "\n\n".join(orphans) + "\n\n" + content_md
+
+    images = [urljoin(url, u) for u in images]
     return {
         "title": _title_from_html(html),
         "content_md": content_md,
