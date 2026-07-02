@@ -48,6 +48,17 @@ class Platform(ABC):
         """URL of the platform's editor / creation page (None if N/A)."""
         return None
 
+    @property
+    def video_publish_url(self) -> str | None:
+        """Creator video-publish page for half-automatic video posting
+        (None if the platform has no video half-auto flow)."""
+        return None
+
+    def video_caption_style(self) -> str:
+        """LLM system prompt for a short video caption on this platform.
+        Defaults to the article style; platforms may override."""
+        return self.system_prompt()
+
     def clipboard_text(self, body_md: str, title: str) -> str:
         """Plain-text representation for clipboard copy."""
         return f"{title}\n\n{body_md}"
