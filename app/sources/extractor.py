@@ -342,28 +342,33 @@ def _date_from_html(html: str) -> datetime | None:
 
 
 def extract_from_html(html: str, url: str) -> dict:
-    # Insert [[IMG:N]] placeholders where images appear, so they stay in the
-    # markdown body at their original position instead of being stripped.
-    html_pl, images = _images_with_placeholders(html, base_url=url)
-
-    # Insert [[VIDEO:N]] placeholders where videos appear.
-    html_pl, videos = _videos_with_placeholders(html_pl, base_url=url)
-
     content_md = ""
+    images: list[str] = []
+    videos: list[str] = []
+
     # ── 1. readability-lxml: extract main article HTML (removes nav/sidebar) ──
     try:
         from readability import Document
-        readable = Document(html_pl)
+        readable = Document(html)
         article_html = readable.summary()
         if article_html:
+            # Insert [[IMG:N]] / [[VIDEO:N]] placeholders in the EXTRACTED
+            # article HTML only, so images outside the article body (header
+            # logos, sidebar ads, etc.) are simply ignored.
+            article_pl, images = _images_with_placeholders(
+                article_html, base_url=url)
+            article_pl, videos = _videos_with_placeholders(
+                article_pl, base_url=url)
             content_md = trafilatura.extract(
-                article_html, output_format="markdown",
+                article_pl, output_format="markdown",
                 include_images=True, include_links=True, url=url) or ""
     except Exception:                          # noqa: BLE001
         pass
 
     # ── 2. trafilatura directly on original HTML (fallback) ──
     if not content_md.strip():
+        html_pl, images = _images_with_placeholders(html, base_url=url)
+        html_pl, videos = _videos_with_placeholders(html_pl, base_url=url)
         content_md = trafilatura.extract(
             html_pl, output_format="markdown", include_images=True,
             include_links=True, url=url) or ""
@@ -371,14 +376,13 @@ def extract_from_html(html: str, url: str) -> dict:
     # ── 3. plain <p> tag extraction (last resort) ──
     if not content_md.strip():
         content_md = _content_fallback(html)
+        images = [urljoin(url, u) for u in _images_from_html(html)]
+        videos = [urljoin(url, u) for u in _videos_from_html(html)]
 
     # ── 4. Re-inject orphaned image placeholders ──
-    # If readability/trafilatura stripped some [[IMG:N]] (e.g. hero image
-    # outside the main content element), prepend them at the very top in
-    # document order.  The old "insert before next surviving image" logic
-    # produced correct index order but wrong article position — a stripped
-    # hero image would end up sandwiched next to an inline image rather
-    # than at the top of the article where it belongs.
+    # If trafilatura stripped some [[IMG:N]] placeholders (e.g. figure
+    # elements readability kept but trafilatura dropped), prepend them
+    # at the very top so they aren't lost entirely.
     orphans: list[str] = []
     for i in range(len(images)):
         placeholder = f"[[IMG:{i}]]"
