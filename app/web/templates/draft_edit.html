@@ -41,6 +41,16 @@
       <p class="muted">来源</p>
       <p><a href="{{ meta.source_url }}" target="_blank" rel="noopener">{{ meta.source_name }}</a></p>
     </div>
+    {% if article_id %}
+    <div class="sidebar-section">
+      <p class="muted">操作</p>
+      <p style="display:flex;gap:6px;flex-wrap:wrap">
+        <button type="button" class="btn small" onclick="refetchDraftArticle({{ article_id }})" id="refetch-btn">重新抓取</button>
+        <button type="button" class="btn small" onclick="rewriteDraftArticle({{ article_id }})" id="rewrite-btn">重写</button>
+      </p>
+      <p id="draft-op-status" class="muted" style="font-size:0.9em"></p>
+    </div>
+    {% endif %}
   </div>
   <div>
     <div class="doc-toolbar">
@@ -56,7 +66,7 @@
       {% for p in platforms %}
       <button type="button" class="btn small" onclick="adaptToPlatform('{{ p.id }}', {{ draft.id }})">{{ p.label }}</button>
       {% endfor %}
-      <a class="btn small" href="/drafts">返回列表</a>
+      <a class="btn small" href="javascript:void(0)" onclick="goBackOrList()">返回列表</a>
     </div>
 
     <form id="edit-form" method="post" action="/drafts/{{ draft.id }}" class="edit-form">
@@ -146,6 +156,17 @@
 </div><!-- /tab-video -->
 
 <script>
+  function goBackOrList() {
+    // Prefer browser back — restores scroll position via bfcache naturally.
+    // Fallback to from_page when there is no referrer (direct URL access).
+    if (document.referrer && (document.referrer.indexOf('/drafts') > -1 || document.referrer.indexOf('/archive') > -1)) {
+      history.back();
+    } else {
+      var from = '{{ from_page }}';
+      window.location.href = from === 'archive' ? '/archive' : '/drafts';
+    }
+  }
+
   if (window.marked && marked.setOptions) {
     marked.setOptions({ gfm: true, breaks: false });
   }
@@ -670,6 +691,109 @@
       btn.textContent = origText;
       btn.disabled = false;
       alert('适配请求失败：' + e.message);
+    }
+  }
+
+  // ---- 重新抓取 -----
+  async function refetchDraftArticle(articleId) {
+    const btn = document.getElementById('refetch-btn');
+    const status = document.getElementById('draft-op-status');
+    const prevText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '抓取中…';
+    status.textContent = '';
+    try {
+      const resp = await fetch('/archive/' + articleId + '/refetch', {method: 'POST'});
+      const data = await resp.json();
+      if (data.ok) {
+        var msg = '✅ 图片 ' + data.images + ' / 视频 ' + data.videos;
+        if (data.localized) msg += ' (本地化 ' + data.localized + ')';
+        status.textContent = msg;
+      } else {
+        alert('重新抓取失败：' + (data.error || ''));
+      }
+    } catch (e) {
+      alert('请求失败');
+    } finally {
+      btn.textContent = prevText;
+      btn.disabled = false;
+    }
+  }
+
+  // ---- 重写 (polling) -----
+  let rewriteDraftPollTimer = null;
+  let rewriteDraftArticleId = null;
+
+  function showRewriteDraftPanel() {
+    const status = document.getElementById('draft-op-status');
+    status.innerHTML = '<span class="run-glow running"></span> 转写中…';
+  }
+
+  function hideRewriteDraftPanel() {
+    const status = document.getElementById('draft-op-status');
+    status.textContent = '';
+  }
+
+  function cancelRewriteDraftPoll() {
+    if (rewriteDraftPollTimer) clearTimeout(rewriteDraftPollTimer);
+    rewriteDraftPollTimer = null;
+    rewriteDraftArticleId = null;
+    hideRewriteDraftPanel();
+  }
+
+  async function pollRewriteDraft() {
+    const id = rewriteDraftArticleId;
+    if (!id) return;
+    try {
+      const s = await (await fetch('/api/rewrite-status?article_id=' + id)).json();
+      const status = document.getElementById('draft-op-status');
+      if (s.done) {
+        if (s.draft_id) {
+          status.innerHTML = '✅ 转写完成，跳转中…';
+          setTimeout(function () {
+            cancelRewriteDraftPoll();
+            var from = new URLSearchParams(window.location.search).get('from') || '';
+            window.location = '/drafts/' + s.draft_id + '/edit' + (from ? '?from=' + from : '');
+          }, 800);
+        } else {
+          status.innerHTML = '❌ 转写失败：' + (s.error || '未知错误');
+          rewriteDraftPollTimer = null;
+          rewriteDraftArticleId = null;
+        }
+        return;
+      }
+      if (s.running) {
+        rewriteDraftPollTimer = setTimeout(pollRewriteDraft, 1200);
+      }
+    } catch (e) {
+      rewriteDraftPollTimer = setTimeout(pollRewriteDraft, 2000);
+    }
+  }
+
+  async function rewriteDraftArticle(articleId) {
+    const btn = document.getElementById('rewrite-btn');
+    const status = document.getElementById('draft-op-status');
+    if (!confirm('重写会覆盖该文章已有的主稿草稿，确定吗？')) return;
+    const prevText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ 转写中…';
+    status.textContent = '';
+    try {
+      const resp = await fetch('/archive/' + articleId + '/rewrite', {method: 'POST'});
+      const data = await resp.json();
+      if (data.started === false) {
+        status.textContent = '已有任务在进行';
+        btn.textContent = prevText;
+        btn.disabled = false;
+        return;
+      }
+      rewriteDraftArticleId = articleId;
+      showRewriteDraftPanel();
+      pollRewriteDraft();
+    } catch (e) {
+      btn.textContent = prevText;
+      btn.disabled = false;
+      alert('转写请求失败');
     }
   }
 </script>

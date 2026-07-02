@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request, UploadFile, File
+from fastapi import FastAPI, Form, Query, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -273,10 +273,15 @@ def create_app(config: Config | None = None,
                 _rewrite_log(article_id, "转写完成，进行敏感词过滤…")
                 sanitize_draft(draft, load_words(run_config))
 
+                # Append promotion footer if configured
+                footer = run_config.promotion_footer
+                if footer:
+                    draft.body_md = draft.body_md.rstrip() + f"\n\n---\n{footer}\n"
+
                 _rewrite_log(article_id, "保存草稿…")
+                old = ws.get_draft_for_article(article_id)
                 saved = ws.save_draft(draft)
 
-                old = ws.get_draft_for_article(article_id)
                 if old and old["id"] != saved.id:
                     ws.delete_draft(old["id"])
 
@@ -350,13 +355,18 @@ def create_app(config: Config | None = None,
             "active": "drafts"})
 
     @app.get("/drafts/{draft_id}/edit", response_class=HTMLResponse)
-    def draft_edit(request: Request, draft_id: int):
+    def draft_edit(request: Request, draft_id: int,
+                   from_: str | None = Query(None, alias="from")):
         store = get_store()
         row = store.get_draft(draft_id)
         body = store.read_draft_body(draft_id)
         title_candidates = body.get("title_candidates", []) or []
+        # Fetch article metadata for refetch/rewrite buttons
+        article = store.get_article(row["article_id"]) if row and row["article_id"] else None
         return templates.TemplateResponse(request, "draft_edit.html", {
             "draft": row, "meta": body,
+            "article_id": row["article_id"] if row else None,
+            "article_published_at": article["published_at"] if article else None,
             "title_candidates_text": "\n".join(title_candidates),
             "body_md": body.get("body_md", ""),
             "title_cn": body.get("title_cn") or (title_candidates[0] if title_candidates else ""),
@@ -370,6 +380,7 @@ def create_app(config: Config | None = None,
             "tts_provider": config.tts_provider,
             "tts_voice": config.tts_voice,
             "platforms": list_platforms(),
+            "from_page": from_ or "drafts",
             "active": "drafts"})
 
     @app.post("/drafts/{draft_id}")
