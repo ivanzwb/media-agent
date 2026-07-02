@@ -1252,6 +1252,53 @@ def create_app(config: Config | None = None,
             "video_local_path": str(mp4) if has_video else None,
         })
 
+    @app.post("/drafts/{draft_id}/video-prepare")
+    def draft_video_prepare(draft_id: int, platform: str = Form(...)):
+        """Half-automatic video publish for any registered platform that
+        exposes a video-publish page (e.g. 头条). Generates a platform-styled
+        caption + locates the video; the UI copies the caption, opens the
+        creator page, and offers the video file. No account automation.
+        """
+        store = get_store()
+        meta = store.read_draft_body(draft_id)
+        if not meta:
+            return JSONResponse({"ok": False, "error": "draft not found"},
+                                status_code=404)
+        p = get_platform(platform)
+        if p is None:
+            return JSONResponse({"ok": False, "error": "未知平台"},
+                                status_code=404)
+        video_url_page = getattr(p, "video_publish_url", None)
+        if not video_url_page:
+            return JSONResponse(
+                {"ok": False, "error": f"{p.label} 暂不支持视频半自动发布"},
+                status_code=400)
+        run_config = Config.load(store=store)
+        provider = None
+        try:
+            provider = get_provider(run_config.llm_provider,
+                                    run_config.llm_api_key,
+                                    run_config.llm_model,
+                                    base_url=run_config.llm_api_base)
+        except Exception:                           # noqa: BLE001
+            provider = None
+        from app.platforms.video_prepare import build_video_caption
+        cap = build_video_caption(meta, provider, p.video_caption_style())
+        mp4 = video_path(draft_id, config)
+        has_video = mp4 is not None
+        return JSONResponse({
+            "ok": True,
+            "platform_label": p.label,
+            "title": cap["title"],
+            "description": cap["description"],
+            "hashtags": cap["hashtags"],
+            "caption": cap["caption"],
+            "create_url": video_url_page,
+            "has_video": has_video,
+            "video_url": f"/videos/draft-{draft_id}/video.mp4" if has_video else None,
+            "video_local_path": str(mp4) if has_video else None,
+        })
+
     def _voice_display_name(voice_id: str, config) -> str:
         """Resolve a voice ID to its display name, falling back to the raw value."""
         if not voice_id:

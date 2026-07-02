@@ -117,6 +117,29 @@ def test_channels_prepare_returns_caption(tmp_path):
     assert j["has_video"] is False
 
 
+def test_video_prepare_toutiao(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    r = client.post(f"/drafts/{draft.id}/video-prepare",
+                    data={"platform": "toutiao"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["ok"] is True
+    assert j["create_url"].startswith("https://mp.toutiao.com")
+    assert j["has_video"] is False
+    assert j["title"]
+
+
+def test_video_prepare_unsupported_platform(tmp_path):
+    # zhihu has no video_publish_url -> half-auto video not supported.
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    r = client.post(f"/drafts/{draft.id}/video-prepare",
+                    data={"platform": "zhihu"})
+    assert r.status_code == 400
+    assert r.json()["ok"] is False
+
+
 def test_draft_edit_and_save(tmp_path):
     client, store, _ = make_client(tmp_path)
     art, draft = seed(store)

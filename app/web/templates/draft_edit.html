@@ -164,6 +164,11 @@
   <button type="button" class="btn small"
           title="生成视频号文案并打开视频号助手发表页（半自动，无封号风险）"
           onclick="prepareChannels({{ draft.id }})">视频号发布（半自动）</button>
+  {% for p in platforms %}{% if p.video_publish_url %}
+  <button type="button" class="btn small"
+          title="生成{{ p.label }}视频文案并打开发布页（半自动）"
+          onclick="preparePlatformVideo({{ draft.id }}, '{{ p.id }}')">{{ p.label }}（半自动）</button>
+  {% endif %}{% endfor %}
 </div>
 <div id="channels-panel" class="run-panel" style="display:none; margin-top:12px">
   <div style="display:flex; justify-content:space-between; align-items:center">
@@ -189,6 +194,30 @@
     <a id="ch-open" class="btn small"
        href="https://channels.weixin.qq.com/platform/post/create"
        target="_blank" rel="noopener">重新打开发表页</a>
+  </div>
+</div>
+<div id="pv-panel" class="run-panel" style="display:none; margin-top:12px">
+  <div style="display:flex; justify-content:space-between; align-items:center">
+    <strong id="pv-title-label">视频半自动发布</strong>
+    <button type="button" class="run-close"
+            onclick="document.getElementById('pv-panel').style.display='none'">×</button>
+  </div>
+  <ol style="margin:8px 0; padding-left:20px; line-height:1.8">
+    <li>已在新标签页打开创作页，文案已复制到剪贴板。<span id="pv-hint" class="muted"></span></li>
+    <li>把视频文件拖到上传区：
+      <a id="pv-video-link" class="btn small" href="#" download>下载视频</a>
+      <div class="muted" id="pv-video-path" style="font-size:12px; margin-top:4px"></div>
+    </li>
+    <li>粘贴文案（Ctrl+V）；如需改动见下方，改完点「复制文案」。</li>
+    <li>选封面、加话题后点发布。</li>
+  </ol>
+  <label class="muted">标题</label>
+  <input type="text" id="pv-title" style="width:100%; margin-bottom:8px"/>
+  <label class="muted">文案（简介 + 话题标签）</label>
+  <textarea id="pv-caption" rows="5" style="width:100%"></textarea>
+  <div style="margin-top:8px">
+    <button type="button" class="btn small primary" onclick="copyPvCaption()">复制文案</button>
+    <a id="pv-open" class="btn small" href="#" target="_blank" rel="noopener">重新打开发布页</a>
   </div>
 </div>
 {% endif %}
@@ -915,6 +944,61 @@
     try {
       await navigator.clipboard.writeText(t);
       alert('文案已复制，去视频号简介框粘贴即可。');
+    } catch (e) {
+      alert('复制失败：' + e.message);
+    }
+  }
+
+  // Generic half-auto video publish for any platform with a video-publish page
+  // (e.g. 头条). Generates a caption, copies it, opens the creator page.
+  async function preparePlatformVideo(draftId, platformId) {
+    const btn = event.target;
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ 生成文案…';
+    let data;
+    try {
+      const fd = new FormData();
+      fd.set('platform', platformId);
+      const resp = await fetch('/drafts/' + draftId + '/video-prepare',
+        { method: 'POST', body: fd });
+      data = await resp.json();
+    } catch (e) {
+      btn.disabled = false; btn.textContent = orig;
+      alert('生成失败：' + e.message);
+      return;
+    }
+    btn.disabled = false; btn.textContent = orig;
+    if (!data || !data.ok) {
+      alert('生成失败：' + ((data && data.error) || '未知错误'));
+      return;
+    }
+    if (!data.has_video) {
+      alert('还没有讲解视频，请先在本页上方「生成视频」。');
+      return;
+    }
+    document.getElementById('pv-title-label').textContent =
+      (data.platform_label || '') + ' · 视频半自动发布';
+    document.getElementById('pv-hint').textContent =
+      (platformId === 'toutiao')
+        ? '（头条：若未直接进入视频页，请点左侧「创作 → 视频」）' : '';
+    document.getElementById('pv-title').value = data.title || '';
+    document.getElementById('pv-caption').value = data.caption || '';
+    const link = document.getElementById('pv-video-link');
+    if (data.video_url) link.href = data.video_url;
+    document.getElementById('pv-video-path').textContent =
+      data.video_local_path ? ('本地文件：' + data.video_local_path) : '';
+    document.getElementById('pv-open').href = data.create_url || '#';
+    document.getElementById('pv-panel').style.display = 'block';
+    try { await navigator.clipboard.writeText(data.caption || ''); } catch (_) { }
+    window.open(data.create_url, '_blank', 'noopener');
+  }
+
+  async function copyPvCaption() {
+    const t = document.getElementById('pv-caption').value;
+    try {
+      await navigator.clipboard.writeText(t);
+      alert('文案已复制，去发布页粘贴即可。');
     } catch (e) {
       alert('复制失败：' + e.message);
     }
