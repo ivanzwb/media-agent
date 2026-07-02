@@ -206,12 +206,18 @@ class Store:
         return [r["topic"] for r in rows]
 
     def list_drafts(self, status: str | None = None):
+        sql = (
+            "SELECT drafts.*, articles.published_at AS article_published_at, "
+            "articles.title AS article_title, articles.url AS article_url "
+            "FROM drafts "
+            "LEFT JOIN articles ON articles.id = drafts.article_id"
+        )
         if status:
-            return self.conn.execute(
-                "SELECT * FROM drafts WHERE status=? ORDER BY updated_at DESC",
-                (status,)).fetchall()
-        return self.conn.execute(
-            "SELECT * FROM drafts ORDER BY updated_at DESC").fetchall()
+            sql += " WHERE drafts.status=?"
+            sql += " ORDER BY drafts.updated_at DESC"
+            return self.conn.execute(sql, (status,)).fetchall()
+        sql += " ORDER BY drafts.updated_at DESC"
+        return self.conn.execute(sql).fetchall()
 
     def get_draft(self, draft_id: int):
         return self.conn.execute(
