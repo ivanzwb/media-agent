@@ -98,7 +98,6 @@ def _try_dateparser(text: str) -> datetime | None:
                 "RETURN_AS_TIMEZONE_AWARE": True,
                 "TIMEZONE": "UTC",
                 "PREFER_DATES_FROM": "past",
-                "SUPPORTED_LANGUAGES": ["zh", "en"],
             },
         )
     except Exception:

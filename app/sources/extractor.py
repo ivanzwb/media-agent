@@ -303,13 +303,13 @@ def _build_date_patterns() -> list[str]:
     #    aren't wrapped in <time> or meta tags — e.g. "Jun 16, 2026"
     #    or "4 May 2026".
     pats.append(r'(?<![\/\-\w])((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|'
-               r'Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|'
-               r'Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
-               r'\s+\d{1,2},?\s+\d{4})(?![\/\-\w])')
+                r'Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|'
+                r'Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
+                r'(?:\.)?\s+\d{1,2},?\s+\d{4})(?![\/\-\w])')
     pats.append(r'(?<![\/\-\w])(\d{1,2}\s+(?:Jan(?:uary)?|Feb(?:ruary)?|'
-               r'Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|'
-               r'Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
-               r'\s+\d{4})(?![\/\-\w])')
+                r'Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|'
+                r'Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
+                r'(?:\.)?(?:\s+\d{4}))(?![\/\-\w])')
     # 6. <time datetime="..."> — usually the publish date (sometimes a comment
     #    timestamp), so it sits below the explicit signals above.
     pats.append(r'<time\b[^>]*?\bdatetime=["\']([^"\']+)["\']')
