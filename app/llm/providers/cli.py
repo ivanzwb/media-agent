@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import subprocess
@@ -28,7 +29,7 @@ _TOOLS: dict[str, _ToolDef] = {
         id="opencode",
         label="OpenCode",
         exe="opencode",
-        args=["run", "{prompt}"],
+        args=["run", "--auto", "--format", "json", "{prompt}"],
     ),
     "claude": _ToolDef(
         id="claude",
@@ -46,7 +47,7 @@ _TOOLS: dict[str, _ToolDef] = {
         id="copilot",
         label="GitHub Copilot",
         exe="gh",
-        args=["copilot", "suggest", "{prompt}"],
+        args=["copilot", "-p", "{prompt}"],
     ),
     "zcode": _ToolDef(
         id="zcode",
@@ -106,7 +107,9 @@ class CLIProvider:
     """
 
     # CLI tools that expect the prompt on stdin rather than as an argument.
-    _STDIN_TOOLS: ClassVar[set[str]] = {"codex", "copilot"}
+    # All current tools use {prompt} arg substitution — kept as empty set
+    # for future use if a stdin-based tool is added.
+    _STDIN_TOOLS: ClassVar[set[str]] = set()
 
     def __init__(self, tool_id: str, timeout: int = 120) -> None:
         td = _TOOLS.get(tool_id)
@@ -190,6 +193,14 @@ class CLIProvider:
         if not output:
             raise RuntimeError(f"{self._td.label} returned empty output")
 
+        # ── JSON event stream handler (e.g. opencode --format json) ─────────
+        # Some tools output newline-delimited JSON events.  Extract the
+        # assistant response from events that carry a ``content`` field.
+        if output.startswith("{"):
+            parsed = self._parse_json_events(output)
+            if parsed is not None:
+                return parsed
+
         # Some tools wrap output in markdown code fences — strip the outermost
         # ``` … ``` if present so JSON parsing works downstream.
         if output.startswith("```"):
@@ -198,4 +209,59 @@ class CLIProvider:
             if output.endswith("```"):
                 output = output[:-3].rstrip()
 
+        return output
+
+    @staticmethod
+    def _parse_json_events(output: str) -> str | None:
+        """Parse newline-delimited JSON events and extract response content.
+
+        Returns *None* when the output is not recognizable as structured
+        JSON events, allowing the caller to fall back to plain-text handling.
+        Raises ``RuntimeError`` if all events are errors.
+        """
+        contents: list[str] = []
+        errors: list[str] = []
+        parsed_any = False
+        for line in output.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            parsed_any = True
+
+            # Error events
+            if event.get("type") == "error":
+                err = event.get("error", {})
+                msg = err.get("data", {}).get("message", "") or err.get("message", "")
+                if msg:
+                    errors.append(msg)
+                continue
+
+            # Assistant response content
+            content = event.get("content")
+            if content and isinstance(content, str):
+                contents.append(content)
+                continue
+
+            # Some events carry a top-level message field
+            msg = event.get("message")
+            if msg and isinstance(msg, str):
+                contents.append(msg)
+
+        if not parsed_any:
+            return None  # not JSON events — let caller handle as plain text
+
+        if errors and not contents:
+            raise RuntimeError("; ".join(errors))
+
+        if contents:
+            return "\n".join(contents)
+
+        # JSON events were found but no content — still return the raw
+        # output so the caller gets something to show.
         return output
