@@ -6,6 +6,7 @@
 
 <nav class="settings-nav">
   <a href="#sec-llm">LLM</a>
+  <a href="#sec-agent">Agent</a>
   <a href="#sec-image">图片</a>
   <a href="#sec-tts">TTS</a>
   <a href="#sec-voice">声音库</a>
@@ -56,7 +57,10 @@
              value="{{ llm_api_base }}" placeholder="https://api.openai.com/v1（默认）"/>
       <span class="field-desc">自定义 OpenAI 兼容 API 地址，如 Azure、Ollama、本地 LLM 等</span>
     </div>
+  </fieldset>
 
+  <fieldset class="settings-section" id="sec-agent">
+    <legend>Agent 配置</legend>
     <div class="field">
       <label for="cli_tool">CLI Agent（优先于 LLM Provider） <span class="env-hint">MEDIA_AGENT_CLI_TOOL</span></label>
       <select name="cli_tool" id="cli_tool">
