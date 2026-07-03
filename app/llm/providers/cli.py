@@ -28,7 +28,7 @@ _TOOLS: dict[str, _ToolDef] = {
         id="opencode",
         label="OpenCode",
         exe="opencode",
-        args=["-p", "{prompt}"],
+        args=["run", "{prompt}"],
     ),
     "claude": _ToolDef(
         id="claude",
