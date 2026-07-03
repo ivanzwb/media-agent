@@ -19,7 +19,7 @@ from app.db import connect, init_db
 from app.discovery import discover_from_url, discover_from_keyword
 from app.feeds import load_feeds, save_feeds, SourceConfig, Topic, FeedsConfig
 from app.images.base import get_image_provider
-from app.llm.base import get_provider, get_rewrite_provider
+from app.llm.base import get_provider, get_rewrite_provider, Message
 from app.llm.providers import cli as cli_provider
 from app.models import Article, Draft
 from app.pipeline.adapter import adapt, PLATFORMS
@@ -398,6 +398,63 @@ def create_app(config: Config | None = None,
         if from_page in ("archive", "drafts"):
             redirect_url += f"?from={from_page}"
         return RedirectResponse(url=redirect_url, status_code=303)
+
+    # ── Agent edit (draft → CLI agent) ──────────────────────────────────────
+
+    @app.post("/api/draft/{draft_id}/agent-edit")
+    def draft_agent_edit(draft_id: int, prompt: str = Form(...)):
+        """Send a user prompt + current draft content to the configured CLI agent."""
+        store = get_store()
+
+        # 1. get draft content
+        body = store.read_draft_body(draft_id)
+        if not body or "body_md" not in body:
+            return JSONResponse({"ok": False, "error": "草稿不存在或内容为空"}, status_code=404)
+
+        title = body.get("title_cn") or (
+            (body.get("title_candidates") or [None])[0]) or "无标题"
+        article_md = body["body_md"]
+
+        # 2. determine active CLI tool
+        db_tool = store.get_setting("cli_tool") or ""
+        active_tool = db_tool or config.cli_tool or "auto"
+        if active_tool in ("none", "", None):
+            return JSONResponse(
+                {"ok": False, "error": "未配置 CLI Agent，请在设置页选择并保存后再试"},
+                status_code=400)
+
+        if active_tool == "auto":
+            active_tool = cli_provider.detect_all()
+            if not active_tool:
+                return JSONResponse(
+                    {"ok": False, "error": "自动检测未找到已安装的 CLI Agent，请先在设置页配置"},
+                    status_code=400)
+
+        # 3. verify the tool is actually installed
+        if not cli_provider.detect(active_tool):
+            return JSONResponse(
+                {"ok": False, "error": f"Agent '{active_tool}' 未安装或不在 PATH 中"},
+                status_code=400)
+
+        # 4. invoke the agent
+        provider = cli_provider.CLIProvider(active_tool, timeout=180)
+        messages = [
+            Message(role="system", content=(
+                "你是一个文章编辑助手。下面是用户草稿的完整内容，包含 front-matter 元信息和正文 markdown。"
+                "请根据用户的指令修改这篇草稿。保留 front-matter 元信息结构，只修改正文内容。"
+                "直接输出修改后的完整文件内容（包含 front-matter）。")),
+            Message(role="user", content=(
+                f"## 草稿标题\n{title}\n\n"
+                f"## 草稿正文\n{article_md}\n\n"
+                f"## 用户指令\n{prompt}")),
+        ]
+
+        try:
+            result = provider.chat(messages)
+        except RuntimeError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+        return {"ok": True, "result": result}
 
     @app.get("/images/{name}")
     def serve_image(name: str):

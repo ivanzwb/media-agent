@@ -1004,5 +1004,128 @@
       alert('复制失败：' + e.message);
     }
   }
+
+  // ── Agent dialog ──────────────────────────────────────────────────────────
+
+  function openAgentDialog() {
+    document.getElementById('agent-modal').style.display = 'flex';
+    document.getElementById('agent-prompt').focus();
+  }
+
+  function closeAgentDialog() {
+    document.getElementById('agent-modal').style.display = 'none';
+    document.getElementById('agent-result').innerHTML = '';
+    document.getElementById('agent-status').textContent = '';
+  }
+
+  document.getElementById('agent-send-btn')?.addEventListener('click', async function() {
+    const promptEl = document.getElementById('agent-prompt');
+    const prompt = promptEl.value.trim();
+    if (!prompt) { alert('请输入指令'); return; }
+
+    const statusEl = document.getElementById('agent-status');
+    const resultEl = document.getElementById('agent-result');
+    statusEl.innerHTML = '⏳ Agent 处理中...';
+    resultEl.innerHTML = '';
+    this.disabled = true;
+
+    try {
+      const fd = new FormData();
+      fd.set('prompt', prompt);
+      const resp = await fetch('/api/draft/{{ draft.id }}/agent-edit', { method: 'POST', body: fd });
+      const data = await resp.json();
+      if (data.ok) {
+        statusEl.innerHTML = '✅ 处理完成';
+        resultEl.innerHTML = '<pre style="white-space:pre-wrap;max-height:400px;overflow:auto;background:#1e1e2e;color:#cdd6f4;padding:12px;border-radius:6px;font-size:13px">'
+          + escapeHtml(data.result) + '</pre>';
+      } else {
+        statusEl.innerHTML = '❌ ' + (data.error || '处理失败');
+      }
+    } catch (e) {
+      statusEl.innerHTML = '❌ 请求失败：' + e.message;
+    } finally {
+      this.disabled = false;
+    }
+  });
+
+  function escapeHtml(text) {
+    const d = document.createElement('div');
+    d.textContent = text;
+    return d.innerHTML;
+  }
 </script>
+
+<!-- Floating Agent button -->
+<div id="agent-fab" onclick="openAgentDialog()" title="Agent 编辑">
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <circle cx="12" cy="12" r="8"/>
+    <path d="M12 8v8M8 12h8"/>
+  </svg>
+</div>
+
+<!-- Agent Modal -->
+<div id="agent-modal" class="agent-modal-overlay" onclick="if(event.target===this)closeAgentDialog()">
+  <div class="agent-modal">
+    <div class="agent-modal-header">
+      <span>🤖 Agent 编辑</span>
+      <button type="button" class="agent-modal-close" onclick="closeAgentDialog()">&times;</button>
+    </div>
+    <div class="agent-modal-body">
+      <label for="agent-prompt">输入指令，Agent 将根据当前草稿内容执行：</label>
+      <textarea id="agent-prompt" rows="4" placeholder="例如：把这篇文章改写成小红书风格，加入 emoji 和话题标签&#10;或者：精简正文到 500 字以内，保留核心信息"></textarea>
+      <div id="agent-status" class="agent-status"></div>
+      <div id="agent-result" class="agent-result"></div>
+    </div>
+    <div class="agent-modal-footer">
+      <button type="button" class="btn secondary" onclick="closeAgentDialog()">取消</button>
+      <button type="button" class="btn primary" id="agent-send-btn">发送给 Agent</button>
+    </div>
+  </div>
+</div>
+
+<style>
+#agent-fab {
+  position: fixed; bottom: 28px; right: 28px;
+  width: 52px; height: 52px; border-radius: 50%;
+  background: linear-gradient(135deg, #d97706, #f59e0b);
+  color: #000; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 16px rgba(245,158,11,.35); z-index: 999;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+#agent-fab:hover { transform: scale(1.08); box-shadow: 0 6px 24px rgba(245,158,11,.5); }
+#agent-fab:active { transform: scale(0.95); }
+
+.agent-modal-overlay {
+  display: none; position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0,0,0,.55); align-items: center; justify-content: center;
+}
+.agent-modal {
+  background: var(--surface1); border-radius: var(--radius-lg);
+  width: min(620px, 92vw); max-height: 85vh; display: flex; flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,.3);
+}
+.agent-modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+  font-size: 16px; font-weight: 600;
+}
+.agent-modal-close {
+  background: none; border: none; font-size: 24px; cursor: pointer; color: var(--text); padding: 0 4px;
+}
+.agent-modal-body {
+  padding: 20px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 12px;
+}
+.agent-modal-body label { font-size: 14px; color: var(--text); }
+#agent-prompt {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface2); color: var(--text);
+  font-family: var(--font-sans); font-size: 14px; resize: vertical; box-sizing: border-box;
+}
+.agent-status { font-size: 14px; margin: 4px 0; }
+.agent-result { margin-top: 4px; }
+.agent-modal-footer {
+  display: flex; gap: 8px; justify-content: flex-end;
+  padding: 12px 20px; border-top: 1px solid var(--border);
+}
+</style>
 {% endblock %}
