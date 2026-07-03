@@ -111,6 +111,17 @@ def _is_local(url: str) -> bool:
     return url.startswith("/media/")
 
 
+def _relativize_media(url: str) -> str:
+    """Convert absolute /media/ or /images/ paths to relative paths so
+    markdown files work both in the web app and in external MD editors.
+    /media/abc/pic.png → ../../media/abc/pic.png"""
+    if url.startswith("/media/"):
+        return f"../../media/{url[len('/media/'):]}"
+    if url.startswith("/images/"):
+        return f"../../images/{url[len('/images/'):]}"
+    return url
+
+
 def _img_ext(url: str, content_type: str | None) -> str:
     ext = Path(urlparse(url).path).suffix.lower()
     if ext in _IMG_EXTS:
@@ -254,7 +265,8 @@ def localize_one(article_id: int, store, config: Config, progress=None,
             mapping[old] = new
     new_content = content
     for old, new in mapping.items():
-        new_content = new_content.replace(old, new)
+        rel_new = _relativize_media(new) if _is_local(new) else new
+        new_content = new_content.replace(old, rel_new)
 
     store.update_article_archive(article_id, new_content, art.images,
                                  art.videos)

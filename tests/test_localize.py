@@ -171,7 +171,7 @@ def test_localize_one_updates_archive_frontmatter(tmp_path, monkeypatch):
     assert body["images"] and body["images"][0].startswith("/media/")
     # body content now references the local path, not the remote URL
     assert "https://img.cdn/a.png" not in body["content_md"]
-    assert "/media/" in body["content_md"]
+    assert "../../media/" in body["content_md"]
 
     # running again downloads nothing more (already local)
     stats2 = localize_one(art.id, store, cfg, download_videos=False)

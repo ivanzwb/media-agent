@@ -117,6 +117,19 @@ def _hint(url: str) -> str:
     return (tail or url)[:60]
 
 
+def _relativize_media(url: str) -> str:
+    """Convert absolute /media/ or /images/ paths to relative paths so
+    markdown files work both in the web app and in external MD editors.
+
+    /media/abc/pic.png → ../../media/abc/pic.png
+    """
+    if url.startswith("/media/"):
+        return f"../../media/{url[len('/media/'):]}"
+    if url.startswith("/images/"):
+        return f"../../images/{url[len('/images/'):]}"
+    return url
+
+
 def _video_embed(url: str) -> str:
     return (f'<iframe src="{url}" width="100%" height="420" '
             'frameborder="0" allowfullscreen></iframe>\n'
@@ -181,10 +194,10 @@ def _media_block(images: list[str], videos: list[str], existing: str) -> str:
     vids = [u for u in _unique(videos or []) if u not in existing][:_MAX_VID]
     parts: list[str] = []
     if imgs:
-        parts.extend(f"\n\n![]({u})" for u in imgs)
+        parts.extend(f"\n\n![]({_relativize_media(u)})" for u in imgs)
     if vids:
         parts.append("\n\n## 视频（来自原文）\n")
-        parts.extend(_video_embed(u) for u in vids)
+        parts.extend(_video_embed(_relativize_media(u)) for u in vids)
     return "\n".join(parts)
 
 
@@ -207,10 +220,12 @@ def _inline_content(content_md: str, images: list[str],
     real markdown / video embeds so the LLM sees them in context and can
     place them naturally."""
     for i, url in enumerate(images or []):
-        content_md = content_md.replace(f"[[IMG:{i}]]", f"\n\n![]({url})\n\n")
+        content_md = content_md.replace(
+            f"[[IMG:{i}]]", f"\n\n![]({_relativize_media(url)})\n\n")
     for i, url in enumerate(videos or []):
         content_md = content_md.replace(
-            f"[[VIDEO:{i}]]", f"\n\n{_video_embed(url)}\n\n")
+            f"[[VIDEO:{i}]]",
+            f"\n\n{_video_embed(_relativize_media(url))}\n\n")
     return content_md
 
 
