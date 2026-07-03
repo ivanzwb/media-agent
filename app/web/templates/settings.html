@@ -68,6 +68,8 @@
         <option value="zcode" {{ 'selected' if cli_tool == 'zcode' else '' }}>zcode</option>
         <option value="none" {{ 'selected' if cli_tool == 'none' else '' }}>none（不使用 agent，仅 LLM Provider）</option>
       </select>
+      <button type="button" class="btn" id="test-cli-btn" style="margin-top:6px;padding:2px 10px;font-size:0.85em">测试 Agent</button>
+      <span id="cli-test-result" style="margin-left:8px;font-size:0.9em"></span>
       <span class="field-desc">若检测到已安装的 CLI agent，转写将优先使用 agent 而非 LLM API。agent 具备更强的推理和编辑能力，通常输出质量更高。</span>
     </div>
   </fieldset>
@@ -564,6 +566,39 @@ function cancelRecording() {
     <span class="muted" style="margin-left:12px">大部分设置在下次运行或重启服务时生效</span>
   </div>
 </form>
+
+<script>
+document.getElementById('test-cli-btn')?.addEventListener('click', async function() {
+  const sel = document.getElementById('cli_tool');
+  const toolId = sel.value;
+  if (!toolId || toolId === 'none' || toolId === 'auto') {
+    document.getElementById('cli-test-result').innerHTML = '<span style="color:#888">请先选择一个具体的 agent</span>';
+    return;
+  }
+  const result = document.getElementById('cli-test-result');
+  result.innerHTML = '⏳ 检测中...';
+  this.disabled = true;
+  try {
+    const resp = await fetch('/api/test-cli-agent', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: 'tool_id=' + encodeURIComponent(toolId),
+    });
+    const data = await resp.json();
+    if (data.found) {
+      result.innerHTML = '<span style="color:#22c55e">✅ ' + data.label + ' — ' + data.path
+        + (data.version ? '<br><small style="color:#888">' + data.version + '</small>' : '')
+        + '</span>';
+    } else {
+      result.innerHTML = '<span style="color:#ef4444">❌ ' + (data.error || '检测失败') + '</span>';
+    }
+  } catch (e) {
+    result.innerHTML = '<span style="color:#ef4444">❌ 请求失败：' + e.message + '</span>';
+  } finally {
+    this.disabled = false;
+  }
+});
+</script>
 
 <fieldset class="settings-section" id="sec-export">
   <legend>导出 / 导入配置</legend>

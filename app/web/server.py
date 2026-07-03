@@ -19,6 +19,7 @@ from app.discovery import discover_from_url, discover_from_keyword
 from app.feeds import load_feeds, save_feeds, SourceConfig, Topic, FeedsConfig
 from app.images.base import get_image_provider
 from app.llm.base import get_provider, get_rewrite_provider
+from app.llm.providers import cli as cli_provider
 from app.models import Article, Draft
 from app.pipeline.adapter import adapt, PLATFORMS
 from app.platforms.registry import get as get_platform, list_all as list_platforms
@@ -1537,5 +1538,41 @@ def create_app(config: Config | None = None,
             "schedule_enabled", "1" if schedule_enabled in ("1", "on", "true")
             else "0")
         return RedirectResponse(url="/settings", status_code=303)
+
+    # ── CLI agent test ──────────────────────────────────────────────────────
+
+    @app.post("/api/test-cli-agent")
+    def test_cli_agent(tool_id: str = Form(...)):
+        """Test whether a CLI agent tool is installed and operational."""
+        path = cli_provider.detect(tool_id)
+        if not path:
+            return {"found": False, "error": f"未找到 {tool_id}，请确认已安装"}
+
+        td = cli_provider._TOOLS.get(tool_id)
+        label = td.label if td else tool_id
+
+        # Try getting version string
+        version = None
+        for flag in ("--version", "version", "-v"):
+            try:
+                r = subprocess.run(
+                    [path, flag],
+                    capture_output=True, text=True, timeout=10,
+                    check=False,
+                )
+                out = (r.stdout or r.stderr or "").strip()
+                if out:
+                    # Take only the first line
+                    version = out.splitlines()[0][:120]
+                    break
+            except (subprocess.TimeoutExpired, OSError):
+                continue
+
+        return {
+            "found": True,
+            "path": path,
+            "version": version or "(版本信息不可用)",
+            "label": label,
+        }
 
     return app
