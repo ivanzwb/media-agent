@@ -30,6 +30,12 @@ _TOOLS: dict[str, _ToolDef] = {
         exe="opencode",
         args=["-p", "{prompt}"],
     ),
+    "claude": _ToolDef(
+        id="claude",
+        label="Claude Code",
+        exe="claude",
+        args=["-p", "{prompt}"],
+    ),
     "codex": _ToolDef(
         id="codex",
         label="Codex (OpenAI)",
@@ -41,6 +47,12 @@ _TOOLS: dict[str, _ToolDef] = {
         label="GitHub Copilot",
         exe="gh",
         args=["copilot", "suggest", "{prompt}"],
+    ),
+    "zcode": _ToolDef(
+        id="zcode",
+        label="ZCode",
+        exe="zcode",
+        args=["-p", "{prompt}"],
     ),
 }
 

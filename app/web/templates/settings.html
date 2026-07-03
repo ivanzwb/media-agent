@@ -62,8 +62,10 @@
       <select name="cli_tool" id="cli_tool">
         <option value="auto" {{ 'selected' if cli_tool == 'auto' or not cli_tool else '' }}>auto（自动检测已安装的 agent）</option>
         <option value="opencode" {{ 'selected' if cli_tool == 'opencode' else '' }}>opencode</option>
+        <option value="claude" {{ 'selected' if cli_tool == 'claude' else '' }}>claude（Claude Code）</option>
         <option value="codex" {{ 'selected' if cli_tool == 'codex' else '' }}>codex（OpenAI Codex CLI）</option>
         <option value="copilot" {{ 'selected' if cli_tool == 'copilot' else '' }}>copilot（GitHub Copilot CLI）</option>
+        <option value="zcode" {{ 'selected' if cli_tool == 'zcode' else '' }}>zcode</option>
         <option value="none" {{ 'selected' if cli_tool == 'none' else '' }}>none（不使用 agent，仅 LLM Provider）</option>
       </select>
       <span class="field-desc">若检测到已安装的 CLI agent，转写将优先使用 agent 而非 LLM API。agent 具备更强的推理和编辑能力，通常输出质量更高。</span>
