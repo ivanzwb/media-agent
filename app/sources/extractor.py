@@ -341,6 +341,60 @@ def _date_from_html(html: str) -> datetime | None:
     return None
 
 
+def _fix_markdown_tables(md: str) -> str:
+    """Compact markdown tables by removing blank lines between rows.
+
+    trafilatura inserts blank lines between consecutive table rows, which
+    causes each row to render as a separate, broken one-row table.  This
+    function merges them back into a single contiguous table block.
+    """
+    lines = md.split("\n")
+    out: list[str] = []
+    buffered_rows: list[str] = []   # pending table rows waiting to be flushed
+    in_table = False
+
+    def _is_table_row(s: str) -> bool:
+        """A line containing | is a table row (trafilatura omits leading pipes,
+        e.g. `Col1 | Col2` instead of `| Col1 | Col2 |`)."""
+        return "|" in s
+
+    def _is_separator(s: str) -> bool:
+        """Header/body separator: `|---|----|---|`"""
+        return _is_table_row(s) and bool(
+            __import__("re").match(r"^\|[\s\-:|]+\|$", s))
+
+    def _flush_table():
+        nonlocal in_table
+        if not buffered_rows:
+            return
+        # Ensure a blank line before the table block
+        if out and out[-1] != "":
+            out.append("")
+        out.extend(buffered_rows)
+        out.append("")          # blank line after table
+        buffered_rows.clear()
+        in_table = False
+
+    for line in lines:
+        if _is_table_row(line):
+            if not in_table:
+                in_table = True
+            buffered_rows.append(line)
+        else:
+            if in_table:
+                if line == "":
+                    # Blank line inside a table — skip it to keep rows tight.
+                    continue
+                # Non-table, non-blank line → table has ended.
+                _flush_table()
+            out.append(line)
+
+    # Flush any trailing table
+    _flush_table()
+
+    return "\n".join(out)
+
+
 def extract_from_html(html: str, url: str) -> dict:
     content_md = ""
     images: list[str] = []
@@ -390,6 +444,8 @@ def extract_from_html(html: str, url: str) -> dict:
             orphans.append(placeholder)
     if orphans:
         content_md = "\n\n".join(orphans) + "\n\n" + content_md
+
+    content_md = _fix_markdown_tables(content_md)
 
     images = [urljoin(url, u) for u in images]
     return {
