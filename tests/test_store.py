@@ -47,7 +47,16 @@ def test_exists_by_fingerprint(tmp_path):
     assert store.exists(art.fingerprint())
 
 
-def test_save_draft_writes_md(tmp_path):
+def test_exists_by_title_source(tmp_path):
+    store = make_store(tmp_path)
+    art = sample_article()
+    assert not store.exists_by_title_source(art.title, art.source_name)
+    store.save_article(art)
+    assert store.exists_by_title_source(art.title, art.source_name)
+    # Different source, same title — should NOT match
+    assert not store.exists_by_title_source(art.title, "Other Blog")
+    # Same source, different title — should NOT match
+    assert not store.exists_by_title_source("Unrelated News", art.source_name)
     store = make_store(tmp_path)
     art = store.save_article(sample_article())
     draft = Draft(article_id=art.id,

@@ -159,6 +159,37 @@ def test_draft_edit_and_save(tmp_path):
     assert store.get_draft(draft.id)["status"] == "approved"
 
 
+def test_draft_save_preserves_from_page(tmp_path):
+    """POST /drafts/{id} preserves the from_page form field in the redirect URL."""
+    client, store, _ = make_client(tmp_path)
+    art, draft = seed(store)
+
+    # Save with from_page=archive → redirect should include ?from=archive
+    r = client.post(f"/drafts/{draft.id}", data={
+        "title_candidates": "新标题",
+        "body_md": "正文",
+        "status": "reviewing",
+        "from_page": "archive"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert "?from=archive" in r.headers["location"]
+
+    # Save with from_page=drafts
+    r2 = client.post(f"/drafts/{draft.id}", data={
+        "title_candidates": "标题2",
+        "body_md": "正文2",
+        "status": "approved",
+        "from_page": "drafts"}, follow_redirects=False)
+    assert r2.status_code == 303
+    assert "?from=drafts" in r2.headers["location"]
+
+    # Save WITHOUT from_page → no ?from= in redirect
+    r3 = client.post(f"/drafts/{draft.id}", data={
+        "title_candidates": "标题3",
+        "body_md": "正文3"}, follow_redirects=False)
+    assert r3.status_code == 303
+    assert "?from=" not in r3.headers["location"]
+
+
 def test_sources_view_and_add(tmp_path):
     client, store, feeds = make_client(tmp_path)
     r = client.get("/sources")
@@ -251,16 +282,36 @@ def test_archive_rewrite_article(tmp_path):
         topic="AI"))
     assert store.get_draft_for_article(art.id) is None
 
+    # Rewrite is async (background thread + progress polling).
+    # The POST returns immediately with "started".
     r = client.post(f"/archive/{art.id}/rewrite")
     assert r.status_code == 200
     data = r.json()
-    assert data["ok"] is True
-    assert data["draft_id"]
-    # now there is a draft for this article
-    assert store.get_draft_for_article(art.id) is not None
-    # rewrite again should overwrite (still exactly one draft)
+    assert data["started"] is True
+
+    # Poll until rewrite completes (MockProvider is instant, so this is fast)
+    import time
+    for _ in range(30):  # max 3 seconds
+        status = client.get(f"/api/rewrite-status?article_id={art.id}").json()
+        if status.get("done"):
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError("Rewrite did not complete in time")
+
+    # A draft now exists for this article
+    draft = store.get_draft_for_article(art.id)
+    assert draft is not None
+    assert status.get("draft_id") == draft["id"]
+
+    # Rewrite again should overwrite (still exactly one draft)
     r2 = client.post(f"/archive/{art.id}/rewrite")
-    assert r2.json()["ok"] is True
+    assert r2.json()["started"] is True
+    for _ in range(30):
+        s2 = client.get(f"/api/rewrite-status?article_id={art.id}").json()
+        if s2.get("done"):
+            break
+        time.sleep(0.1)
     drafts_for_article = [d for d in store.list_drafts()
                if d["article_id"] == art.id]
     assert len(drafts_for_article) == 1

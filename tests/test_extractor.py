@@ -2,7 +2,7 @@ from pathlib import Path
 
 from app.sources.extractor import (
     extract_from_html, _videos_with_placeholders, _images_from_html,
-    _videos_from_html, _date_from_html)
+    _videos_from_html, _date_from_html, _fix_markdown_tables)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_article.html"
 
@@ -166,3 +166,107 @@ def test_date_falls_back_to_created_when_no_published():
 
 def test_date_none_when_absent():
     assert _date_from_html("<html><body><p>no date here</p></body></html>") is None
+
+
+# ── table compaction ──────────────────────────────────────────────────────
+
+def test_fix_tables_removes_intra_table_blanks():
+    """Blank lines between table rows are removed; rows become contiguous."""
+    md = (
+        "intro paragraph\n\n"
+        "| Col1 | Col2 |\n"
+        "|---|---|\n"
+        "\n"
+        "| A | B |\n"
+        "\n"
+        "| C | D |\n"
+        "\n"
+        "after paragraph"
+    )
+    fixed = _fix_markdown_tables(md)
+    lines = fixed.split("\n")
+    # header and separator are adjacent
+    hdr_idx = lines.index("| Col1 | Col2 |")
+    assert lines[hdr_idx + 1] == "|---|---|"
+    # data rows are adjacent — no blank between them
+    a_idx = lines.index("| A | B |")
+    assert lines[a_idx + 1] == "| C | D |"
+    # blank line after table separates it from next paragraph
+    assert lines[a_idx + 2] == ""
+    assert lines[a_idx + 3] == "after paragraph"
+
+
+def test_fix_tables_handles_trafilatura_format():
+    """trafilatura omits leading pipes: `Col1 | Col2` instead of `| Col1 | Col2 |`."""
+    md = (
+        "above text\n\n"
+        "Score | Description |\n"
+        "---|---|\n"
+        "\n"
+        "0 | No change |\n"
+        "\n"
+        "1 | Minor |\n"
+        "\n"
+        "below text"
+    )
+    fixed = _fix_markdown_tables(md)
+    # blank lines between rows are gone
+    assert "\n\n0 | No change |\n\n" not in fixed
+    assert "\n\n1 | Minor |\n\n" not in fixed
+    # rows are contiguous
+    assert "0 | No change |\n1 | Minor |" in fixed
+
+
+def test_fix_tables_noop_when_already_clean():
+    """Already-clean tables pass through unchanged (aside from trailing blank)."""
+    md = (
+        "text\n\n"
+        "| A | B |\n"
+        "|---|---|\n"
+        "| 1 | 2 |\n"
+        "| 3 | 4 |\n"
+        "\n"
+        "more text"
+    )
+    fixed = _fix_markdown_tables(md)
+    lines = fixed.split("\n")
+    assert lines[lines.index("| 1 | 2 |") + 1] == "| 3 | 4 |"
+    assert "more text" in fixed
+
+
+def test_fix_tables_no_table():
+    """Content without tables is unchanged."""
+    md = "Just plain text.\n\nNo pipes anywhere.\n"
+    assert _fix_markdown_tables(md) == md
+
+
+def test_fix_tables_multiple_tables():
+    """Multiple tables in one document are each compacted independently."""
+    md = (
+        "## Table 1\n\n"
+        "H1 | H2 |\n"
+        "---|---|---|\n"
+        "\n"
+        "a | b |\n"
+        "\n"
+        "## Interlude\n\n"
+        "## Table 2\n\n"
+        "X | Y |\n"
+        "---|---|\n"
+        "\n"
+        "1 | 2 |\n"
+    )
+    fixed = _fix_markdown_tables(md)
+    lines = fixed.split("\n")
+    # Table 1: contiguous
+    t1_hdr = lines.index("H1 | H2 |")
+    assert lines[t1_hdr + 1] == "---|---|---|"
+    assert lines[t1_hdr + 2] == "a | b |"
+    # Table 1, blank after
+    assert lines[t1_hdr + 3] == ""
+    # Interlude preserved
+    assert "## Interlude" in fixed
+    # Table 2: contiguous
+    t2_hdr = lines.index("X | Y |")
+    assert lines[t2_hdr + 1] == "---|---|"
+    assert lines[t2_hdr + 2] == "1 | 2 |"

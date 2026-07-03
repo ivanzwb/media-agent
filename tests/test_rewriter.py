@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from app.models import Article, Draft
 from app.llm.providers.mock import MockProvider
-from app.pipeline.rewriter import rewrite
+from app.pipeline.rewriter import rewrite, _inline_content, _video_embed
 
 
 def sample_article():
@@ -67,39 +67,43 @@ def test_rewrite_preserves_images_and_videos():
     assert "视频（来自原文）" in draft.body_md
 
 
-def test_rewrite_backfills_placeholders_in_body():
+def test_rewrite_keeps_inlined_images_in_position():
+    """With _inline_content, the LLM sees real `![](url)` in the source and
+    should place them in the body at natural positions — no placeholders."""
     art = Article(
         title="t", content_md="c", url="https://x.com/a", source_name="X",
         source_type="scrape", published_at=None,
         images=["https://x.com/pic1.png", "https://x.com/pic2.png"],
         raw_summary=None, fetched_at=datetime.now(timezone.utc), topic="AI",
         videos=["https://www.youtube.com/embed/abc"])
-    # LLM places IMG1 mid-article and VID1; IMG2 left unused.
-    body = "## 段落一\n讲了背景\n\n[[IMG1]]\n\n## 段落二\n演示视频：\n\n[[VID1]]\n"
+    # LLM places images naturally with ![](url) syntax
+    body = (
+        "## 段落一\n讲了背景\n\n"
+        "![](https://x.com/pic1.png)\n\n"
+        "## 段落二\n演示视频：\n\n"
+    )
     rewrite_json = json.dumps({"title_candidates": ["标题"], "body_md": body})
     provider = MockProvider(responses=[rewrite_json, json.dumps({"flagged_claims": []})])
     draft = rewrite(art, provider)
     b = draft.body_md
-    # placeholder gone, replaced with real markdown image inline (before 段落二)
-    assert "[[IMG1]]" not in b and "[[VID1]]" not in b
+    # pic1 placed before 段落二 by LLM
     assert "![](https://x.com/pic1.png)" in b
     assert b.index("pic1.png") < b.index("段落二")
+    # video appended by _media_block since LLM didn't include it
     assert "youtube.com/embed/abc" in b
-    # unused IMG2 still appended at the end (without the old "配图" header)
+    # pic2 appended as unused
     assert "pic2.png" in b
-    assert "配图（来自原文）" not in b
 
 
-def test_rewrite_drops_unknown_placeholders():
-    art = Article(
-        title="t", content_md="c", url="https://x.com/a", source_name="X",
-        source_type="scrape", published_at=None, images=[], raw_summary=None,
-        fetched_at=datetime.now(timezone.utc), topic="AI")
-    body = "正文 [[IMG9]] 残留占位符应被清除"
-    rewrite_json = json.dumps({"title_candidates": ["标题"], "body_md": body})
-    provider = MockProvider(responses=[rewrite_json, json.dumps({"flagged_claims": []})])
-    draft = rewrite(art, provider)
-    assert "[[IMG9]]" not in draft.body_md
+def test_inline_content_handles_videos():
+    """_inline_content replaces [[VIDEO:N]] with real <iframe> embeds."""
+    source = "text before\n\n[[VIDEO:0]]\n\ntext after"
+    videos = ["https://youtube.com/embed/xyz"]
+    result = _inline_content(source, images=[], videos=videos)
+    assert "[[VIDEO:0]]" not in result
+    assert '<iframe' in result
+    assert 'youtube.com/embed/xyz' in result
+    assert result.index("text before") < result.index("<iframe") < result.index("text after")
 
 
 def test_rewrite_skips_media_already_in_body():
