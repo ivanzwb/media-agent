@@ -1018,7 +1018,8 @@
     document.getElementById('agent-status').textContent = '';
   }
 
-  document.getElementById('agent-send-btn')?.addEventListener('click', async function() {
+  async function sendAgentPrompt() {
+    const btn = document.getElementById('agent-send-btn');
     const promptEl = document.getElementById('agent-prompt');
     const prompt = promptEl.value.trim();
     if (!prompt) { alert('请输入指令'); return; }
@@ -1027,7 +1028,7 @@
     const resultEl = document.getElementById('agent-result');
     statusEl.innerHTML = '⏳ Agent 处理中...';
     resultEl.innerHTML = '';
-    this.disabled = true;
+    btn.disabled = true;
 
     try {
       const fd = new FormData();
@@ -1044,9 +1045,9 @@
     } catch (e) {
       statusEl.innerHTML = '❌ 请求失败：' + e.message;
     } finally {
-      this.disabled = false;
+      btn.disabled = false;
     }
-  });
+  }
 
   function escapeHtml(text) {
     const d = document.createElement('div');
@@ -1078,7 +1079,7 @@
     </div>
     <div class="agent-modal-footer">
       <button type="button" class="btn secondary" onclick="closeAgentDialog()">取消</button>
-      <button type="button" class="btn primary" id="agent-send-btn">发送给 Agent</button>
+      <button type="button" class="btn primary" id="agent-send-btn" onclick="sendAgentPrompt()">发送给 Agent</button>
     </div>
   </div>
 </div>
