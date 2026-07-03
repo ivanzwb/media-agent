@@ -184,6 +184,21 @@ class CLIProvider:
 
         if proc.returncode != 0:
             stderr = (proc.stderr or "").strip()[:500]
+            stdout = (proc.stdout or "").strip()
+            # Some tools (e.g. opencode --format json) write the real error
+            # message to stdout as a JSON error event, not to stderr.
+            if stdout.startswith("{"):
+                try:
+                    parsed = self._parse_json_events(stdout)
+                except RuntimeError as json_err:
+                    # JSON error events found — use that message
+                    raise RuntimeError(
+                        f"{self._td.label} exited with code {proc.returncode}: {json_err}"
+                    ) from None
+                if parsed and parsed != stdout:
+                    raise RuntimeError(
+                        f"{self._td.label} exited with code {proc.returncode}: {parsed}"
+                    )
             raise RuntimeError(
                 f"{self._td.label} exited with code {proc.returncode}"
                 + (f": {stderr}" if stderr else "")
