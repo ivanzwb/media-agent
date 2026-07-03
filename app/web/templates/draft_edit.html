@@ -1097,12 +1097,13 @@
 
 .agent-modal-overlay {
   display: none; position: fixed; inset: 0; z-index: 1000;
-  background: rgba(0,0,0,.55); align-items: center; justify-content: center;
+  background: rgba(0,0,0,.75); align-items: center; justify-content: center;
 }
 .agent-modal {
-  background: var(--surface1); border-radius: var(--radius-lg);
+  background: var(--surface, #161618); border-radius: var(--radius-lg, 16px);
   width: min(620px, 92vw); max-height: 85vh; display: flex; flex-direction: column;
-  box-shadow: 0 20px 60px rgba(0,0,0,.3);
+  box-shadow: 0 20px 60px rgba(0,0,0,.5);
+  border: 1px solid var(--border, #333);
 }
 .agent-modal-header {
   display: flex; align-items: center; justify-content: space-between;
