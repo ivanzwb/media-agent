@@ -386,12 +386,15 @@ def create_app(config: Config | None = None,
     @app.post("/drafts/{draft_id}")
     def draft_save(draft_id: int, title_candidates: str = Form(""),
                    body_md: str = Form(""), status: str = Form("drafted"),
-                   title_cn: str = Form("")):
+                   title_cn: str = Form(""), from_page: str = Form("")):
         store = get_store()
         titles = [t.strip() for t in title_candidates.splitlines() if t.strip()]
         store.update_draft_body(draft_id, titles, body_md, status=status,
                                 title_cn=title_cn.strip() or None)
-        return RedirectResponse(url=f"/drafts/{draft_id}/edit", status_code=303)
+        redirect_url = f"/drafts/{draft_id}/edit"
+        if from_page in ("archive", "drafts"):
+            redirect_url += f"?from={from_page}"
+        return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.get("/images/{name}")
     def serve_image(name: str):

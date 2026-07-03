@@ -84,6 +84,7 @@
 
       <label>正文（Markdown）</label>
       <textarea name="body_md" id="editor">{{ body_md }}</textarea>
+      <input type="hidden" name="from_page" value="{{ from_page }}"/>
     </form>
   </div>
 </div>
@@ -225,14 +226,14 @@
 
 <script>
   function goBackOrList() {
-    // Prefer browser back — restores scroll position via bfcache naturally.
-    // Fallback to from_page when there is no referrer (direct URL access).
-    if (document.referrer && (document.referrer.indexOf('/drafts') > -1 || document.referrer.indexOf('/archive') > -1)) {
-      history.back();
-    } else {
-      var from = '{{ from_page }}';
-      window.location.href = from === 'archive' ? '/archive' : '/drafts';
-    }
+    // Navigate directly to the source page instead of using history.back().
+    // history.back() fails after form POST because the POST→redirect creates
+    // an extra history entry — the first back() goes to the POST URL (which
+    // redirects back to this page), requiring a second click to actually leave.
+    // Using window.location works reliably because archive.html/drafts.html
+    // already restore scroll position from sessionStorage.
+    var from = '{{ from_page }}';
+    window.location.href = from === 'archive' ? '/archive' : '/drafts';
   }
 
   if (window.marked && marked.setOptions) {

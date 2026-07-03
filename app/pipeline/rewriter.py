@@ -75,14 +75,15 @@ REWRITE_INSTRUCTION = (
     "- 不得不确定原文是否提及就写「据 X 报道/分析」\n"
     "- 引用原文一定要准确对应，不要混淆不同来源的信息\n\n"
     "### 图文结合\n\n"
-    "- 原文正文中的图片链接（格式为 ![]()）已嵌入对应段落之间\n"
+    "- 原文正文中的图片（![]()）与视频（<iframe>）已嵌入对应段落之间\n"
     "- 改写时保留最相关的 **2-4 张** 图片，放在正文中最合适的位置\n"
-    "- 不要把图片堆在开头或结尾，每张图要与附近文字内容相关\n"
-    "- 如果某张图跟内容不相关就删掉，不要硬塞\n\n"
+    "- 如果有原文视频（<iframe>），也必须放在正文中与内容相关的合适位置，不要堆在开头或结尾\n"
+    "- 每张图/每个视频要与附近文字内容相关\n"
+    "- 如果某张图/视频跟内容不相关就删掉，不要硬塞\n\n"
     "输出严格的 JSON，字段：\n"
     '  "title_candidates": [3 个吸睛但不虚假的标题],\n'
     '  "body_md": "Markdown 正文（中文数字编号章节+短段落+'
-    '图片用 ![]() 语法在相关段落间自然嵌入）"\n'
+    '图片用 ![]() 语法、视频用 <iframe> 语法在相关段落间自然嵌入）"\n'
     "不要输出 JSON 以外的任何内容。\n\n"
     "原文标题：{title}\n来源：{source}\n\n原文正文：\n{content}"
 )
@@ -200,19 +201,25 @@ def _extract_json(text: str) -> dict | None:
             return None
 
 
-def _inline_content(content_md: str, images: list[str]) -> str:
-    """Replace [[IMG:N]] placeholders from the extractor with real markdown
-    images so the LLM sees them in context and can place them naturally."""
+def _inline_content(content_md: str, images: list[str],
+                    videos: list[str] | None = None) -> str:
+    """Replace [[IMG:N]] / [[VIDEO:N]] placeholders from the extractor with
+    real markdown / video embeds so the LLM sees them in context and can
+    place them naturally."""
     for i, url in enumerate(images or []):
         content_md = content_md.replace(f"[[IMG:{i}]]", f"\n\n![]({url})\n\n")
+    for i, url in enumerate(videos or []):
+        content_md = content_md.replace(
+            f"[[VIDEO:{i}]]", f"\n\n{_video_embed(url)}\n\n")
     return content_md
 
 
 def rewrite(article: Article, provider: LLMProvider) -> Draft:
     videos = getattr(article, "videos", []) or []
 
-    # Replace [[IMG:N]] with real images so the LLM sees them inline
-    content = _inline_content(article.content_md[:6000], article.images or [])
+    # Replace [[IMG:N]] / [[VIDEO:N]] with real media so the LLM sees them inline
+    content = _inline_content(article.content_md[:6000],
+                              article.images or [], videos)
 
     rewrite_prompt = REWRITE_INSTRUCTION.format(
         title=article.title, source=article.source_name,

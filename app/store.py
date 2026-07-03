@@ -25,6 +25,15 @@ class Store:
         ).fetchone()
         return row is not None
 
+    def exists_by_title_source(self, title: str, source_name: str) -> bool:
+        """Check if an article with the same title from the same source
+        already exists — catches duplicates that differ by URL but not content."""
+        row = self.conn.execute(
+            "SELECT 1 FROM articles WHERE title=? AND source_name=?",
+            (title, source_name),
+        ).fetchone()
+        return row is not None
+
     def _get_by_fingerprint(self, fingerprint: str):
         return self.conn.execute(
             "SELECT * FROM articles WHERE fingerprint=?", (fingerprint,)

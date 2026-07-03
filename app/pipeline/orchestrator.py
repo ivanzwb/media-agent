@@ -134,6 +134,8 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
         for art in articles:
             if store.exists(art.fingerprint()):
                 continue
+            if store.exists_by_title_source(art.title, art.source_name):
+                continue
             art.topic = classify(art, feeds.topics, provider)
             if download_media:
                 emit(f"下载媒体到本地：{art.title[:40]}", stats)
