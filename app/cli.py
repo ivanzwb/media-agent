@@ -8,7 +8,7 @@ import typer
 from app.config import Config
 from app.db import connect, init_db
 from app.feeds import load_feeds
-from app.llm.base import get_provider
+from app.llm.base import get_provider, get_rewrite_provider
 from app.pipeline.orchestrator import run_pipeline
 from app.store import Store
 
@@ -43,8 +43,9 @@ def run(feeds: str = typer.Option("feeds.yaml", help="Path to feeds.yaml"),
     cfg = Config.load()
     store = _store()
     feeds_cfg = load_feeds(Path(feeds))
-    provider = get_provider(cfg.llm_provider, cfg.llm_api_key, cfg.llm_model,
-                            base_url=cfg.llm_api_base)
+    provider = get_rewrite_provider(cfg.llm_provider, cfg.llm_api_key,
+                                    cfg.llm_model, llm_api_base=cfg.llm_api_base,
+                                    cli_tool=cfg.cli_tool)
     image_provider = None
     if with_images:
         from app.images.base import get_image_provider

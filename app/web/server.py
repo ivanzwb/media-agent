@@ -18,7 +18,7 @@ from app.db import connect, init_db
 from app.discovery import discover_from_url, discover_from_keyword
 from app.feeds import load_feeds, save_feeds, SourceConfig, Topic, FeedsConfig
 from app.images.base import get_image_provider
-from app.llm.base import get_provider
+from app.llm.base import get_provider, get_rewrite_provider
 from app.models import Article, Draft
 from app.pipeline.adapter import adapt, PLATFORMS
 from app.platforms.registry import get as get_platform, list_all as list_platforms
@@ -87,10 +87,10 @@ def create_app(config: Config | None = None,
         # Reload config with DB overrides so settings changes take effect
         run_config = Config.load(store=store)
         feeds_cfg = load_feeds(feeds_path)
-        provider = get_provider(run_config.llm_provider,
-                                run_config.llm_api_key,
-                                run_config.llm_model,
-                                base_url=run_config.llm_api_base)
+        provider = get_rewrite_provider(
+            run_config.llm_provider, run_config.llm_api_key,
+            run_config.llm_model, llm_api_base=run_config.llm_api_base,
+            cli_tool=run_config.cli_tool)
         image_provider = get_image_provider(
             run_config.image_provider,
             run_config.image_api_key or run_config.llm_api_key,
@@ -258,9 +258,10 @@ def create_app(config: Config | None = None,
                 _rewrite_log(article_id, "构建 LLM provider…")
                 ws = get_store()
                 run_config = Config.load(store=ws)
-                provider = get_provider(
+                provider = get_rewrite_provider(
                     run_config.llm_provider, run_config.llm_api_key,
-                    run_config.llm_model, base_url=run_config.llm_api_base)
+                    run_config.llm_model, llm_api_base=run_config.llm_api_base,
+                    cli_tool=run_config.cli_tool)
                 image_provider = get_image_provider(
                     run_config.image_provider,
                     run_config.image_api_key or run_config.llm_api_key,
@@ -1341,6 +1342,7 @@ def create_app(config: Config | None = None,
         db_sensitive_level = store.get_setting("sensitive_level") or ""
         db_sensitive_words = store.get_setting("sensitive_words") or ""
         db_promotion_footer = store.get_setting("promotion_footer") or ""
+        db_cli_tool = store.get_setting("cli_tool") or ""
 
         # API key: indicate whether set, mask the value
         api_key_val = store.get_setting("llm_api_key")
@@ -1403,6 +1405,7 @@ def create_app(config: Config | None = None,
             "sensitive_level": db_sensitive_level or (config.sensitive_level or "standard"),
             "sensitive_words": db_sensitive_words or (config.sensitive_words or ""),
             "promotion_footer": db_promotion_footer or (config.promotion_footer or ""),
+            "cli_tool": db_cli_tool or (config.cli_tool or "auto"),
             "api_key_set": api_key_set,
             "api_key_masked": masked,
             "img_key_set": img_key_set,
@@ -1442,6 +1445,7 @@ def create_app(config: Config | None = None,
                        wechat_appid: str = Form(""),
                        wechat_appsecret: str = Form(""),
                        wechat_author: str = Form(""),
+                       cli_tool: str = Form(""),
                        schedule_cron: str = Form(""),
                       schedule_enabled: str = Form("0")):
         store = get_store()
@@ -1465,6 +1469,7 @@ def create_app(config: Config | None = None,
             "promotion_footer": promotion_footer.strip(),
             "wechat_appid": wechat_appid.strip(),
             "wechat_author": wechat_author.strip(),
+            "cli_tool": cli_tool.strip(),
         }
         for db_key, value in str_fields.items():
             if value:

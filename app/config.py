@@ -56,6 +56,7 @@ class Config:
     wechat_appid: str | None = None      # WeChat Official Account AppID
     wechat_appsecret: str | None = None  # WeChat Official Account AppSecret
     wechat_author: str | None = None     # default author shown on published 图文
+    cli_tool: str | None = None          # "auto" | "opencode" | "codex" | "copilot" | "none"
 
     @property
     def archive_dir(self) -> Path:
@@ -121,6 +122,7 @@ class Config:
             wechat_appid=os.environ.get("MEDIA_AGENT_WECHAT_APPID"),
             wechat_appsecret=os.environ.get("MEDIA_AGENT_WECHAT_APPSECRET"),
             wechat_author=os.environ.get("MEDIA_AGENT_WECHAT_AUTHOR"),
+            cli_tool=os.environ.get("MEDIA_AGENT_CLI_TOOL", "none"),
         )
         if store is not None:
             config._apply_db_overrides(store)
@@ -150,6 +152,7 @@ class Config:
             "wechat_appid": "wechat_appid",
             "wechat_appsecret": "wechat_appsecret",
             "wechat_author": "wechat_author",
+            "cli_tool": "cli_tool",
         }
         for attr, db_key in str_overrides.items():
             val = store.get_setting(db_key)
