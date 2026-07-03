@@ -1615,8 +1615,8 @@ def create_app(config: Config | None = None,
             try:
                 r = subprocess.run(
                     [path, flag],
-                    capture_output=True, text=True, timeout=10,
-                    check=False,
+                    capture_output=True, encoding="utf-8", errors="replace",
+                    timeout=10, check=False,
                 )
                 out = (r.stdout or r.stderr or "").strip()
                 if out:

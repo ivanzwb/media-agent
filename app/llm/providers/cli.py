@@ -154,18 +154,18 @@ class CLIProvider:
         On failure raises ``RuntimeError``.
         """
         use_stdin = self._td.id in self._STDIN_TOOLS
+        kwargs: dict = dict(
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
 
         if use_stdin:
             args = [self._exe_path] + self._td.args
             logger.debug("running (stdin): %s", args)
             try:
-                proc = subprocess.run(
-                    args,
-                    input=prompt,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                )
+                proc = subprocess.run(args, input=prompt, **kwargs)
             except subprocess.TimeoutExpired:
                 raise RuntimeError(f"{self._td.label} timed out after {timeout}s")
         else:
@@ -175,23 +175,18 @@ class CLIProvider:
             ]
             logger.debug("running: %s", args)
             try:
-                proc = subprocess.run(
-                    args,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                )
+                proc = subprocess.run(args, **kwargs)
             except subprocess.TimeoutExpired:
                 raise RuntimeError(f"{self._td.label} timed out after {timeout}s")
 
         if proc.returncode != 0:
-            stderr = proc.stderr.strip()[:500]
+            stderr = (proc.stderr or "").strip()[:500]
             raise RuntimeError(
                 f"{self._td.label} exited with code {proc.returncode}"
                 + (f": {stderr}" if stderr else "")
             )
 
-        output = proc.stdout.strip()
+        output = (proc.stdout or "").strip()
         if not output:
             raise RuntimeError(f"{self._td.label} returned empty output")
 
