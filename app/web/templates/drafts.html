@@ -9,13 +9,14 @@
   {% endfor %}
 </div>
 <table>
-    <thead><tr><th>#</th><th>状态</th><th>中文标题</th><th>文件</th><th>发布时间</th><th>更新时间</th><th></th></tr></thead>
+    <thead><tr><th>#</th><th>状态</th><th>中文标题</th><th>评分</th><th>文件</th><th>发布时间</th><th>更新时间</th><th></th></tr></thead>
   <tbody>
   {% for d in drafts %}
     <tr>
       <td>{{ d.id }}</td>
       <td><span class="badge {{ d.status }}">{{ d.status }}</span></td>
       <td>{{ d.title_cn or d.display_title or '—' }}</td>
+      <td>{% if d.score is not none %}<span class="score-badge score-{{ 'high' if d.score >= 80 else 'mid' if d.score >= 50 else 'low' }}">{{ '%.0f'|format(d.score) }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
       <td class="path">{{ d.draft_path }}</td>
       <td>{{ d.article_published_at or '—' }}</td>
       <td>{{ d.updated_at }}</td>

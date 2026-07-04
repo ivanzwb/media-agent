@@ -580,6 +580,34 @@ input[type="checkbox"] {
 .badge.approved { background: #0a3d2a; color: #6ee7b7; border-color: #14532d; }
 .badge.published { background: #172554; color: #93c5fd; border-color: #1e3a8a; }
 
+/* ── Score Badge (Draft List) ── */
+.score-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.score-high {
+  background: rgba(16,185,129,.15);
+  color: #6ee7b7;
+  border: 1px solid rgba(16,185,129,.3);
+}
+.score-mid {
+  background: rgba(245,158,11,.15);
+  color: #fcd34d;
+  border: 1px solid rgba(245,158,11,.3);
+}
+.score-low {
+  background: rgba(107,106,102,.15);
+  color: var(--text3);
+  border: 1px solid var(--border);
+}
+
 .chip-row, .filters {
   display: flex;
   gap: var(--space-2);

@@ -31,6 +31,7 @@ from app.pipeline.narration import (
 from app.pipeline.orchestrator import run_pipeline, _append_prompt
 from app.pipeline.recommender import (
     suggest_subtopics, suggest_keywords, suggest_sources, compute_hotness)
+from app.pipeline.score import compute_draft_score
 from app.pipeline.localize import localize_one
 from app.pipeline.rewriter import rewrite
 from app.pipeline.sanitizer import load_words, sanitize_draft
@@ -287,6 +288,21 @@ def create_app(config: Config | None = None,
                 _rewrite_log(article_id, "保存草稿…")
                 old = ws.get_draft_for_article(article_id)
                 saved = ws.save_draft(draft)
+
+                # Compute and store draft score
+                try:
+                    score_val = compute_draft_score(
+                        title=draft.title_candidates[0] if draft.title_candidates else "",
+                        topic=draft.topic,
+                        source_name=draft.source_name,
+                        body_preview=draft.body_md,
+                        published_at=row["published_at"] if row else None,
+                        provider=provider,
+                    )
+                    ws.update_draft_score(saved.id, score_val)
+                    _rewrite_log(article_id, f"评分：{score_val}/100")
+                except Exception as exc:
+                    _rewrite_log(article_id, f"评分失败（已跳过）：{exc}")
 
                 if old and old["id"] != saved.id:
                     ws.delete_draft(old["id"])
