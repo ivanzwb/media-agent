@@ -18,6 +18,7 @@ from app.pipeline.images import attach_cover, inject_image_prompt
 from app.pipeline.localize import localize_article
 from app.pipeline.rewriter import rewrite
 from app.pipeline.sanitizer import load_words, sanitize_draft
+from app.pipeline.score import compute_draft_score
 
 
 def _fetch_source(src) -> list[Article]:
@@ -164,6 +165,20 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
                         emit(f"  敏感词过滤 {n} 处：{art.title[:40]}", stats)
                 saved_draft = store.save_draft(draft)
                 stats["drafted"] += 1
+                # Compute and store draft score for quick filtering
+                try:
+                    score_val = compute_draft_score(
+                        title=draft.title_candidates[0] if draft.title_candidates else "",
+                        topic=draft.topic,
+                        source_name=draft.source_name,
+                        body_preview=draft.body_md,
+                        published_at=art.published_at,
+                        provider=provider,
+                    )
+                    store.update_draft_score(saved_draft.id, score_val)
+                    emit(f"  评分：{score_val}/100", stats)
+                except Exception as exc:
+                    emit(f"  评分失败（已跳过）：{exc}", stats)
                 if image_provider is not None:
                     attach_cover(saved_draft, image_provider,
                                  store.config.images_dir)
