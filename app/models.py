@@ -73,3 +73,4 @@ class Draft:
     draft_path: str | None = None
     id: int | None = None
     sensitive_hits: list[str] = field(default_factory=list)
+    score: float | None = None

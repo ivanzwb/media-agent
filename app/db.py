@@ -69,4 +69,9 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE drafts DROP COLUMN platform")
     except sqlite3.OperationalError:
         pass  # column may not exist (SQLite < 3.35 or already dropped)
+    # Migrate: add score column
+    try:
+        conn.execute("ALTER TABLE drafts ADD COLUMN score REAL")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     conn.commit()
