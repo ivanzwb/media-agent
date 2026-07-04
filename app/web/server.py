@@ -1121,6 +1121,136 @@ def create_app(config: Config | None = None,
         return {"ok": True, "path": name,
                 "url": f"/videos/draft-{draft_id}/{name}"}
 
+    @app.post("/api/script/{draft_id}/ai-bg")
+    async def api_ai_bg(draft_id: int, prompt: str = Form(...)):
+        """Generate a background image via AI for a given scene.
+
+        Takes the prompt text (typically the scene's visual description),
+        calls the configured image provider, saves the result to the video
+        draft directory, and returns the relative path.
+        """
+        import uuid
+
+        run_config = Config.load(store=get_store())
+        out_dir = config.videos_dir / f"draft-{draft_id}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        name = f"bg-ai-{uuid.uuid4().hex[:12]}.jpg"
+        dest = out_dir / name
+
+        try:
+            img_provider = get_image_provider(
+                run_config.image_provider,
+                api_key=run_config.image_api_key,
+                model=run_config.image_model,
+                base_url=run_config.image_api_base)
+            img_provider.generate(prompt, dest)
+            return {"ok": True, "path": name,
+                    "url": f"/videos/draft-{draft_id}/{name}"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    @app.post("/api/script/{draft_id}/scrape-bg")
+    def api_scrape_bg(draft_id: int, query: str = Form(...)):
+        """Search web for images matching query, download the best match.
+
+        Strategy:
+        1) DuckDuckGo image search via `ddgs` library (no API key needed).
+        2) Fallback: Wikipedia API (free, reliable, CC-licensed images).
+
+        This is a sync endpoint to avoid asyncio compatibility issues with httpx.
+        FastAPI runs sync endpoints in a threadpool, so it won't block the server.
+        """
+        import uuid
+        import time
+        import httpx
+        from urllib.parse import quote
+
+        _UA = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/120.0.0.0 Safari/537.36",
+        }
+
+        out_dir = config.videos_dir / f"draft-{draft_id}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        def _try_download(img_url: str, referer: str = "") -> dict | None:
+            """Try to download an image URL and save to disk."""
+            try:
+                hdrs = {"User-Agent": _UA["User-Agent"]}
+                if referer:
+                    hdrs["Referer"] = referer
+                resp = httpx.get(img_url, timeout=15, follow_redirects=True,
+                                 headers=hdrs)
+                resp.raise_for_status()
+                ext = Path(img_url).suffix.split("?")[0].lower() or ".jpg"
+                if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+                    ext = ".jpg"
+                name = f"bg-web-{uuid.uuid4().hex[:12]}{ext}"
+                dest = out_dir / name
+                dest.write_bytes(resp.content)
+                return {"ok": True, "path": name,
+                        "url": f"/videos/draft-{draft_id}/{name}"}
+            except Exception:
+                return None
+
+        # ---- Strategy 1: DuckDuckGo image search via ddgs ----
+        try:
+            from ddgs import DDGS
+            results = list(DDGS().images(
+                query,
+                max_results=15,
+            ))
+            for img in results:
+                img_url = img.get("image") or img.get("thumbnail")
+                if not img_url:
+                    continue
+                result = _try_download(img_url, referer=img.get("url", ""))
+                if result:
+                    return result
+        except ImportError:
+            pass  # ddgs not installed, skip
+        except Exception:
+            pass  # ddgs failed, fall through to Wikipedia
+
+        # ---- Strategy 2: Wikipedia API (fallback) ----
+        for lang in ("en", "zh"):
+            try:
+                r = httpx.get(
+                    f"https://{lang}.wikipedia.org/w/api.php",
+                    params={"action": "query", "list": "search",
+                            "srsearch": query, "format": "json",
+                            "srlimit": 3},
+                    timeout=10, headers=_UA, follow_redirects=True)
+                data = r.json()
+                pages = data.get("query", {}).get("search", [])
+                for page in pages:
+                    title = page["title"]
+                    r2 = httpx.get(
+                        f"https://{lang}.wikipedia.org/w/api.php",
+                        params={"action": "query", "titles": title,
+                                "prop": "pageimages", "format": "json",
+                                "pithumbsize": 800},
+                        timeout=10, headers=_UA, follow_redirects=True)
+                    data2 = r2.json()
+                    for pid, info in data2.get("query", {}).get(
+                            "pages", {}).items():
+                        if pid == "-1":
+                            continue
+                        thumb = info.get("thumbnail", {}).get("source")
+                        if thumb:
+                            time.sleep(0.5)  # avoid Wikimedia rate limit
+                            result = _try_download(
+                                thumb,
+                                referer=f"https://{lang}.wikipedia.org/")
+                            if result:
+                                return result
+            except Exception:
+                continue
+
+        return {"ok": False, "error": "未搜到可下载的图片，请尝试修改画面描述"}
+
     # ---- available TTS voices for the per-draft voice selector ----
     _KITTEN_PROFILES = [
         {"id": "assistant", "label": "助手（默认）"},

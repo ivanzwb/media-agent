@@ -485,6 +485,8 @@
         se_mediaOptions(sc.media || 'none') + '</select> ' + se_thumb(i) +
         '<span style="margin-left:6px">' +
         '<button type="button" class="btn small" onclick="se_uploadBg(' + i + ')">上传</button>' +
+        '<button type="button" class="btn small" onclick="se_scrapeBg(' + i + ')" style="margin-left:4px" title="输入图片URL下载作为背景素材">网上抓取</button>' +
+        '<button type="button" class="btn small" onclick="se_aiBg(' + i + ')" style="margin-left:4px" title="用AI根据画面描述生成背景图">AI生成</button>' +
         (sc.bg_custom ? '<button type="button" class="btn small danger" onclick="se_removeBg(' + i + ')" style="margin-left:4px">清除</button>' : '') +
         '</span></div>' +
         '<div class="scene-audio">' + (sc.audio ?
@@ -522,6 +524,69 @@
     delete sceneState.scenes[i].bg_custom;
     sceneState.scenes[i].media = 'none';
     se_render();
+  }
+  async function se_scrapeBg(i) {
+    const sc = sceneState.scenes[i];
+    const q = (sc.visual || sc.narration || '').trim();
+    if (!q) {
+      alert('请先填写「画面描述」或「旁白」，系统将据此搜索网络图片。');
+      return;
+    }
+    if (!confirm('将从网上搜索与画面描述匹配的图片作为背景素材，继续吗？\n\n搜索词：' + q.slice(0, 80) + (q.length > 80 ? '…' : ''))) return;
+    const fd = new FormData();
+    fd.append('query', q);
+    const btn = event.target;
+    const orig = btn.textContent;
+    btn.textContent = '搜索中…';
+    btn.disabled = true;
+    try {
+      const r = await (await fetch('/api/script/' + SCENE_DRAFT + '/scrape-bg', {
+        method: 'POST', body: fd,
+      })).json();
+      if (r.ok) {
+        sceneState.scenes[i].bg_custom = r.path;
+        sceneState.scenes[i].media = 'upload:' + r.path;
+        if (!sceneState.uploads.includes(r.path)) {
+          sceneState.uploads.push(r.path);
+        }
+        se_render();
+      } else {
+        alert('搜索失败: ' + (r.error || '未知错误'));
+      }
+    } catch (e) {
+      alert('请求失败: ' + e.message);
+    } finally {
+      btn.textContent = orig;
+      btn.disabled = false;
+    }
+  }
+  async function se_aiBg(i) {
+    const sc = sceneState.scenes[i];
+    const prompt = sc.visual || sc.narration || '';
+    if (!prompt) {
+      alert('请先填写「画面描述」或「旁白」，AI 将据此生成背景图。');
+      return;
+    }
+    if (!confirm('将使用画面描述作为提示词，AI 生成背景图。继续吗？\n\n提示词：' + prompt.slice(0, 80) + (prompt.length > 80 ? '…' : ''))) return;
+    const fd = new FormData();
+    fd.append('prompt', prompt);
+    try {
+      const r = await (await fetch('/api/script/' + SCENE_DRAFT + '/ai-bg', {
+        method: 'POST', body: fd,
+      })).json();
+      if (r.ok) {
+        sceneState.scenes[i].bg_custom = r.path;
+        sceneState.scenes[i].media = 'upload:' + r.path;
+        if (!sceneState.uploads.includes(r.path)) {
+          sceneState.uploads.push(r.path);
+        }
+        se_render();
+      } else {
+        alert('AI生成失败: ' + (r.error || '未知错误'));
+      }
+    } catch (e) {
+      alert('请求失败: ' + e.message);
+    }
   }
   function se_uploadBg(i) {
     const draftId = SCENE_DRAFT;
