@@ -109,7 +109,7 @@
         <option value="claude" {{ 'selected' if cli_tool == 'claude' else '' }}>claude（Claude Code）</option>
         <option value="codex" {{ 'selected' if cli_tool == 'codex' else '' }}>codex（OpenAI Codex CLI）</option>
         <option value="copilot" {{ 'selected' if cli_tool == 'copilot' else '' }}>copilot（GitHub Copilot CLI）</option>
-        <option value="zcode" {{ 'selected' if cli_tool == 'zcode' else '' }}>zcode</option>
+        <option value="cursor-agent" {{ 'selected' if cli_tool == 'cursor-agent' else '' }}>cursor-agent（Cursor 编辑器 headless CLI）</option>
         <option value="none" {{ 'selected' if cli_tool == 'none' else '' }}>none（不使用 agent，仅 LLM Provider）</option>
       </select>
       <button type="button" class="btn" id="test-cli-btn" style="margin-top:6px;padding:2px 10px;font-size:0.85em">测试 Agent</button>

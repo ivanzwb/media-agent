@@ -74,11 +74,12 @@ _TOOLS: dict[str, _ToolDef] = {
         # Based on Multica's gemini backend.
         args=["-p", "{prompt}", "--yolo", "-o", "stream-json"],
     ),
-    "zcode": _ToolDef(
-        id="zcode",
-        label="ZCode",
-        exe="zcode",
-        args=["-p", "{prompt}"],
+    "cursor-agent": _ToolDef(
+        id="cursor-agent",
+        label="Cursor Agent（Cursor 编辑器 headless CLI）",
+        exe="cursor-agent",
+        # cursor-agent 接受直接 prompt 参数（与 Multica 调用方式一致）
+        args=["{prompt}"],
     ),
 }
 
@@ -103,15 +104,36 @@ _DEFAULT_MODELS: dict[str, str] = {
 
 # ── detection ───────────────────────────────────────────────────────────────
 
+def _env_override(tool_id: str) -> str | None:
+    """Check for ``MEDIA_AGENT_CLI_{TOOL_ID}_PATH`` env var override.
+
+    Mirrors Multica's ``MULTICA_*_PATH`` pattern (``exec.LookPath`` +
+    env-var override), adapted to this project's ``MEDIA_AGENT_*``
+    naming convention.
+    """
+    var = f"MEDIA_AGENT_CLI_{tool_id.upper().replace('-', '_')}_PATH"
+    val = os.environ.get(var)
+    if val and os.path.isfile(val):
+        return os.path.realpath(val)
+    return None
+
+
 def detect(tool_id: str) -> str | None:
     """Return the full path to *tool_id* if installed, otherwise *None*.
 
-    Uses ``shutil.which()`` and, on Windows, also tries known suffixes (``.exe``,
-    ``.cmd``).
+    Resolution order (matching Multica's probe pattern):
+    1. ``MEDIA_AGENT_CLI_{TOOL_ID}_PATH`` env var override.
+    2. ``shutil.which()`` — PATH search; on Windows also tries ``.exe``
+       and ``.cmd`` suffixes.
     """
     td = _TOOLS.get(tool_id)
     if td is None:
         return None
+    # 1. env var override (like Multica's MULTICA_*_PATH)
+    override = _env_override(tool_id)
+    if override:
+        return override
+    # 2. PATH search
     path = shutil.which(td.exe)
     if path is None and sys.platform == "win32":
         for suffix in (".exe", ".cmd"):
