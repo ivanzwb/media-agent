@@ -65,7 +65,10 @@ def get_rewrite_provider(llm_provider: str, llm_api_key: str | None = None,
             path = detect(tool_id)
             if path is not None:
                 from app.llm.providers.cli import CLIProvider
-                return CLIProvider(tool_id, model=llm_model or "")
+                # Don't pass llm_model here — CLI tools have their own
+                # model defaults (e.g. opencode/big-pickle) that are
+                # independent of the user's LLM provider model config.
+                return CLIProvider(tool_id)
     # Fall back to regular LLM provider (or mock)
     try:
         return get_provider(llm_provider, api_key=llm_api_key,
