@@ -96,10 +96,8 @@ _MODEL_FLAGS: dict[str, str] = {
 
 # Default models per tool — used when neither the caller passes a model nor
 # MEDIA_AGENT_LLM_MODEL is configured.  The opencode default model
-# (opencode/big-pickle) fails with "Unexpected server error" on many
-# systems, so we pin a known-working free model.
 _DEFAULT_MODELS: dict[str, str] = {
-    "opencode": "opencode/deepseek-v4-flash-free",
+    "opencode": "opencode/big-pickle",
 }
 
 
