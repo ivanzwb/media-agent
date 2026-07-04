@@ -20,6 +20,7 @@ from app.media.downloader import MediaDownloader
 from app.media.strategies import (
     HttpxDirectStrategy,
     UrlTransformStrategy,
+    CurlCffiImageStrategy,
     HttpxDirectVideoStrategy,
     YtDlpStrategy,
 )
@@ -62,6 +63,7 @@ _IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 _image_downloader = MediaDownloader("image")
 _image_downloader.add_strategy(HttpxDirectStrategy())
 _image_downloader.add_strategy(UrlTransformStrategy())
+_image_downloader.add_strategy(CurlCffiImageStrategy())  # bypasses Cloudflare
 
 _video_downloader = MediaDownloader("video")
 _video_downloader.add_strategy(HttpxDirectVideoStrategy())
@@ -194,8 +196,19 @@ def localize_article(article: Article, config: Config, progress=None,
     emit(f"图片 {len(imgs)} 张，视频 {len(article.videos or [])} 个"
          f"（并发 {workers}）")
     article.images = _download_set(imgs, dest, folder, _download_image,
-                                   workers, emit,
-                                   source_url=article.url)
+                                    workers, emit,
+                                    source_url=article.url)
+
+    # Replace remote image URLs in the article body with local paths so
+    # the body's <img> tags and the images front-matter don't duplicate.
+    mapping: dict[str, str] = {}
+    if article.content_md:
+        for old, new in zip(imgs, article.images):
+            if new != old and _is_local(new):
+                mapping[old] = new
+        for old, new in mapping.items():
+            rel_new = _relativize_media(new) if _is_local(new) else new
+            article.content_md = article.content_md.replace(old, rel_new)
 
     if download_videos and article.videos:
         # yt-dlp spawns subprocesses — cap video concurrency lower.

@@ -201,17 +201,114 @@ def _media_block(images: list[str], videos: list[str], existing: str) -> str:
     return "\n".join(parts)
 
 
+_CODE_FENCE = re.compile(r'^```(?:\w+)?\s*\n(.*?)\n```\s*$', re.DOTALL)
+_CODE_FENCE_INLINE = re.compile(r'```(?:json)?\s*\n(.*?)\n```', re.DOTALL)
+
+
+def _strip_code_fences(text: str) -> str | None:
+    """If the entire text is wrapped in a markdown code fence, return the
+    inner content stripped.  Otherwise return None."""
+    m = _CODE_FENCE.match(text.strip())
+    return m.group(1).strip() if m else None
+
+
+def _extract_code_fenced_json(text: str) -> str | None:
+    """Find the first json code-fence block and return its inner content."""
+    for m in _CODE_FENCE_INLINE.finditer(text):
+        inner = m.group(1).strip()
+        # The non-greedy regex can accidentally match a closing ``` as
+        # an opening fence when code blocks are adjacent; skip these.
+        if inner.startswith("```"):
+            continue
+        if inner.startswith("{") and inner.endswith("}"):
+            return inner
+    return None
+
+
+def _repair_json_control_chars(text: str) -> str:
+    """Escape unescaped control characters (newlines, tabs) inside JSON
+    string values so ``json.loads`` can parse LLM output that violates
+    the JSON spec."""
+    result: list[str] = []
+    in_string = False
+    escape_next = False
+    for ch in text:
+        if escape_next:
+            result.append(ch)
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            result.append(ch)
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            result.append(ch)
+            continue
+        if in_string and ch == '\n':
+            result.append('\\n')
+            continue
+        if in_string and ch == '\t':
+            result.append('\\t')
+            continue
+        if in_string and ch == '\r':
+            result.append('\\r')
+            continue
+        result.append(ch)
+    return ''.join(result)
+
+
 def _extract_json(text: str) -> dict | None:
+    # 1) Direct parse
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        m = re.search(r"\{.*\}", text, re.DOTALL)
-        if not m:
-            return None
+        pass
+
+    # 2) Entire text is a single code fence
+    inner = _strip_code_fences(text)
+    if inner:
         try:
-            return json.loads(m.group(0))
+            return json.loads(inner)
         except json.JSONDecodeError:
-            return None
+            pass
+        repaired = _repair_json_control_chars(inner)
+        if repaired != inner:
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                pass
+
+    # 3) Find first json code-fence block inside the text
+    inner = _extract_code_fenced_json(text)
+    if inner:
+        try:
+            return json.loads(inner)
+        except json.JSONDecodeError:
+            pass
+        repaired = _repair_json_control_chars(inner)
+        if repaired != inner:
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                pass
+
+    # 4) Fallback: find the outermost { … } object
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if m:
+        obj = m.group(0)
+        try:
+            return json.loads(obj)
+        except json.JSONDecodeError:
+            pass
+        repaired = _repair_json_control_chars(obj)
+        if repaired != obj:
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                pass
+
+    return None
 
 
 def _inline_content(content_md: str, images: list[str],

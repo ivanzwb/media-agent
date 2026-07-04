@@ -1033,6 +1033,8 @@ input[type="checkbox"] {
   line-height: 1.75;
   font-size: 15px;
   color: var(--text);
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 .article-body img {
   max-width: 100%;
@@ -1072,6 +1074,8 @@ input[type="checkbox"] {
   border-collapse: collapse;
   margin: var(--space-3) 0;
   width: 100%;
+  display: block;
+  overflow-x: auto;
 }
 .article-body th, .article-body td {
   border: 1px solid var(--border);

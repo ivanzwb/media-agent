@@ -78,8 +78,12 @@ def _img_ext(url: str, content_type: str | None) -> str:
     if ext in _IMG_EXTS:
         return ext
     if content_type:
-        guessed = mimetypes.guess_extension(content_type.split(";")[0].strip())
-        if guessed:
+        mime = content_type.split(";")[0].strip()
+        # Python's mimetypes doesn't know about .webp → map manually
+        if "webp" in mime:
+            return ".webp"
+        guessed = mimetypes.guess_extension(mime)
+        if guessed and guessed in _IMG_EXTS:
             return ".jpg" if guessed == ".jpe" else guessed
     return ".jpg"
 
@@ -207,6 +211,70 @@ class UrlTransformStrategy:
             return path
 
         return None
+
+
+# ---------------------------------------------------------------------------
+# Image: curl_cffi with TLS fingerprint impersonation (bypasses Cloudflare)
+# ---------------------------------------------------------------------------
+
+class CurlCffiImageStrategy:
+    """Use ``curl_cffi`` to download images with Chrome TLS fingerprint
+    impersonation, bypassing Cloudflare and similar anti-bot WAFs.
+
+    This is a fallback for sites where plain httpx returns 403.
+    """
+
+    name = "curl_cffi_image"
+
+    def match(self, url: str) -> float:
+        # Only activate for http(s) URLs that look like direct image files
+        if url.startswith(("http://", "https://")):
+            ext = Path(urlparse(url).path).suffix.lower()
+            if ext in _IMG_EXTS:
+                return 0.5
+        return 0.0
+
+    def download(
+        self, url: str, dest: Path, idx: int,
+        emit: Callable = print, source_url: str | None = None, **kwargs,
+    ) -> Path | None:
+        safe = normalize_url(url)
+        if not safe:
+            emit(f"    [curl_cffi] 跳过无效地址 #{idx}：{(url or '')[:60]}")
+            return None
+
+        try:
+            from curl_cffi import requests as curl_requests
+        except ImportError:
+            emit(f"    [curl_cffi] 未安装 curl_cffi，跳过 #{idx}")
+            return None
+
+        headers: dict[str, str] = {
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8",
+        }
+        if source_url:
+            headers["Referer"] = source_url
+
+        try:
+            resp = curl_requests.get(
+                safe, timeout=20, impersonate="chrome131",
+                headers=headers,
+            )
+            resp.raise_for_status()
+            data = resp.content
+        except Exception as e:
+            emit(f"    [curl_cffi] 下载失败 #{idx}：{e}")
+            return None
+
+        if not data:
+            return None
+
+        ext = _img_ext(url, resp.headers.get("content-type"))
+        path = dest / f"img-{idx}{ext}"
+        path.write_bytes(data)
+        emit(f"    [curl_cffi] 已保存 #{idx}：{path.name}")
+        return path
 
 
 # ---------------------------------------------------------------------------

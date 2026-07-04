@@ -395,6 +395,54 @@ def _fix_markdown_tables(md: str) -> str:
     return "\n".join(out)
 
 
+# ── JSON-LD image extraction ──────────────────────────────────────────────
+
+_JSONLD_IMAGE_RE = re.compile(
+    r'"image"\s*:\s*(?:\{[^}]*"url"\s*:\s*"([^"]+)"[^}]*\}|"([^"]+)")',
+    re.I | re.DOTALL)
+
+_NON_ARTICLE_PATTERNS = [
+    # Loading spinners / placeholders
+    re.compile(r'(?:page_loader|spinner|loading|placeholder)\.(?:png|gif|svg)', re.I),
+    # CMS thumbnail resize directives (SilverStripe _FillWz, Craft _transform, etc.)
+    re.compile(r'(?:_FillWz|_transform|__Scale|__ResizedImage)', re.I),
+    # Site favicons / touch icons (favicon, favicon-32x32, apple-touch-icon, etc.)
+    re.compile(r'(?:favicon|touchicon|apple[-.]touch|og_logo)[\w-]*\.(?:png|ico|jpg|svg)', re.I),
+]
+
+
+def _jsonld_image(html: str, base_url: str | None = None) -> str | None:
+    """Extract the primary ``image`` URL from JSON-LD structured data
+    (Schema.org Article / NewsArticle)."""
+    # Find JSON-LD blocks: <script type="application/ld+json">…</script>
+    for block in re.finditer(
+        r'<script[^>]+type="application/ld\+json"[^>]*>(.*?)</script>',
+        html, re.I | re.DOTALL,
+    ):
+        json_text = block.group(1).strip()
+        if '"@type"' not in json_text:
+            continue
+        m = _JSONLD_IMAGE_RE.search(json_text)
+        if m:
+            # Group 1 = nested url, Group 2 = flat string
+            img = m.group(1) or m.group(2)
+            if img and base_url:
+                img = urljoin(base_url, img)
+            return img if img else None
+    return None
+
+
+def _filter_article_images(images: list[str]) -> list[str]:
+    """Remove images that are clearly site chrome (loaders, thumbnails,
+    favicons) rather than article content."""
+    out: list[str] = []
+    for u in images:
+        if any(p.search(u) for p in _NON_ARTICLE_PATTERNS):
+            continue
+        out.append(u)
+    return out
+
+
 def extract_from_html(html: str, url: str) -> dict:
     content_md = ""
     images: list[str] = []
@@ -419,6 +467,24 @@ def extract_from_html(html: str, url: str) -> dict:
     except Exception:                          # noqa: BLE001
         pass
 
+    # ── 1b. readability got body text but no images — fallback to full HTML ──
+    # Some sites (PageCloud, Webflow, SilverStripe) embed images in ways
+    # readability strips, leaving body text intact but images empty.
+    # Re-extract images from the untouched HTML, but filter out site chrome
+    # (loading spinners, related-article thumbnails, favicons).
+    if content_md.strip() and not images:
+        html_pl, images = _images_with_placeholders(html, base_url=url)
+        # Also extract the primary image from JSON-LD structured data
+        # (Schema.org Article/NewsArticle) — many sites store the hero image
+        # only in JSON-LD, not as a visible <img> tag.
+        jsonld_img = _jsonld_image(html, base_url=url)
+        if jsonld_img and jsonld_img not in images:
+            # Avoid duplicates when the same image appears under different
+            # domains (e.g. www.site.com vs site.com after redirect).
+            jsonld_slug = jsonld_img.rsplit("/", 1)[-1].split("?")[0]
+            if not any(jsonld_slug in u for u in images):
+                images.insert(0, jsonld_img)
+
     # ── 2. trafilatura directly on original HTML (fallback) ──
     if not content_md.strip():
         html_pl, images = _images_with_placeholders(html, base_url=url)
@@ -432,6 +498,11 @@ def extract_from_html(html: str, url: str) -> dict:
         content_md = _content_fallback(html)
         images = [urljoin(url, u) for u in _images_from_html(html)]
         videos = [urljoin(url, u) for u in _videos_from_html(html)]
+
+    # ── 3b. Strip site chrome (loaders, favicons, CMS thumbnails) ──
+    # Applied to ALL extraction paths so sidebar/header cruft that leaked
+    # through steps 2-3 is removed in addition to the step-1b filtering.
+    images = _filter_article_images(images)
 
     # ── 4. Re-inject orphaned image placeholders ──
     # If trafilatura stripped some [[IMG:N]] placeholders (e.g. figure

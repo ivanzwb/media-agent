@@ -95,8 +95,12 @@
       outHtml += seg;
     }
   }
-  // Emit any remaining orphaned images (indices > last used placeholder)
-  outHtml += _imgOrphansUpTo(images.length);
+  // Emit any remaining orphaned images (indices > last used placeholder),
+  // but only if the body doesn't already contain <img> tags (avoids showing
+  // the same images twice when the article body has inline images).
+  if (!/<img\s/i.test(raw)) {
+    outHtml += _imgOrphansUpTo(images.length);
+  }
   document.getElementById('article-body').innerHTML = outHtml;
 
   // Orphaned videos (unlikely) — append at the end.

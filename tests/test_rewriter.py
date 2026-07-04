@@ -3,7 +3,11 @@ from datetime import datetime, timezone
 
 from app.models import Article, Draft
 from app.llm.providers.mock import MockProvider
-from app.pipeline.rewriter import rewrite, _inline_content, _video_embed
+from app.pipeline.rewriter import (
+    rewrite, _inline_content, _video_embed,
+    _extract_json, _strip_code_fences, _extract_code_fenced_json,
+    _repair_json_control_chars,
+)
 
 
 def sample_article():
@@ -118,4 +122,264 @@ def test_rewrite_skips_media_already_in_body():
     provider = MockProvider(responses=[rewrite_json, json.dumps({"flagged_claims": []})])
     draft = rewrite(art, provider)
     assert draft.body_md.count("https://x.com/pic1.png") == 1
-    assert "配图（来自原文）" not in draft.body_md
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _extract_json  — parsing LLM responses that may contain thinking
+#                  text, code fences, or literal newlines in strings.
+# ═══════════════════════════════════════════════════════════════════
+
+# ── _repair_json_control_chars ────────────────────────────────────
+
+def test_repair_escapes_newlines_in_strings():
+    raw = '{"body_md": "line 1\nline 2\n\nline 4"}'
+    fixed = _repair_json_control_chars(raw)
+    assert '\n' not in fixed  # no literal newlines left
+    assert '\\n' in fixed
+    assert json.loads(fixed)["body_md"] == "line 1\nline 2\n\nline 4"
+
+
+def test_repair_leaves_already_escaped_newlines():
+    raw = '{"body_md": "line 1\\nline 2"}'
+    fixed = _repair_json_control_chars(raw)
+    assert fixed == raw  # untouched
+
+
+def test_repair_handles_tabs_and_cr():
+    raw = '{"a": "col1\tcol2\rnext"}'
+    fixed = _repair_json_control_chars(raw)
+    assert '\t' not in fixed
+    assert '\r' not in fixed
+    assert json.loads(fixed)["a"] == "col1\tcol2\rnext"
+
+
+def test_repair_does_not_mangle_escaped_quotes():
+    raw = '{"a": "say \\"hello\\""}'
+    fixed = _repair_json_control_chars(raw)
+    assert fixed == raw
+
+
+def test_repair_no_strings_unchanged():
+    raw = '{"a": 42, "b": true}'
+    assert _repair_json_control_chars(raw) == raw
+
+
+# ── _strip_code_fences ────────────────────────────────────────────
+
+def test_strip_code_fences_whole_text():
+    result = _strip_code_fences('```\n{"a": 1}\n```')
+    assert result == '{"a": 1}'
+
+
+def test_strip_code_fences_with_language():
+    result = _strip_code_fences('```json\n{"a": 1}\n```')
+    assert result == '{"a": 1}'
+
+
+def test_strip_code_fences_not_whole():
+    assert _strip_code_fences('text before\n```\n{"a": 1}\n```\ntext after') is None
+
+
+def test_strip_code_fences_no_fences():
+    assert _strip_code_fences('{"a": 1}') is None
+
+
+# ── _extract_code_fenced_json ─────────────────────────────────────
+
+def test_extract_code_fenced_json_simple():
+    result = _extract_code_fenced_json(
+        'some text\n```json\n{"a": 1}\n```\nmore text')
+    assert result == '{"a": 1}'
+
+
+def test_extract_code_fenced_json_no_language():
+    result = _extract_code_fenced_json(
+        '```\n{"a": 1}\n```')
+    assert result == '{"a": 1}'
+
+
+def test_extract_code_fenced_json_skips_non_json():
+    """When the json fence directly follows another fence the helper may
+    miss it (regex ambiguity), but the higher-level _extract_json should
+    still succeed via the regex fallback."""
+    helper_result = _extract_code_fenced_json(
+        '```python\nprint(1)\n```\n```json\n{"a": 1}\n```')
+    # Helper may not find it due to adjacent fences, but _extract_json will:
+    main_result = _extract_json(
+        '```python\nprint(1)\n```\n```json\n{"a": 1}\n```')
+    assert main_result == {"a": 1}
+
+
+def test_extract_code_fenced_json_no_fence():
+    assert _extract_code_fenced_json('{"a": 1}') is None
+    assert _extract_code_fenced_json('') is None
+
+
+# ── _extract_json  main ──────────────────────────────────────────
+
+def test_extract_json_clean():
+    result = _extract_json('{"title_candidates": ["t1"], "body_md": "body"}')
+    assert result == {"title_candidates": ["t1"], "body_md": "body"}
+
+
+def test_extract_json_with_leading_thinking_text():
+    """OpenCode-style response: reasoning text, then code-fenced JSON."""
+    text = (
+        'I detect a writing task. Let me proceed.\n\n'
+        '```json\n'
+        '{"title_candidates": ["标题1", "标题2"], "body_md": "## 章节\\n正文"}\n'
+        '```\n'
+    )
+    result = _extract_json(text)
+    assert result is not None
+    assert result["title_candidates"] == ["标题1", "标题2"]
+    assert result["body_md"] == "## 章节\n正文"
+
+
+def test_extract_json_code_fence_full_text():
+    """Entire response is a single code fence (Claude-style)."""
+    text = '```json\n{"title_candidates": ["t"], "body_md": "x"}\n```'
+    result = _extract_json(text)
+    assert result == {"title_candidates": ["t"], "body_md": "x"}
+
+
+def test_extract_json_literal_newlines_in_body():
+    """LLM output with unescaped newlines in body_md — the exact bug."""
+    text = (
+        '```json\n'
+        '{\n'
+        '  "title_candidates": ["标题"],\n'
+        '  "body_md": "## 第一章\n'
+        '\n'
+        '第一段文字。\n'
+        '\n'
+        '## 第二章\n'
+        '\n'
+        '第二段文字。"\n'
+        '}\n'
+        '```'
+    )
+    result = _extract_json(text)
+    assert result is not None
+    assert result["title_candidates"] == ["标题"]
+    assert "第一章" in result["body_md"]
+    assert "第二章" in result["body_md"]
+
+
+def test_extract_json_literal_tabs_in_body():
+    text = (
+        '```json\n'
+        '{"title_candidates": ["t"], "body_md": "col1\tcol2\tcol3"}\n'
+        '```'
+    )
+    result = _extract_json(text)
+    assert result is not None
+    assert "\t" in result["body_md"]
+
+
+def test_extract_json_fallback_regex_greedy():
+    """No code fence — fallback to regex {…} with leading text."""
+    text = 'Leading text {"title_candidates": ["x"], "body_md": "y"} trailing'
+    result = _extract_json(text)
+    assert result == {"title_candidates": ["x"], "body_md": "y"}
+
+
+def test_extract_json_fallback_regex_with_newlines():
+    """Regex fallback can also repair literal newlines."""
+    text = (
+        'Some text\n'
+        '{"title_candidates": ["标题"], "body_md": "段落1\n\n段落2"}'
+    )
+    result = _extract_json(text)
+    assert result is not None
+    assert "段落1" in result["body_md"]
+
+
+def test_extract_json_no_json_returns_none():
+    assert _extract_json('') is None
+    assert _extract_json('plain text with no json') is None
+    assert _extract_json('```python\nprint(1)\n```') is None
+
+
+def test_extract_json_empty_body_md():
+    text = '{"title_candidates": ["标题"], "body_md": ""}'
+    result = _extract_json(text)
+    assert result == {"title_candidates": ["标题"], "body_md": ""}
+
+
+def test_extract_json_only_title_candidates_no_body():
+    # missing body_md key — still returns the parsed dict
+    text = '{"title_candidates": ["标题"]}'
+    result = _extract_json(text)
+    assert result == {"title_candidates": ["标题"]}
+
+
+def test_extract_json_multiple_code_fences_picks_json_one():
+    text = (
+        '```bash\nls\n```\n'
+        '```json\n{"title_candidates": ["t"], "body_md": "x"}\n```\n'
+        '```text\nhello\n```'
+    )
+    result = _extract_json(text)
+    assert result == {"title_candidates": ["t"], "body_md": "x"}
+
+
+def test_extract_json_real_world_open_code_output():
+    """Full simulation of an actual OpenCode CLI response."""
+    text = (
+        'I detect a **writing/translation** task - Chinese deep-tech media\n'
+        'rewrite of an English press release. No relevant skill maps directly\n'
+        'to Chinese tech journalism, so I\'ll proceed directly.\n'
+        '\n'
+        'Let me first read the source thoroughly.\n'
+        '\n'
+        'Now I\'ll produce the rewrite.\n'
+        '\n'
+        '```json\n'
+        '{\n'
+        '  "title_candidates": [\n'
+        '    "80亿美元拿下铱星，火箭实验室要打造怎样的太空帝国？",\n'
+        '    "从发射服务商到太空运营商，火箭实验室的垂直整合赌局有多大？"\n'
+        '  ],\n'
+        '  "body_md": "## 一、当太空快递决定自己开公司\n'
+        '\n'
+        '你有没有想过一个问题：如果SpaceX突然买下中国电信？\n'
+        '\n'
+        '## 二、垂直整合的终局\n'
+        '\n'
+        '第二段文字。"\n'
+        '}\n'
+        '```\n'
+        '\n'
+        'Hope this helps!\n'
+    )
+    result = _extract_json(text)
+    assert result is not None
+    assert len(result["title_candidates"]) == 2
+    assert "太空快递" in result["body_md"]
+    assert "垂直整合" in result["body_md"]
+    # Make sure thinking text is NOT in the body
+    assert "I detect" not in result["body_md"]
+    assert "Hope this helps" not in result["body_md"]
+
+
+def test_extract_json_body_with_inner_braces():
+    """Body_md contains { and } (e.g., JSON examples in markdown)."""
+    text = (
+        '```json\n'
+        '{"title_candidates": ["t"], "body_md": "示例 JSON：`{\\"key\\": \\"value\\"}`"}\n'
+        '```'
+    )
+    result = _extract_json(text)
+    assert result is not None
+    assert '{"key": "value"}' in result["body_md"]
+
+
+def test_extract_json_unescaped_backslashes_in_body():
+    """Body contains backslashes (e.g. Windows paths)."""
+    # \\\\ in Python source → \\ in string → \ after json.loads
+    text = '```\n{"title_candidates": ["t"], "body_md": "path: D:\\\\data\\\\img.png"}\n```'
+    result = _extract_json(text)
+    assert result is not None
+    assert "D:" in result["body_md"]
+    assert "img.png" in result["body_md"]

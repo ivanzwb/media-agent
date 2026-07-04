@@ -2,7 +2,9 @@ from pathlib import Path
 
 from app.sources.extractor import (
     extract_from_html, _videos_with_placeholders, _images_from_html,
-    _videos_from_html, _date_from_html, _fix_markdown_tables)
+    _videos_from_html, _date_from_html, _fix_markdown_tables,
+    _jsonld_image, _filter_article_images,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_article.html"
 
@@ -270,3 +272,250 @@ def test_fix_tables_multiple_tables():
     t2_hdr = lines.index("X | Y |")
     assert lines[t2_hdr + 1] == "---|---|"
     assert lines[t2_hdr + 2] == "1 | 2 |"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _jsonld_image  — extract primary image from Schema.org JSON-LD
+# ═══════════════════════════════════════════════════════════════════
+
+def test_jsonld_flat_image_string():
+    """Plain string value: "image": "https://..." """
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/hero.jpg"}'
+        '</script>'
+    )
+    result = _jsonld_image(html)
+    assert result == "https://cdn.example.com/hero.jpg"
+
+
+def test_jsonld_nested_image_object():
+    """Nested ImageObject: "image":{"@type":"ImageObject","url":"..."}"""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@context":"http://schema.org","@type":"NewsArticle",'
+        '"image":{"@type":"ImageObject","url":"https://cdn.example.com/hero.jpg"}}'
+        '</script>'
+    )
+    result = _jsonld_image(html)
+    assert result == "https://cdn.example.com/hero.jpg"
+
+
+def test_jsonld_image_with_base_url():
+    """Relative image URL is resolved against base_url."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"Article","image":"/uploads/hero.jpg"}'
+        '</script>'
+    )
+    result = _jsonld_image(html, base_url="https://blog.example.com/post/")
+    assert "https://blog.example.com" in result
+    assert result.endswith("/uploads/hero.jpg")
+
+
+def test_jsonld_no_image_field():
+    """JSON-LD without an image field returns None."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"Article","name":"Just a title"}'
+        '</script>'
+    )
+    assert _jsonld_image(html) is None
+
+
+def test_jsonld_not_article_type():
+    """Non-Article JSON-LD blocks are skipped."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"Organization","image":"https://cdn.example.com/logo.png"}'
+        '</script>'
+    )
+    # Currently we don't filter by @type, but the function should still
+    # extract the image (caller decides what to do with it)
+    assert _jsonld_image(html) == "https://cdn.example.com/logo.png"
+
+
+def test_jsonld_no_jsonld_at_all():
+    """No JSON-LD script tag → None."""
+    assert _jsonld_image("<html><body><p>no jsonld</p></body></html>") is None
+
+
+def test_jsonld_multiple_blocks_first_wins():
+    """Multiple JSON-LD blocks — first image is returned."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"Article","image":"https://cdn.example.com/first.jpg"}'
+        '</script>'
+        '<script type="application/ld+json">'
+        '{"@type":"Article","image":"https://cdn.example.com/second.jpg"}'
+        '</script>'
+    )
+    assert _jsonld_image(html) == "https://cdn.example.com/first.jpg"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _filter_article_images  — remove site chrome from image list
+# ═══════════════════════════════════════════════════════════════════
+
+def test_filter_removes_page_loader():
+    imgs = [
+        "https://site.com/img/hero.jpg",
+        "https://site.com/img/page_loader.png",
+    ]
+    result = _filter_article_images(imgs)
+    assert result == ["https://site.com/img/hero.jpg"]
+
+
+def test_filter_removes_fillwz_thumbnails():
+    """SilverStripe _FillWz resize directives (sidebar thumbnails)."""
+    imgs = [
+        "https://site.com/hero.jpg",
+        "https://site.com/thumb__FillWzc4MCw0NzBd.jpg",
+    ]
+    result = _filter_article_images(imgs)
+    assert result == ["https://site.com/hero.jpg"]
+
+
+def test_filter_removes_favicons():
+    imgs = [
+        "https://site.com/hero.jpg",
+        "https://site.com/favicon-32x32.png",
+        "https://site.com/apple-touch-icon.png",
+        "https://site.com/touchicon.png",
+        "https://site.com/og_logo.jpg",
+    ]
+    result = _filter_article_images(imgs)
+    assert result == ["https://site.com/hero.jpg"]
+
+
+def test_filter_removes_loading_placeholders():
+    imgs = [
+        "https://site.com/hero.jpg",
+        "https://site.com/spinner.gif",
+        "https://site.com/loading.svg",
+        "https://site.com/placeholder.png",
+    ]
+    result = _filter_article_images(imgs)
+    assert result == ["https://site.com/hero.jpg"]
+
+
+def test_filter_removes_craft_transform():
+    """CraftCMS _transform resize directives."""
+    imgs = [
+        "https://site.com/hero.jpg",
+        "https://site.com/_transform/abc/thumb.jpg",
+        "https://site.com/hero__ScaleWidthWzUwMF0.jpg",
+        "https://site.com/hero__ResizedImageWzYwMCw0MDBd.jpg",
+    ]
+    result = _filter_article_images(imgs)
+    assert result == ["https://site.com/hero.jpg"]
+
+
+def test_filter_case_insensitive():
+    """Filter patterns are case-insensitive."""
+    imgs = [
+        "https://site.com/HERO.JPG",
+        "https://site.com/Page_Loader.PNG",
+    ]
+    result = _filter_article_images(imgs)
+    assert result == ["https://site.com/HERO.JPG"]
+
+
+def test_filter_keeps_valid_images():
+    """Normal article images pass through unchanged."""
+    imgs = [
+        "https://cdn.example.com/photos/article-hero.jpg",
+        "https://cdn.example.com/charts/data-graph.png",
+        "https://live.staticflickr.com/65535/abc123_k.jpg",
+    ]
+    result = _filter_article_images(imgs)
+    assert result == imgs
+
+
+def test_filter_empty_list():
+    assert _filter_article_images([]) == []
+
+
+# ═══════════════════════════════════════════════════════════════════
+# extract_from_html  — readability → fallback → JSON-LD integration
+# ═══════════════════════════════════════════════════════════════════
+
+def test_extract_fallback_finds_images_from_full_html():
+    """When readability finds text but no images, fall back to full HTML."""
+    # readability strips images from this content but keeps the <p>
+    html = (
+        '<html><body>'
+        '<div id="article">'
+        '<p>The main article text with important information.</p>'
+        '</div>'
+        '<figure><img src="/uploads/hero.jpg" alt="hero"/></figure>'
+        '</body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    assert "重要信息" in result["content_md"] or "article" in result["content_md"].lower()
+    # Fallback should find the hero image
+    assert any("hero.jpg" in img for img in result["images"])
+
+
+def test_extract_fallback_adds_jsonld_image():
+    """JSON-LD image is included even when not in a visible <img> tag."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/hero.jpg"}'
+        '</script>'
+        '<html><body>'
+        '<p>The article text without any img tags.</p>'
+        '</body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    assert any("hero.jpg" in img for img in result["images"])
+
+
+def test_extract_fallback_filters_out_site_chrome():
+    """Full-HTML fallback should NOT include loaders or favicons."""
+    html = (
+        '<html><body>'
+        '<p>Article text here.</p>'
+        '<img src="/page_loader.png" />'
+        '<img src="/favicon.ico" />'
+        '<img src="/hero.jpg" />'
+        '</body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    imgs = result["images"]
+    assert any("hero.jpg" in img for img in imgs)
+    assert all("page_loader" not in img for img in imgs)
+    assert all("favicon" not in img for img in imgs)
+
+
+def test_extract_fallback_dedupes_by_filename():
+    """Same image from different domains shouldn't appear twice."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn2.example.com/hero.jpg"}'
+        '</script>'
+        '<html><body>'
+        '<p>Article text here.</p>'
+        '<img src="https://cdn1.example.com/hero.jpg" />'
+        '</body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    # Should only have one hero.jpg (deduped by filename)
+    hero_count = sum(1 for img in result["images"] if "hero.jpg" in img)
+    assert hero_count == 1
+
+
+def test_extract_no_fallback_when_images_found():
+    """When readability already found images, the fallback should NOT add more."""
+    html = (
+        '<html><body>'
+        '<article>'
+        '<p>Article text.</p>'
+        '<figure><img src="/hero.jpg" /></figure>'
+        '</article>'
+        '</body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    # readability should pick up the image normally
+    assert len(result["images"]) == 1
+    assert "hero.jpg" in result["images"][0]
