@@ -103,7 +103,10 @@ def load_narration(draft_id: int, config: Config) -> dict | None:
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if not data.get("scenes"):
+            return None  # treat empty scenes as non-existent
+        return data
     except (OSError, json.JSONDecodeError):
         return None
 

@@ -111,5 +111,10 @@ def build_script(body_md: str, title: str, provider: LLMProvider,
     scenes = _parse_scenes(raw)
     if not scenes:
         scenes = _fallback_scenes(body_md, images, max_scenes)
+    if not scenes:
+        # Last-resort fallback: one generic scene
+        scenes = [{"narration": body_md[:200] if body_md else title,
+                   "visual": body_md[:30] if body_md else title,
+                   "media": "none"}]
     return {"title": title, "scenes": scenes[:max_scenes],
             "images": images, "videos": videos}
