@@ -32,7 +32,7 @@ def get_provider(name: str, api_key: str | None = None,
         if path is None:
             raise RuntimeError(
                 f"CLI tool '{name}' is not installed ({path or 'not found in PATH'})")
-        return CLIProvider(name)
+        return CLIProvider(name, model=model or "")
     if name == "auto":
         from app.llm.providers.cli import CLIProvider, detect_all
         tool = detect_all()
@@ -65,7 +65,7 @@ def get_rewrite_provider(llm_provider: str, llm_api_key: str | None = None,
             path = detect(tool_id)
             if path is not None:
                 from app.llm.providers.cli import CLIProvider
-                return CLIProvider(tool_id)
+                return CLIProvider(tool_id, model=llm_model or "")
     # Fall back to regular LLM provider (or mock)
     try:
         return get_provider(llm_provider, api_key=llm_api_key,

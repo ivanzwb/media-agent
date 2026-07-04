@@ -61,6 +61,7 @@
         {% endfor %}
       </select>
       <button type="submit" class="btn primary" form="edit-form">保存</button>
+      <button type="button" class="btn secondary" id="agent-undo-btn" style="display:none" onclick="undoAgentEdit()">撤销 Agent 修改</button>
       <span class="tb-sep">|</span>
       <span class="tb-label">同步到平台：</span>
       {% for p in platforms %}
@@ -1006,16 +1007,89 @@
   }
 
   // ── Agent dialog ──────────────────────────────────────────────────────────
+  // State persistence across close/reopen and page refresh uses localStorage.
+  const _AGENT_KEY = 'media_agent_edit';
+  let _agentOriginal = null;   // original editor content before agent edit
+  let _isAgentModified = false;
+
+  function _agentSave(state) {
+    const data = { ...state, timestamp: Date.now(), draftId: {{ draft.id }} };
+    try { localStorage.setItem(_AGENT_KEY, JSON.stringify(data)); } catch (_) {}
+  }
+  function _agentClear() {
+    try { localStorage.removeItem(_AGENT_KEY); } catch (_) {}
+  }
+  function _agentRestore() {
+    try {
+      const raw = localStorage.getItem(_AGENT_KEY);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      if (data.draftId !== {{ draft.id }}) { _agentClear(); return null; }
+      return data;
+    } catch { return null; }
+  }
+
+  function _showUndoBtn() {
+    const el = document.getElementById('agent-undo-btn');
+    if (el) el.style.display = '';
+  }
+  function _hideUndoBtn() {
+    const el = document.getElementById('agent-undo-btn');
+    if (el) el.style.display = 'none';
+  }
+
+  function undoAgentEdit() {
+    if (_agentOriginal === null) return;
+    const btn = document.getElementById('agent-undo-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ 恢复中...';
+    fetch('/api/draft/{{ draft.id }}/agent-undo', { method: 'POST' })
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok && data.body_md) {
+          const editor = window.easyMDE || document.getElementById('editor');
+          if (editor && typeof editor.value === 'function') editor.value(data.body_md);
+        }
+        _isAgentModified = false;
+        _agentOriginal = null;
+        _hideUndoBtn();
+        _agentClear();
+        btn.disabled = false;
+        btn.textContent = '撤销 Agent 修改';
+      })
+      .catch(() => {
+        btn.disabled = false;
+        btn.textContent = '撤销 Agent 修改';
+        alert('恢复失败，请手动刷新页面');
+      });
+  }
 
   function openAgentDialog() {
-    document.getElementById('agent-modal').style.display = 'flex';
-    document.getElementById('agent-prompt').focus();
+    const modal = document.getElementById('agent-modal');
+    const state = _agentRestore();
+    const promptEl = document.getElementById('agent-prompt');
+    const statusEl = document.getElementById('agent-status');
+
+    if (state && state.prompt) {
+      promptEl.value = state.prompt;
+    }
+    if (state && state.status === 'processing') {
+      statusEl.innerHTML = '<span class="agent-spinner"></span> Agent 处理中...';
+    } else if (state && state.status === 'done') {
+      statusEl.innerHTML = '✅ 上次修改已完成并保存';
+    } else if (_isAgentModified) {
+      statusEl.innerHTML = '✅ 内容已由 Agent 修改并保存';
+    } else {
+      statusEl.innerHTML = '';
+    }
+
+    modal.style.display = 'flex';
+    promptEl.focus();
   }
 
   function closeAgentDialog() {
     document.getElementById('agent-modal').style.display = 'none';
-    document.getElementById('agent-result').innerHTML = '';
-    document.getElementById('agent-status').textContent = '';
+    // Keep state so re-opening preserves it.
   }
 
   async function sendAgentPrompt() {
@@ -1024,36 +1098,73 @@
     const prompt = promptEl.value.trim();
     if (!prompt) { alert('请输入指令'); return; }
 
+    // Save original content for undo (first send only)
+    if (_agentOriginal === null) {
+      const editor = window.easyMDE || document.getElementById('editor');
+      _agentOriginal = (editor && typeof editor.value === 'function') ? editor.value() : '';
+    }
+
     const statusEl = document.getElementById('agent-status');
-    const resultEl = document.getElementById('agent-result');
-    statusEl.innerHTML = '⏳ Agent 处理中...';
-    resultEl.innerHTML = '';
+    statusEl.innerHTML = '<span class="agent-spinner"></span> Agent 处理中...';
     btn.disabled = true;
+    _agentSave({ prompt, status: 'processing' });
 
     try {
       const fd = new FormData();
       fd.set('prompt', prompt);
       const resp = await fetch('/api/draft/{{ draft.id }}/agent-edit', { method: 'POST', body: fd });
       const data = await resp.json();
+
       if (data.ok) {
-        statusEl.innerHTML = '✅ 处理完成';
-        resultEl.innerHTML = '<pre style="white-space:pre-wrap;max-height:400px;overflow:auto;background:#1e1e2e;color:#cdd6f4;padding:12px;border-radius:6px;font-size:13px">'
-          + escapeHtml(data.result) + '</pre>';
+        // Write result directly into the editor
+        const editor = window.easyMDE || document.getElementById('editor');
+        if (editor && typeof editor.value === 'function') editor.value(data.result);
+        _isAgentModified = true;
+        _showUndoBtn();
+        statusEl.innerHTML = '✅ 修改完成，已保存' + (data.saved ? '' : '（请手动保存）');
+        _agentSave({ prompt, status: 'done', original: _agentOriginal, result: data.result });
       } else {
         statusEl.innerHTML = '❌ ' + (data.error || '处理失败');
+        _agentSave({ prompt, status: 'error', error: data.error });
       }
     } catch (e) {
       statusEl.innerHTML = '❌ 请求失败：' + e.message;
+      _agentSave({ prompt, status: 'error', error: e.message });
     } finally {
       btn.disabled = false;
     }
   }
 
-  function escapeHtml(text) {
-    const d = document.createElement('div');
-    d.textContent = text;
-    return d.innerHTML;
-  }
+  // On page load: restore agent-modified content from localStorage
+  (function restoreAgentState() {
+    const state = _agentRestore();
+    if (!state) return;
+    if (state.status === 'done' && state.result && state.original) {
+      const editor = window.easyMDE || document.getElementById('editor');
+      if (editor && typeof editor.value === 'function') {
+        _agentOriginal = state.original;
+        editor.value(state.result);
+        _isAgentModified = true;
+        _showUndoBtn();
+      }
+    }
+    // Keep agent prompt in storage so it shows when dialog opens.
+  })();
+
+  // When the user explicitly saves the form, clear agent state and backup
+  document.addEventListener('DOMContentLoaded', function () {
+    const form = document.getElementById('edit-form');
+    if (form) {
+      form.addEventListener('submit', function () {
+        _isAgentModified = false;
+        _agentOriginal = null;
+        _hideUndoBtn();
+        _agentClear();
+        // Also tell server to clean up the backup file
+        navigator.sendBeacon('/api/draft/{{ draft.id }}/agent-cleanup', '');
+      });
+    }
+  });
 </script>
 
 <!-- Floating Agent button -->
@@ -1075,7 +1186,6 @@
       <label for="agent-prompt">输入指令，Agent 将根据当前草稿内容执行：</label>
       <textarea id="agent-prompt" rows="4" placeholder="例如：把这篇文章改写成小红书风格，加入 emoji 和话题标签&#10;或者：精简正文到 500 字以内，保留核心信息"></textarea>
       <div id="agent-status" class="agent-status"></div>
-      <div id="agent-result" class="agent-result"></div>
     </div>
     <div class="agent-modal-footer">
       <button type="button" class="btn secondary" onclick="closeAgentDialog()">取消</button>
@@ -1124,7 +1234,13 @@
   font-family: var(--font-sans); font-size: 14px; resize: vertical; box-sizing: border-box;
 }
 .agent-status { font-size: 14px; margin: 4px 0; }
-.agent-result { margin-top: 4px; }
+.agent-spinner {
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid var(--text); border-top-color: transparent;
+  border-radius: 50%; animation: agent-spin .6s linear infinite;
+  vertical-align: middle; margin-right: 4px;
+}
+@keyframes agent-spin { to { transform: rotate(360deg); } }
 .agent-modal-footer {
   display: flex; gap: 8px; justify-content: flex-end;
   padding: 12px 20px; border-top: 1px solid var(--border);

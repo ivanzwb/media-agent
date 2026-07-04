@@ -1,5 +1,10 @@
 """Tests for the CLI provider (app/llm/providers/cli.py)."""
 
+import subprocess
+from unittest.mock import patch
+
+import pytest
+
 from app.llm.base import Message
 from app.llm.providers.cli import CLIProvider, detect, detect_all
 
@@ -46,6 +51,48 @@ def test_build_prompt_combines_system_and_user():
     assert "[SYSTEM]" in result
     assert "You are a helpful assistant." in result
     assert "Hello, world!" in result
+
+
+def test_build_prompt_strips_null_bytes():
+    """_build_prompt removes null bytes from system and user messages."""
+    p = CLIProvider("opencode")
+    result = p._build_prompt([
+        Message(role="system", content="你是一个文章编辑助手\x00"),
+        Message(role="user", content="帮我修改\x00这段文字"),
+    ])
+    assert "\x00" not in result
+    assert "你是一个文章编辑助手" in result
+    assert "帮我修改这段文字" in result
+
+
+def test_run_strips_null_bytes_before_subprocess():
+    """_run strips null bytes from prompt before passing to subprocess."""
+    p = CLIProvider("opencode")
+
+    captured = {}
+
+    class FakePopenResult:
+        """Duck-typing the subset of subprocess.CompletedProcess we use."""
+        def __init__(self, args, returncode, stdout, stderr):
+            self.args = args
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return FakePopenResult(args, 0, stdout="ok", stderr="")
+
+    with patch.object(subprocess, "run", side_effect=fake_run):
+        p._run("hello\x00world\x00", timeout=30)
+
+    # The prompt is embedded in the arg list via {prompt} substitution
+    args = captured["args"]
+    # args[0] is exe_path, rest is the arg list
+    arg_str = " ".join(args[0] if isinstance(args[0], list) else args)
+    assert "\x00" not in arg_str
+    assert "helloworld" in arg_str
 
 
 def test_get_rewrite_provider_falls_back_to_mock():

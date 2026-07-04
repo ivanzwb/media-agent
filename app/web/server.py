@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -44,6 +45,8 @@ from app.store import Store
 _BASE = Path(__file__).parent
 _TEMPLATES = _BASE / "templates"
 _STATIC = _BASE / "static"
+
+logger = logging.getLogger(__name__)
 
 
 def _to_int(value: str, default: int) -> int:
@@ -401,19 +404,52 @@ def create_app(config: Config | None = None,
 
     # ── Agent edit (draft → CLI agent) ──────────────────────────────────────
 
+    # Strip trailing notes/commentary that some agents append after the
+    # actual article content despite being told not to.
+    _AGENT_TRAILER_RE = re.compile(
+        r"(?:\n---\s*\n.*|"            # standalone --- separator + text
+        r"\n(?:修改说明|修改总结|备注|总结|Note|注意|说明)[：:].*|"
+        r"\n---\s*$)",                  # trailing --- line
+        re.DOTALL | re.IGNORECASE,
+    )
+
+    def _strip_agent_trailer(text: str) -> str:
+        """Remove trailing modification notes from an agent's output."""
+        stripped = text.rstrip()
+        # Try front-matter aware stripping: if the text has front-matter,
+        # only strip trailing content after the body.
+        if "\n---\n" in stripped:
+            parts = stripped.rsplit("\n---\n", 1)
+            if len(parts) == 2 and parts[1].strip():
+                tail = parts[1].strip()
+                if (len(tail) < 300
+                    or any(kw in tail.lower() for kw in
+                           ["修改说明", "修改总结", "备注", "总结", "note:", "注意", "说明"])):
+                    stripped = parts[0]
+        # Generic trailing pattern cleanup
+        stripped = re.sub(r"\n(修改说明|修改总结|备注|总结|Note|注意|说明)[：:].*$", "", stripped, flags=re.IGNORECASE)
+        return stripped
+
     @app.post("/api/draft/{draft_id}/agent-edit")
     def draft_agent_edit(draft_id: int, prompt: str = Form(...)):
         """Send a user prompt + current draft content to the configured CLI agent."""
         store = get_store()
 
-        # 1. get draft content
+        # 1. get draft content — give agent the full file (front-matter + body)
         body = store.read_draft_body(draft_id)
         if not body or "body_md" not in body:
             return JSONResponse({"ok": False, "error": "草稿不存在或内容为空"}, status_code=404)
 
-        title = body.get("title_cn") or (
-            (body.get("title_candidates") or [None])[0]) or "无标题"
-        article_md = body["body_md"]
+        row = store.get_draft(draft_id)
+        full_md = ""
+        if row and row["draft_path"]:
+            abs_path = config.data_dir / row["draft_path"]
+            if abs_path.exists():
+                full_md = abs_path.read_text(encoding="utf-8")
+        if not full_md:
+            # fallback: reconstruct from body + minimal metadata
+            import frontmatter
+            full_md = frontmatter.dumps(frontmatter.Post(body["body_md"]))
 
         # 2. determine active CLI tool
         db_tool = store.get_setting("cli_tool") or ""
@@ -437,15 +473,25 @@ def create_app(config: Config | None = None,
                 status_code=400)
 
         # 4. invoke the agent
+        # NOTE: we deliberately do NOT pass config.llm_model here — that
+        # setting belongs to the text-rewriting LLM provider (OpenAI-
+        # compatible), not to the CLI agent.  Passing it would override
+        # the CLIProvider's built-in _DEFAULT_MODELS fallback (which
+        # already pins a known-working model for opencode).
         provider = cli_provider.CLIProvider(active_tool, timeout=180)
         messages = [
             Message(role="system", content=(
-                "你是一个文章编辑助手。下面是用户草稿的完整内容，包含 front-matter 元信息和正文 markdown。"
-                "请根据用户的指令修改这篇草稿。保留 front-matter 元信息结构，只修改正文内容。"
-                "直接输出修改后的完整文件内容（包含 front-matter）。")),
+                "你是一个文章编辑助手。用户会给你一篇完整草稿文件（包含 front-matter 元信息和正文 markdown）"
+                "以及修改指令。\n\n"
+                "规则：\n"
+                "1. 根据指令修改草稿内容，**完整输出修改后的整篇文件（包含 front-matter）**。\n"
+                "2. 禁止输出任何修改说明、总结、备注、注释、思考过程、标记符号——你的全部输出"
+                "将被直接写入文件，任何多余文字都会出现在最终发布内容中。\n"
+                "3. 禁止在正文末尾添加分隔符（如 ---）、注释块、TODO 列表等。\n"
+                "4. 用户如果要求插入图片，用标准 Markdown 图片语法 `![描述](图片URL)`。\n"
+                "5. 不要用代码块包裹输出。")),
             Message(role="user", content=(
-                f"## 草稿标题\n{title}\n\n"
-                f"## 草稿正文\n{article_md}\n\n"
+                f"## 当前草稿文件\n```markdown\n{full_md}\n```\n\n"
                 f"## 用户指令\n{prompt}")),
         ]
 
@@ -454,7 +500,64 @@ def create_app(config: Config | None = None,
         except RuntimeError as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
-        return {"ok": True, "result": result}
+        # Post-process: strip trailing modification notes / commentary that
+        # sometimes leaks past the front-matter boundary or markdown end.
+        result = _strip_agent_trailer(result)
+
+        # Backup the current draft file before overwriting
+        bak_path = None
+        if row and row["draft_path"]:
+            src = config.data_dir / row["draft_path"]
+            if src.exists():
+                bak_path = src.with_name(src.name + ".agent-bak")
+                bak_path.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+                logger.info("agent-edit draft=%d backed up", draft_id)
+
+        # Write agent's full output (including front-matter) directly to the draft file
+        if row and row["draft_path"]:
+            abs_path = config.data_dir / row["draft_path"]
+            abs_path.parent.mkdir(parents=True, exist_ok=True)
+            abs_path.write_text(result, encoding="utf-8")
+        # Update DB record
+        store.conn.execute(
+            "UPDATE drafts SET status=?, updated_at=? WHERE id=?",
+            ("drafted", datetime.now(timezone.utc).isoformat(), draft_id))
+        store.conn.commit()
+        logger.info("agent-edit draft=%d saved OK", draft_id)
+
+        return {"ok": True, "result": result, "saved": True, "backup": True}
+
+    @app.post("/api/draft/{draft_id}/agent-undo")
+    def draft_agent_undo(draft_id: int):
+        """Restore draft from the backup created before the last agent edit."""
+        store = get_store()
+        row = store.get_draft(draft_id)
+        if not row or not row["draft_path"]:
+            return JSONResponse({"ok": False, "error": "草稿不存在"}, status_code=404)
+        src = config.data_dir / row["draft_path"]
+        bak_path = src.with_name(src.name + ".agent-bak")
+        if not bak_path.exists():
+            return JSONResponse({"ok": False, "error": "没有可恢复的备份"}, status_code=404)
+        # Restore backup
+        src.write_text(bak_path.read_text(encoding="utf-8"), encoding="utf-8")
+        bak_path.unlink(missing_ok=True)
+        logger.info("agent-undo draft=%d restored from backup", draft_id)
+        # Re-read the restored content
+        meta = store.read_draft_body(draft_id)
+        return {"ok": True, "body_md": meta.get("body_md", "")}
+
+    @app.post("/api/draft/{draft_id}/agent-cleanup")
+    def draft_agent_cleanup(draft_id: int):
+        """Remove the agent backup file (called on normal form save)."""
+        store = get_store()
+        row = store.get_draft(draft_id)
+        if row and row["draft_path"]:
+            bak_path = config.data_dir / row["draft_path"]
+            bak_path = bak_path.with_name(bak_path.name + ".agent-bak")
+            if bak_path.exists():
+                bak_path.unlink()
+                logger.info("agent-cleanup draft=%d backup removed", draft_id)
+        return {"ok": True}
 
     @app.get("/images/{name}")
     def serve_image(name: str):

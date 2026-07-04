@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -29,25 +30,49 @@ _TOOLS: dict[str, _ToolDef] = {
         id="opencode",
         label="OpenCode",
         exe="opencode",
-        args=["run", "--auto", "--format", "json", "{prompt}"],
+        # --dangerously-skip-permissions keeps the daemon non-interactive
+        # (Multica uses this flag instead of --auto).
+        # --model is appended dynamically by _run() when the caller provides
+        # a model hint via opts["model"].
+        args=["run", "--format", "json", "--dangerously-skip-permissions", "{prompt}"],
     ),
     "claude": _ToolDef(
         id="claude",
         label="Claude Code",
         exe="claude",
-        args=["-p", "{prompt}"],
+        # -p  = non-interactive pipe mode.
+        # --permission-mode bypassPermissions auto-approves tool calls
+        # in daemon execution (Multica uses this for autonomous runs).
+        args=["-p", "--permission-mode", "bypassPermissions", "{prompt}"],
     ),
     "codex": _ToolDef(
         id="codex",
         label="Codex (OpenAI)",
         exe="codex",
+        # Multica uses a complex app-server + JSON-RPC protocol for
+        # persistent daemons; our simpler exec --prompt is sufficient
+        # for one-shot reuse-oriented usage.
         args=["exec", "--prompt", "{prompt}"],
     ),
     "copilot": _ToolDef(
         id="copilot",
         label="GitHub Copilot",
-        exe="gh",
-        args=["copilot", "-p", "{prompt}"],
+        exe="copilot",
+        # Standalone Copilot CLI (npm: @github/copilot-cli).
+        # --allow-all bypasses tool/path/URL permission prompts;
+        # --no-ask-user prevents interactive questions.
+        # --output-format json gives structured NDJSON output
+        # for parsing (Multica uses exactly these flags).
+        args=["-p", "{prompt}", "--output-format", "json", "--allow-all", "--no-ask-user"],
+    ),
+    "gemini": _ToolDef(
+        id="gemini",
+        label="Gemini CLI",
+        exe="gemini",
+        # Google Gemini CLI with --yolo (auto-approve tools) and
+        # -o stream-json (structured NDJSON output).
+        # Based on Multica's gemini backend.
+        args=["-p", "{prompt}", "--yolo", "-o", "stream-json"],
     ),
     "zcode": _ToolDef(
         id="zcode",
@@ -55,6 +80,26 @@ _TOOLS: dict[str, _ToolDef] = {
         exe="zcode",
         args=["-p", "{prompt}"],
     ),
+}
+
+
+# ── model flag per tool ───────────────────────────────────────────────────
+
+_MODEL_FLAGS: dict[str, str] = {
+    # Multica consistently supports --model across claude, copilot, and opencode.
+    # gemini uses -m (short flag) instead.
+    "opencode": "--model",
+    "claude": "--model",
+    "copilot": "--model",
+    "gemini": "-m",
+}
+
+# Default models per tool — used when neither the caller passes a model nor
+# MEDIA_AGENT_LLM_MODEL is configured.  The opencode default model
+# (opencode/big-pickle) fails with "Unexpected server error" on many
+# systems, so we pin a known-working free model.
+_DEFAULT_MODELS: dict[str, str] = {
+    "opencode": "opencode/deepseek-v4-flash-free",
 }
 
 
@@ -86,6 +131,56 @@ def detect_all() -> str | None:
     return None
 
 
+# ── Windows native binary resolution ─────────────────────────────────────────
+
+def _resolve_windows_native(exe_path: str) -> str:
+    """Resolve the native Windows executable behind an npm-installed .cmd shim.
+
+    On Windows, ``opencode`` installed via ``npm install -g opencode-ai``
+    resolves to a ``opencode.cmd`` batch shim.  Batch's ``%*`` argument
+    forwarding does **not** preserve newlines, so multi-line prompts get
+    silently truncated at the first line break.
+
+    This function checks whether *exe_path* points to a ``.cmd`` shim and,
+    if so, looks for the bundled native ``.exe`` inside the npm package
+    directory tree (``opencode-windows-{x64,x64-baseline,arm64}``).
+
+    Returns the native binary path when found, otherwise returns
+    ``exe_path`` unchanged.
+    """
+    if sys.platform != "win32":
+        return exe_path
+    if not exe_path.lower().endswith(".cmd"):
+        return exe_path
+
+    prefix = os.path.dirname(exe_path)
+    # Try platform packages in priority order — baseline x64 (no AVX2)
+    # first, then regular x64, then arm64 as final fallback.
+    #
+    # Baseline is preferred because the regular x64 binary (Bun v1.3.14)
+    # segfaults on some Windows 11 / CPU combinations on startup
+    # (``opencode --help`` returns SIGSEGV), while the baseline variant
+    # works correctly on the same hardware.
+    for pkg in (
+        "opencode-windows-x64-baseline",
+        "opencode-windows-x64",
+        "opencode-windows-arm64",
+    ):
+        candidate = os.path.join(
+            prefix,
+            "node_modules",
+            "opencode-ai",
+            "node_modules",
+            pkg,
+            "bin",
+            "opencode.exe",
+        )
+        if os.path.isfile(candidate):
+            return candidate
+
+    return exe_path
+
+
 # ── provider ─────────────────────────────────────────────────────────────────
 
 class CLIProvider:
@@ -111,13 +206,22 @@ class CLIProvider:
     # for future use if a stdin-based tool is added.
     _STDIN_TOOLS: ClassVar[set[str]] = set()
 
-    def __init__(self, tool_id: str, timeout: int = 120) -> None:
+    def __init__(self, tool_id: str, timeout: int = 120,
+                 model: str = "") -> None:
         td = _TOOLS.get(tool_id)
         if td is None:
             raise ValueError(f"Unknown CLI tool: {tool_id}")
         self._td = td
-        self._exe_path = detect(tool_id) or td.exe  # fallback to bare name
+        exe_path = detect(tool_id) or td.exe  # fallback to bare name
+        # On Windows, resolve npm .cmd shim to the native .exe to avoid
+        # batch newline truncation in multi-line prompts.  The baseline
+        # x64 variant (no AVX2) is preferred because the regular x64
+        # binary segfaults on some Win11/CPU combos.
+        if tool_id == "opencode":
+            exe_path = _resolve_windows_native(exe_path)
+        self._exe_path = exe_path
         self._timeout = timeout
+        self._default_model = model
 
     # -- public API -----------------------------------------------------------
 
@@ -125,7 +229,8 @@ class CLIProvider:
         """Run the CLI tool with a prompt built from *messages*."""
         prompt = self._build_prompt(messages)
         timeout = opts.get("timeout", self._timeout)
-        return self._run(prompt, timeout=timeout)
+        model = opts.get("model", "")
+        return self._run(prompt, timeout=timeout, model=model)
 
     @property
     def tool_id(self) -> str:
@@ -149,14 +254,18 @@ class CLIProvider:
                 parts.append(f"[SYSTEM]\n{m.content}")
             else:
                 parts.append(m.content)
-        return "\n\n".join(parts)
+        result = "\n\n".join(parts)
+        # Sanitize: Bun (OpenCode's runtime) segfaults on null bytes in
+        # the prompt string.  Strip them unconditionally for safety.
+        return result.replace("\x00", "")
 
-    def _run(self, prompt: str, timeout: int) -> str:
+    def _run(self, prompt: str, timeout: int, model: str = "") -> str:
         """Execute the CLI tool and return its stdout.
 
         On failure raises ``RuntimeError``.
         """
-        use_stdin = self._td.id in self._STDIN_TOOLS
+        # Bun segfaults on null bytes in the prompt.  Strip them.
+        prompt = prompt.replace("\x00", "")
         kwargs: dict = dict(
             capture_output=True,
             encoding="utf-8",
@@ -164,23 +273,32 @@ class CLIProvider:
             timeout=timeout,
         )
 
-        if use_stdin:
-            args = [self._exe_path] + self._td.args
-            logger.debug("running (stdin): %s", args)
-            try:
-                proc = subprocess.run(args, input=prompt, **kwargs)
-            except subprocess.TimeoutExpired:
-                raise RuntimeError(f"{self._td.label} timed out after {timeout}s")
-        else:
-            # Replace {prompt} in the argument list
+        # If no explicit model was passed, fall back to the default model
+        # configured at construction time (e.g. from MEDIA_AGENT_LLM_MODEL),
+        # then to the built-in per-tool fallback (e.g. opencode needs a
+        # working model because its default is broken on many systems).
+        effective_model = (model or self._default_model
+                           or _DEFAULT_MODELS.get(self._td.id, ""))
+
+        try:
+            # Build the argument list, replacing {prompt} placeholders
+            # and injecting --model / -m when the tool supports it.
+            raw_args = list(self._td.args)
+            if effective_model and self._td.id in _MODEL_FLAGS:
+                prompt_idx = raw_args.index("{prompt}")
+                raw_args[prompt_idx:prompt_idx] = [_MODEL_FLAGS[self._td.id], effective_model]
             args = [self._exe_path] + [
-                a.replace("{prompt}", prompt) for a in self._td.args
+                a.replace("{prompt}", prompt) for a in raw_args
             ]
             logger.debug("running: %s", args)
-            try:
-                proc = subprocess.run(args, **kwargs)
-            except subprocess.TimeoutExpired:
-                raise RuntimeError(f"{self._td.label} timed out after {timeout}s")
+            proc = subprocess.run(args, **kwargs)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"{self._td.label} timed out after {timeout}s")
+        except ValueError as e:
+            raise RuntimeError(
+                f"{self._td.label} rejected: {e}. "
+                "The prompt contains characters the OS cannot pass via command line."
+            ) from None
 
         if proc.returncode != 0:
             stderr = (proc.stderr or "").strip()[:500]
@@ -261,6 +379,13 @@ class CLIProvider:
             content = event.get("content")
             if content and isinstance(content, str):
                 contents.append(content)
+                continue
+
+            # OpenCode --format json: text in part.text
+            part = event.get("part") or {}
+            text = part.get("text") if isinstance(part, dict) else None
+            if text and isinstance(text, str):
+                contents.append(text)
                 continue
 
             # Some events carry a top-level message field
