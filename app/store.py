@@ -105,6 +105,8 @@ class Store:
         }
         if draft.title_cn:
             meta["title_cn"] = draft.title_cn
+        if draft.score is not None:
+            meta["score"] = draft.score
         post = frontmatter.Post(draft.body_md, **meta)
         abs_path.write_text(frontmatter.dumps(post), encoding="utf-8")
         draft.draft_path = str(rel).replace("\\", "/")
@@ -112,14 +114,30 @@ class Store:
         cur = self.conn.execute(
             """INSERT INTO drafts
             (article_id, draft_path, cover_image, title_cn,
-             status, updated_at)
-            VALUES (?,?,?,?,?,?)""",
+             status, updated_at, score)
+            VALUES (?,?,?,?,?,?,?)""",
             (draft.article_id, draft.draft_path,
              draft.cover_image, draft.title_cn, draft.status,
-             datetime.now(timezone.utc).isoformat()))
+             datetime.now(timezone.utc).isoformat(),
+             draft.score))
         self.conn.commit()
         draft.id = cur.lastrowid
         return draft
+
+    def update_draft_score(self, draft_id: int, score: float) -> None:
+        """Update the score for an existing draft."""
+        self.conn.execute(
+            "UPDATE drafts SET score=?, updated_at=? WHERE id=?",
+            (score, datetime.now(timezone.utc).isoformat(), draft_id))
+        self.conn.commit()
+        # Also update the frontmatter in the markdown file
+        row = self.get_draft(draft_id)
+        if row and row["draft_path"]:
+            abs_path = self.config.data_dir / row["draft_path"]
+            if abs_path.exists():
+                post = frontmatter.load(str(abs_path))
+                post["score"] = score
+                abs_path.write_text(frontmatter.dumps(post), encoding="utf-8")
 
     # ----- read/update helpers for the web UI -----
 
@@ -172,12 +190,25 @@ class Store:
         if not row or not row["archive_path"]:
             return
         abs_path = self.config.data_dir / row["archive_path"]
-        if not abs_path.exists():
-            return
-        post = frontmatter.load(str(abs_path))
-        post["images"] = images
-        post["videos"] = videos
-        post.content = content_md
+        abs_path.parent.mkdir(parents=True, exist_ok=True)
+        if abs_path.exists():
+            post = frontmatter.load(str(abs_path))
+            post["images"] = images
+            post["videos"] = videos
+            post.content = content_md
+        else:
+            # File missing (e.g. after refetch of a refetched article) —
+            # recreate it from DB row metadata + new content.
+            post = frontmatter.Post(content_md, **{
+                "title": row["title"],
+                "url": row["url"],
+                "source_name": row["source_name"],
+                "source_type": row["source_type"],
+                "topic": row["topic"],
+                "published_at": row["published_at"],
+                "images": images,
+                "videos": videos,
+            })
         abs_path.write_text(frontmatter.dumps(post), encoding="utf-8")
 
     def drafts_by_article(self) -> dict[int, int]:
@@ -198,15 +229,21 @@ class Store:
 
     def delete_draft(self, draft_id: int) -> None:
         row = self.get_draft(draft_id)
-        if row and row["draft_path"]:
+        if not row:
+            return
+        # Commit DB delete FIRST, then clean up the file.
+        # This prevents orphaned DB records (file gone but row remains)
+        # when the commit fails after the file is already deleted.
+        self.conn.execute("DELETE FROM drafts WHERE id=?", (draft_id,))
+        self.conn.commit()
+        # Best-effort file cleanup after DB record is safely removed.
+        if row["draft_path"]:
             abs_path = self.config.data_dir / row["draft_path"]
             try:
                 if abs_path.exists():
                     abs_path.unlink()
             except OSError:
                 pass
-        self.conn.execute("DELETE FROM drafts WHERE id=?", (draft_id,))
-        self.conn.commit()
 
     def list_topics(self):
         rows = self.conn.execute(
