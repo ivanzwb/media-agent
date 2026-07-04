@@ -102,6 +102,14 @@
       const s = await (await fetch('/api/run-status')).json();
       if (s.running) { showRunPanel(); renderRun(s); pollRun(); }
     } catch (e) { /* ignore */ }
+
+    // Check for other running operations (rewrite, narration, etc.)
+    try {
+      const ops = await (await fetch('/api/operations')).json();
+      if (ops.running && ops.running.length > 0) {
+        window.dispatchEvent(new CustomEvent('ops-resume', { detail: ops.running }));
+      }
+    } catch (e) { /* ignore */ }
   });
   </script>
 </body>

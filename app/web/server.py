@@ -88,6 +88,11 @@ def create_app(config: Config | None = None,
         init_db(conn)
         return Store(conn, config)
 
+    def _db_conn() -> sqlite3.Connection:
+        c = connect(config.db_path)
+        init_db(c)
+        return c
+
     def run_now(progress=None):
         store = get_store()
         # Reload config with DB overrides so settings changes take effect
@@ -114,6 +119,51 @@ def create_app(config: Config | None = None,
         "running": False, "started_at": None, "finished_at": None,
         "stats": {}, "logs": [], "error": None,
     }
+
+    # ---- operations DB-backed registry (survives page refresh) ----
+    from app.db import start_op, finish_op, fail_op, _op_log, get_running_ops
+
+    class _Ops:
+        """Thin wrapper that mirrors log lines to a DB operations record so
+        state survives page refreshes and server restarts."""
+
+        def __init__(self):
+            self._active: dict[str, int] = {}  # key → op_id
+
+        def begin(self, key: str, op_type: str, target_id: int = 0,
+                  conn: sqlite3.Connection | None = None) -> int | None:
+            if conn is None:
+                return None
+            op_id = start_op(conn, op_type, target_id)
+            self._active[key] = op_id
+            return op_id
+
+        def log(self, key: str, line: str,
+                conn: sqlite3.Connection | None = None) -> None:
+            if conn is None:
+                return
+            op_id = self._active.get(key)
+            if op_id is not None:
+                _op_log(conn, op_id, line)
+                conn.commit()
+
+        def done(self, key: str, stats: dict | None = None,
+                 conn: sqlite3.Connection | None = None) -> None:
+            if conn is None:
+                return
+            op_id = self._active.pop(key, None)
+            if op_id is not None:
+                finish_op(conn, op_id, stats)
+
+        def error(self, key: str, exc: str,
+                  conn: sqlite3.Connection | None = None) -> None:
+            if conn is None:
+                return
+            op_id = self._active.pop(key, None)
+            if op_id is not None:
+                fail_op(conn, op_id, exc)
+
+    ops = _Ops()
 
     def _log(msg, stats=None):
         line = f"{datetime.now().strftime('%H:%M:%S')} {msg}"
@@ -260,8 +310,12 @@ def create_app(config: Config | None = None,
                       draft_id=None)
 
         def worker():
+            op_key = f"rewrite-{article_id}"
+            op_conn = _db_conn()
+            ops.begin(op_key, "rewrite", article_id, op_conn)
             try:
-                _rewrite_log(article_id, "构建 LLM provider…")
+                _rewrite_log(article_id, "构建 LLM provider…",
+                             op_key=op_key, op_conn=op_conn)
                 ws = get_store()
                 run_config = Config.load(store=ws)
                 provider = get_rewrite_provider(
@@ -275,9 +329,11 @@ def create_app(config: Config | None = None,
                     base_url=run_config.image_api_base
                            or run_config.llm_api_base)
 
-                _rewrite_log(article_id, "正在调用 LLM 进行转写…")
+                _rewrite_log(article_id, "正在调用 LLM 进行转写…",
+                             op_key=op_key, op_conn=op_conn)
                 draft = rewrite(art, provider)
-                _rewrite_log(article_id, "转写完成，进行敏感词过滤…")
+                _rewrite_log(article_id, "转写完成，进行敏感词过滤…",
+                             op_key=op_key, op_conn=op_conn)
                 sanitize_draft(draft, load_words(run_config))
 
                 # Append promotion footer if configured
@@ -285,7 +341,8 @@ def create_app(config: Config | None = None,
                 if footer:
                     draft.body_md = draft.body_md.rstrip() + f"\n\n---\n{footer}\n"
 
-                _rewrite_log(article_id, "保存草稿…")
+                _rewrite_log(article_id, "保存草稿…",
+                             op_key=op_key, op_conn=op_conn)
                 old = ws.get_draft_for_article(article_id)
                 saved = ws.save_draft(draft)
 
@@ -300,15 +357,18 @@ def create_app(config: Config | None = None,
                         provider=provider,
                     )
                     ws.update_draft_score(saved.id, score_val)
-                    _rewrite_log(article_id, f"评分：{score_val}/100")
+                    _rewrite_log(article_id, f"评分：{score_val}/100",
+                                 op_key=op_key, op_conn=op_conn)
                 except Exception as exc:
-                    _rewrite_log(article_id, f"评分失败（已跳过）：{exc}")
+                    _rewrite_log(article_id, f"评分失败（已跳过）：{exc}",
+                                 op_key=op_key, op_conn=op_conn)
 
                 if old and old["id"] != saved.id:
                     ws.delete_draft(old["id"])
 
                 if image_provider is not None:
-                    _rewrite_log(article_id, "生成封面…")
+                    _rewrite_log(article_id, "生成封面…",
+                                 op_key=op_key, op_conn=op_conn)
                     attach_cover(saved, image_provider,
                                  ws.config.images_dir)
                     if saved.cover_image:
@@ -320,11 +380,15 @@ def create_app(config: Config | None = None,
 
                 with rewrite_locks[article_id]:
                     st["draft_id"] = saved.id
-                _rewrite_log(article_id, f"转写完成 ✓ 草稿 #{saved.id}")
+                _rewrite_log(article_id, f"转写完成 ✓ 草稿 #{saved.id}",
+                             op_key=op_key, op_conn=op_conn)
+                ops.done(op_key, {"draft_id": saved.id}, op_conn)
             except Exception as e:  # noqa: BLE001
-                _rewrite_log(article_id, f"出错：{e}")
+                _rewrite_log(article_id, f"出错：{e}",
+                             op_key=op_key, op_conn=op_conn)
                 with rewrite_locks[article_id]:
                     st["error"] = str(e)
+                ops.error(op_key, str(e), op_conn)
             finally:
                 with rewrite_locks[article_id]:
                     st["running"] = False
@@ -332,6 +396,15 @@ def create_app(config: Config | None = None,
 
         threading.Thread(target=worker, daemon=True).start()
         return {"started": True, "running": True}
+
+    @app.get("/api/operations")
+    def api_operations():
+        """Return all currently running operations, so the frontend can
+        resume tracking after a page refresh."""
+        conn = _db_conn()
+        running = get_running_ops(conn)
+        conn.close()
+        return {"running": running}
 
     @app.get("/api/rewrite-status")
     def api_rewrite_status(article_id: int):
@@ -918,6 +991,9 @@ def create_app(config: Config | None = None,
                              finished_at=None)
 
         def worker():
+            op_key = "run"
+            op_conn = _db_conn()
+            ops.begin(op_key, "run", 0, op_conn)
             try:
                 _log("开始运行流水线")
                 stats = run_now(progress=_log)
@@ -925,10 +1001,12 @@ def create_app(config: Config | None = None,
                     if stats:
                         run_state["stats"] = dict(stats)
                 _log("运行成功结束", run_state["stats"])
+                ops.done(op_key, stats, op_conn)
             except Exception as e:  # noqa: BLE001 - surface to UI log
                 with run_lock:
                     run_state["error"] = str(e)
                 _log(f"运行出错：{e}")
+                ops.error(op_key, str(e), op_conn)
             finally:
                 with run_lock:
                     run_state["running"] = False
@@ -964,13 +1042,16 @@ def create_app(config: Config | None = None,
                 rewrite_locks[article_id] = threading.Lock()
             return rewrite_states[article_id]
 
-    def _rewrite_log(article_id: int, msg: str) -> None:
+    def _rewrite_log(article_id: int, msg: str,
+                     op_key: str = "", op_conn: sqlite3.Connection | None = None) -> None:
         st = _rewrite_state(article_id)
         line = f"{datetime.now().strftime('%H:%M:%S')} {msg}"
         with rewrite_locks[article_id]:
             st["logs"].append(line)
             if len(st["logs"]) > 300:
                 del st["logs"][:-300]
+        if op_key and op_conn:
+            ops.log(op_key, line, op_conn)
 
     # ---- narration / explainer-video generation ----
     # Per-draft state tracking: different drafts can run concurrently.
@@ -1306,16 +1387,21 @@ def create_app(config: Config | None = None,
                              error=None, done=False, stats={})
 
         def worker():
+            op_key = f"localize-{article_id}"
+            op_conn = _db_conn()
+            ops.begin(op_key, "localize", article_id, op_conn)
             try:
                 stats = localize_one(article_id, get_store(), config,
                                      progress=_mlz_log)
                 with mlz_lock:
                     mlz_state["stats"] = stats
                     mlz_state["done"] = True
+                ops.done(op_key, stats, op_conn)
             except Exception as e:  # noqa: BLE001
                 with mlz_lock:
                     mlz_state["error"] = str(e)
                 _mlz_log(f"出错：{e}")
+                ops.error(op_key, str(e), op_conn)
             finally:
                 with mlz_lock:
                     mlz_state["running"] = False

@@ -1232,6 +1232,26 @@
   });
 </script>
 
+<script>
+// Auto-resume narration/video tracking after page refresh
+window.addEventListener('ops-resume', function (e) {
+  e.detail.forEach(function (op) {
+    if (op.type === 'narration' && op.status === 'running') {
+      document.getElementById('nar-panel').style.display = 'flex';
+      narTimer = setTimeout(function () { pollNarration(op.target_id); }, 200);
+    }
+    if (op.type === 'resynth' && op.status === 'running') {
+      document.getElementById('nar-panel').style.display = 'flex';
+      narTimer = setTimeout(function () { pollNarration(op.target_id); }, 200);
+    }
+    if (op.type === 'video' && op.status === 'running') {
+      document.getElementById('vid-panel').style.display = 'flex';
+      vidTimer = setTimeout(function () { pollVideo(op.target_id); }, 200);
+    }
+  });
+});
+</script>
+
 <!-- Floating Agent button -->
 <div id="agent-fab" onclick="openAgentDialog()" title="Agent 编辑">
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

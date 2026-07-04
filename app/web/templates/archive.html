@@ -200,7 +200,8 @@ async function pollRewrite() {
 async function rewriteArticle(id, isRewrite) {
   if (isRewrite && !confirm('重写会覆盖该文章已有的主稿草稿，确定吗？')) return;
   const cell = document.getElementById('art-actions-' + id);
-  cell.innerHTML = '<span class="muted">⏳ 转写中…</span>';
+  const origHTML = cell.innerHTML;
+  cell.innerHTML = '<span class="muted">⏳ 请求中…</span>';
   try {
     const resp = await fetch('/archive/' + id + '/rewrite', {method: 'POST'});
     const data = await resp.json();
@@ -208,7 +209,8 @@ async function rewriteArticle(id, isRewrite) {
       cell.innerHTML = '<span class="muted">已有任务在进行</span>';
       return;
     }
-    // Start polling progress
+    // Progress now shown in the rewrite panel — restore the button
+    cell.innerHTML = origHTML;
     rewriteArticleId = id;
     showRewritePanel(id);
     pollRewrite();
@@ -217,5 +219,17 @@ async function rewriteArticle(id, isRewrite) {
     alert('转写请求失败');
   }
 }
+</script>
+<script>
+// Auto-resume rewrite tracking after page refresh
+window.addEventListener('ops-resume', function (e) {
+  e.detail.forEach(function (op) {
+    if (op.type === 'rewrite' && op.status === 'running') {
+      rewriteArticleId = op.target_id;
+      showRewritePanel(op.target_id);
+      pollRewrite();
+    }
+  });
+});
 </script>
 {% endblock %}

@@ -47,6 +47,17 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS operations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    op_type TEXT NOT NULL,
+    target_id INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'running',
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    logs TEXT DEFAULT '[]',
+    error TEXT,
+    stats_json TEXT DEFAULT '{}'
+);
 """
 
 
@@ -74,4 +85,102 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE drafts ADD COLUMN score REAL")
     except sqlite3.OperationalError:
         pass  # column already exists
+    # Migrate: add operations table (for state that survives page refreshes)
+    conn.execute("""CREATE TABLE IF NOT EXISTS operations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        op_type TEXT NOT NULL,
+        target_id INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'running',
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        logs TEXT DEFAULT '[]',
+        error TEXT,
+        stats_json TEXT DEFAULT '{}'
+    )""")
     conn.commit()
+
+
+# ── Operations table helpers (persistent state across page refreshes) ──────
+
+import json as _json
+from datetime import datetime as _dt, timezone as _tz
+
+
+def start_op(conn: sqlite3.Connection, op_type: str, target_id: int = 0) -> int:
+    """Create a new operation record and return its ID."""
+    now = _dt.now(_tz.utc).isoformat()
+    cur = conn.execute(
+        "INSERT INTO operations (op_type, target_id, started_at) VALUES (?, ?, ?)",
+        (op_type, target_id, now),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def _op_log(conn: sqlite3.Connection, op_id: int, line: str) -> None:
+    """Append a log line to an operation."""
+    row = conn.execute(
+        "SELECT logs FROM operations WHERE id=?", (op_id,)
+    ).fetchone()
+    if not row:
+        return
+    logs: list[str] = _json.loads(row[0] or "[]")
+    logs.append(line)
+    if len(logs) > 500:
+        logs = logs[-500:]
+    conn.execute(
+        "UPDATE operations SET logs=? WHERE id=?",
+        (_json.dumps(logs, ensure_ascii=False), op_id),
+    )
+    # Don't commit here — caller batches commits
+
+
+def finish_op(conn: sqlite3.Connection, op_id: int,
+              stats: dict | None = None) -> None:
+    """Mark an operation as completed."""
+    now = _dt.now(_tz.utc).isoformat()
+    conn.execute(
+        "UPDATE operations SET status='done', finished_at=?, stats_json=? WHERE id=?",
+        (now, _json.dumps(stats or {}, ensure_ascii=False), op_id),
+    )
+    conn.commit()
+
+
+def fail_op(conn: sqlite3.Connection, op_id: int, error: str) -> None:
+    """Mark an operation as failed."""
+    now = _dt.now(_tz.utc).isoformat()
+    conn.execute(
+        "UPDATE operations SET status='error', finished_at=?, error=? WHERE id=?",
+        (now, error, op_id),
+    )
+    conn.commit()
+
+
+def get_running_ops(conn: sqlite3.Connection) -> list[dict]:
+    """Return all currently running operations."""
+    rows = conn.execute(
+        "SELECT * FROM operations WHERE status='running' ORDER BY started_at"
+    ).fetchall()
+    return [_op_row_to_dict(r) for r in rows]
+
+
+def get_op(conn: sqlite3.Connection, op_id: int) -> dict | None:
+    """Return a single operation by ID."""
+    row = conn.execute(
+        "SELECT * FROM operations WHERE id=?", (op_id,)
+    ).fetchone()
+    return _op_row_to_dict(row) if row else None
+
+
+def _op_row_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "type": row["op_type"],
+        "target_id": row["target_id"],
+        "status": row["status"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+        "logs": _json.loads(row["logs"] or "[]"),
+        "error": row["error"],
+        "stats": _json.loads(row["stats_json"] or "{}"),
+    }
