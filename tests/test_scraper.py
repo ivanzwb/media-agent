@@ -260,3 +260,102 @@ def test_scrape_single_builds_article(monkeypatch):
     assert "AI" in art.content_md
     assert art.source_type == "scrape"
     assert any("a.png" in i for i in art.images)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _is_article_content
+# ═══════════════════════════════════════════════════════════════════
+
+def test_article_content_rejects_thin_body():
+    from app.sources.scraper import _is_article_content
+    body = "short text"
+    assert not _is_article_content({"title": "Title", "content_md": body})
+
+
+def test_article_content_rejects_too_few_text_lines():
+    from app.sources.scraper import _is_article_content
+    # Only 1 text line; everything else is bare URLs or images.
+    body = (
+        "https://example.com/link1\n"
+        "https://example.com/link2\n"
+        "https://example.com/link3\n"
+        "![img](/a.png)\n"
+        "![img](/b.png)\n"
+        "Real text line here\n"
+    )
+    assert not _is_article_content({"title": "Title", "content_md": body})
+
+
+def test_article_content_rejects_high_link_density():
+    """Listing / year-index pages where >40% of non-whitespace chars are in
+    [text](url) markdown links."""
+    from app.sources.scraper import _is_article_content
+    body = (
+        "[News 2024: AI Breakthrough](https://nims.go.jp/eng/news/2024/ai.html)\n"
+        "[Research Update Jan](https://nims.go.jp/eng/news/2024/jan.html)\n"
+        "[Research Update Feb](https://nims.go.jp/eng/news/2024/feb.html)\n"
+        "[Research Update Mar](https://nims.go.jp/eng/news/2024/mar.html)\n"
+        "[Research Update Apr](https://nims.go.jp/eng/news/2024/apr.html)\n"
+        "[Research Update May](https://nims.go.jp/eng/news/2024/may.html)\n"
+        "[Research Update Jun](https://nims.go.jp/eng/news/2024/jun.html)\n"
+        "[Research Update Jul](https://nims.go.jp/eng/news/2024/jul.html)\n"
+    )
+    assert not _is_article_content({"title": "News 2024", "content_md": body})
+
+
+def test_article_content_rejects_404_titles():
+    from app.sources.scraper import _is_article_content
+    body = "Some page content that is long enough to pass the 300-char threshold. " * 10
+    for title in ("404", "Page Not Found", "Not Found"):
+        assert not _is_article_content({"title": title, "content_md": body})
+
+
+def test_article_content_accepts_valid_article():
+    from app.sources.scraper import _is_article_content
+    body = """## Introduction
+
+This is the first paragraph of a real article. It has multiple sentences with
+substantial content that describes the topic in detail. Artificial intelligence
+continues to reshape our world in profound and unexpected ways. Researchers are
+pushing the boundaries of what machines can learn and accomplish.
+
+## Background
+
+The second paragraph provides historical context and necessary background
+information to help readers understand the significance of these developments.
+Natural language processing has seen remarkable advances in recent years.
+
+## Key Findings
+
+A third paragraph that presents the main findings or arguments of the article.
+This ensures we have plenty of text content to pass the minimum length check.
+The three text-line minimum is easily satisfied by this real article content.
+
+## Conclusion
+
+The final paragraph wraps up the discussion and offers concluding thoughts on
+the topic. Future research directions and open questions are also discussed."""
+
+    assert _is_article_content({"title": "AI Developments", "content_md": body})
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _is_non_article  —  index.* tier 4b
+# ═══════════════════════════════════════════════════════════════════
+
+def test_is_non_article_index_pages():
+    """Index pages (index.html, index.php, index.aspx) are rejected at any
+    depth — they are always listing / container pages."""
+    assert _is_non_article(
+        "https://mccormick.northwestern.edu/materials-science/"
+        "news-events/events/index.php")
+
+    # All the major extensions
+    assert _is_non_article("https://x.com/news/index.html")
+    assert _is_non_article("https://x.com/news/index.php")
+    assert _is_non_article("https://x.com/news/index.aspx")
+    assert _is_non_article("https://x.com/index.htm")
+
+    # But a real article slug like "indexical-philosophy" is NOT blocked
+    # because it doesn't start with "index."
+    assert not _is_non_article("https://x.com/blog/indexical-philosophy")

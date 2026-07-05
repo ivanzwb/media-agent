@@ -519,3 +519,98 @@ def test_extract_no_fallback_when_images_found():
     # readability should pick up the image normally
     assert len(result["images"]) == 1
     assert "hero.jpg" in result["images"][0]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# extract_from_html  —  future-date sanity filter
+# ═══════════════════════════════════════════════════════════════════
+
+def test_extract_rejects_future_date_more_than_one_day():
+    """Dates >1 day in the future are set to None (listing/event pages)."""
+    from datetime import datetime, timezone, timedelta
+    future = datetime.now(timezone.utc) + timedelta(days=3)
+    html = (
+        f'<meta property="article:published_time" '
+        f'content="{future.isoformat()}"/>'
+        f"<html><body><p>Article content that needs to be quite long "
+        f"so that trafilatura returns something meaningful for our test."
+        f" We keep adding more words until the content is long enough."
+        f" Repeating the main idea over and over to pad the body text."
+        f" At this point the text should be well past 300 characters."
+        f" </p><p>A second paragraph with additional content to ensure"
+        f" multiple text lines are available after extraction. This is"
+        f" important for the image extraction tests as well.</p>"
+        f"<p>A third paragraph adds even more content to the article.</p>"
+        f"</body></html>"
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    assert result["published_at"] is None, (
+        f"Expected None for future date, got {result['published_at']}")
+
+
+def test_extract_keeps_recent_date():
+    """Dates up to 1 day in the future are kept (timezone differences)."""
+    from datetime import datetime, timezone, timedelta
+    recent = datetime.now(timezone.utc) - timedelta(hours=2)
+    html = (
+        f'<meta property="article:published_time" '
+        f'content="{recent.isoformat()}"/>'
+        f"<html><body><p>Article content that needs to be quite long "
+        f"so that trafilatura returns something meaningful for our test."
+        f" We keep adding more words until the content is long enough."
+        f" Repeating the main idea over and over to pad the body text."
+        f" At this point the text should be well past 300 characters."
+        f" </p><p>A second paragraph with additional content to ensure"
+        f" multiple text lines are available after extraction. This is"
+        f" important for the image extraction tests as well.</p>"
+        f"<p>A third paragraph adds even more content to the article.</p>"
+        f"</body></html>"
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    assert result["published_at"] is not None
+
+
+def test_extract_keeps_today_plus_one():
+    """Dates exactly 1 day ahead are still accepted (safe margin)."""
+    from datetime import datetime, timezone, timedelta
+    tomorrow = datetime.now(timezone.utc) + timedelta(hours=23)
+    html = (
+        f'<meta property="article:published_time" '
+        f'content="{tomorrow.isoformat()}"/>'
+        f"<html><body><p>Article content that needs to be quite long "
+        f"so that trafilatura returns something meaningful for our test."
+        f" We keep adding more words until the content is long enough."
+        f" Repeating the main idea over and over to pad the body text."
+        f" At this point the text should be well past 300 characters."
+        f" </p><p>A second paragraph with additional content to ensure"
+        f" multiple text lines are available after extraction. This is"
+        f" important for the image extraction tests as well.</p>"
+        f"<p>A third paragraph adds even more content to the article.</p>"
+        f"</body></html>"
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    assert result["published_at"] is not None
+
+
+def test_extract_keeps_past_date():
+    """Dates in the past are always kept."""
+    from datetime import datetime, timezone, timedelta
+    past = datetime.now(timezone.utc) - timedelta(days=7)
+    html = (
+        f'<meta property="article:published_time" '
+        f'content="{past.isoformat()}"/>'
+        f"<html><body><p>Article content that needs to be quite long "
+        f"so that trafilatura returns something meaningful for our test."
+        f" We keep adding more words until the content is long enough."
+        f" Repeating the main idea over and over to pad the body text."
+        f" At this point the text should be well past 300 characters."
+        f" </p><p>A second paragraph with additional content to ensure"
+        f" multiple text lines are available after extraction. This is"
+        f" important for the image extraction tests as well.</p>"
+        f"<p>A third paragraph adds even more content to the article.</p>"
+        f"</body></html>"
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    assert result["published_at"] is not None
+    assert (result["published_at"].year, result["published_at"].month) == (
+        past.year, past.month)
