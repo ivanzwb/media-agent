@@ -417,6 +417,14 @@ function toggleBatchBtn(type) {
   btn.style.display = any ? 'inline-block' : 'none';
 }
 
+function refreshHotness() {
+  var btn = document.getElementById('hotness-refresh-btn');
+  btn.disabled = true; btn.textContent = '⟳ 刷新中…';
+  fetch('/sources/refresh-hotness', {method: 'POST'})
+    .then(function () { location.reload(); })
+    .catch(function () { btn.disabled = false; btn.textContent = '⟳ 刷新热度'; });
+}
+
 function batchDelete(type) {
   var cbClass = type + '-cb', endpoint, label;
   if (type === 'topic') { endpoint = '/sources/topics/delete-batch'; label = '主题'; }

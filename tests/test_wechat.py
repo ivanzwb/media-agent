@@ -206,3 +206,46 @@ def test_channels_caption_fallback_without_llm():
     assert cap["title"] == "中文标题"
     assert cap["description"]                    # derived from body
     assert cap["hashtags"] == ["#科技"]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _absolutize_media / _absolutize_body_md
+# ═══════════════════════════════════════════════════════════════════
+
+def test_absolutize_media_converts_relative_paths():
+    from app.wechat.publish import _absolutize_media
+    assert _absolutize_media("../../media/abc/pic.png") == "/media/abc/pic.png"
+    assert _absolutize_media("../../images/logo.png") == "/images/logo.png"
+
+
+def test_absolutize_media_passes_absolute_paths():
+    from app.wechat.publish import _absolutize_media
+    assert _absolutize_media("/media/abc/pic.png") == "/media/abc/pic.png"
+    assert _absolutize_media("/images/logo.png") == "/images/logo.png"
+    assert _absolutize_media("https://cdn.example.com/img.png") \
+        == "https://cdn.example.com/img.png"
+
+
+def test_absolutize_body_md_converts_all_images():
+    from app.wechat.publish import _absolutize_body_md
+    md = ("# Title\n\n"
+          "![](../../media/abc/pic.png)\n\n"
+          "Some text with ![alt](/images/logo.png) inline\n\n"
+          "![](../../media/xyz/other.jpg \"title\")\n")
+    out = _absolutize_body_md(md)
+    assert "/media/abc/pic.png" in out
+    assert "/images/logo.png" in out
+    assert "/media/xyz/other.jpg" in out
+    assert "../../media/" not in out
+
+
+def test_absolutize_body_md_no_images():
+    from app.wechat.publish import _absolutize_body_md
+    md = "# Just a heading\n\nSome plain text with no images.\n"
+    assert _absolutize_body_md(md) == md
+
+
+def test_absolutize_body_md_http_images_unchanged():
+    from app.wechat.publish import _absolutize_body_md
+    md = "![alt](https://cdn.example.com/img.png)"
+    assert _absolutize_body_md(md) == md

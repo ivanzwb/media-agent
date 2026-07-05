@@ -24,6 +24,33 @@ _MATERIAL_IMG_MAX = 10_000_000  # add_material image limit (10MB)
 _MATERIAL_VIDEO_MAX = 10_000_000  # add_material video limit (10MB, MP4)
 
 
+def _absolutize_media(url: str) -> str:
+    """Reverse of rewriter/localize _relativize_media.
+
+    Drafts store image/asset URLs as relative filesystem paths so
+    they work in external markdown editors.  Before sending to the
+    WeChat API we must convert them back to absolute server paths
+    so ``_resolve_to_file`` can find the local files.
+
+    ``../../media/abc/pic.png`` → ``/media/abc/pic.png``
+    ``../../images/abc.png``   → ``/images/abc.png``
+    """
+    if url.startswith("../../media/"):
+        return f"/media/{url[len('../../media/'):]}"
+    if url.startswith("../../images/"):
+        return f"/images/{url[len('../../images/'):]}"
+    return url
+
+
+def _absolutize_body_md(md: str) -> str:
+    """Replace all markdown image URLs in *md* with absolute paths."""
+    def _sub(m):
+        alt = m.group("alt")
+        url = _absolutize_media(m.group("url"))
+        return f"![{alt}]({url})"
+    return re.sub(r'!\[(?P<alt>[^\]]*)\]\((?P<url>[^)]+)\)', _sub, md)
+
+
 def _plain_text(md: str) -> str:
     txt = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', md or '')       # images
     txt = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', txt)         # links
@@ -94,6 +121,8 @@ def publish_article(client: WeChatClient, config, meta: dict,
     title = (meta.get("title_cn") or (titles[0] if titles else "")
              or "无标题").strip()[:64]
     body_md = meta.get("body_md", "")
+    # Relative paths (../../media/…) → absolute for _resolve_to_file
+    body_md = _absolutize_body_md(body_md)
     html = markdown_to_html(body_md)
 
     # 1. Upload every body image, remap srcs.
