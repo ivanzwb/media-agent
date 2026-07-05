@@ -98,14 +98,46 @@ window.addEventListener('message', function (e) {
 
 function saveArchiveScroll() {
   sessionStorage.setItem('archive_scroll_top', window.scrollY);
+  // Save which date groups are expanded so the page height matches on restore
+  var openGroups = [];
+  document.querySelectorAll('.date-group').forEach(function (d, i) {
+    if (d.open) openGroups.push(i);
+  });
+  sessionStorage.setItem('archive_open_groups', JSON.stringify(openGroups));
 }
-window.addEventListener('pageshow', function(e) {
-  const saved = sessionStorage.getItem('archive_scroll_top');
-  if (saved) {
-    window.scrollTo(0, parseInt(saved, 10));
-    sessionStorage.removeItem('archive_scroll_top');
+// Restore scroll position after navigating back.
+(function restoreArchiveScroll() {
+  var saved = sessionStorage.getItem('archive_scroll_top');
+  if (!saved) return;
+  var target = parseInt(saved, 10);
+  if (!target) { sessionStorage.removeItem('archive_scroll_top'); return; }
+
+  // Restore which date groups were expanded first, so the page height
+  // matches the saved scroll position.
+  var openGroups = JSON.parse(sessionStorage.getItem('archive_open_groups') || '[]');
+  document.querySelectorAll('.date-group').forEach(function (d, i) {
+    d.open = openGroups.indexOf(i) !== -1;
+  });
+
+  var attempts = 0;
+  function tryScroll() {
+    if (document.body.scrollHeight >= target || attempts >= 8) {
+      window.scrollTo(0, target);
+      sessionStorage.removeItem('archive_scroll_top');
+      sessionStorage.removeItem('archive_open_groups');
+      return;
+    }
+    attempts++;
+    requestAnimationFrame(tryScroll);
   }
-});
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () {
+      requestAnimationFrame(tryScroll);
+    });
+  } else {
+    requestAnimationFrame(tryScroll);
+  }
+})();
 
 function expandAll() {
   document.querySelectorAll('.date-group').forEach(function (d) { d.open = true; });
@@ -178,6 +210,7 @@ async function pollRewrite() {
         glow.className = 'run-glow done';
         document.getElementById('rewrite-title').textContent = '转写完成，跳转中…';
         setTimeout(function () {
+          saveArchiveScroll();
           cancelRewritePoll();
           window.location = '/drafts/' + s.draft_id + '/edit?from=archive';
         }, 800);

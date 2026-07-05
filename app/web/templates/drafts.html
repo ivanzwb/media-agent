@@ -30,12 +30,29 @@
 function saveDraftScroll() {
   sessionStorage.setItem('drafts_scroll_top', window.scrollY);
 }
-window.addEventListener('pageshow', function(e) {
-  const saved = sessionStorage.getItem('drafts_scroll_top');
-  if (saved) {
-    window.scrollTo(0, parseInt(saved, 10));
-    sessionStorage.removeItem('drafts_scroll_top');
+// Restore scroll position after navigating back.
+(function restoreDraftScroll() {
+  var saved = sessionStorage.getItem('drafts_scroll_top');
+  if (!saved) return;
+  var target = parseInt(saved, 10);
+  if (!target) { sessionStorage.removeItem('drafts_scroll_top'); return; }
+  var attempts = 0;
+  function tryScroll() {
+    if (document.body.scrollHeight >= target || attempts >= 5) {
+      window.scrollTo(0, target);
+      sessionStorage.removeItem('drafts_scroll_top');
+      return;
+    }
+    attempts++;
+    requestAnimationFrame(tryScroll);
   }
-});
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () {
+      requestAnimationFrame(tryScroll);
+    });
+  } else {
+    requestAnimationFrame(tryScroll);
+  }
+})();
 </script>
 {% endblock %}
