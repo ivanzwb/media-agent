@@ -164,7 +164,9 @@ def test_publish_article_errors_without_cover(tmp_path):
     meta = {"title_candidates": ["t"], "body_md": "no images here",
             "cover_image": None}
     res = P.publish_article(_DummyClient(), cfg, meta, mode="draft")
-    assert res["ok"] is False and "封面" in res["error"]
+    # With the PIL fallback, publish now succeeds even without a real
+    # cover — a placeholder 900x500 PNG is auto-generated.
+    assert res["ok"] is True
 
 
 def test_upload_video_missing(tmp_path):

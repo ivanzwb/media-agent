@@ -383,3 +383,39 @@ def test_extract_json_unescaped_backslashes_in_body():
     assert result is not None
     assert "D:" in result["body_md"]
     assert "img.png" in result["body_md"]
+
+
+def test_extract_json_bare_quotes_inside_body():
+    """Body contains bare ASCII double-quotes — _repair escapes them."""
+    text = (
+        '```json\n'
+        '{\n'
+        '  "title_candidates": ["标题"],\n'
+        '  "body_md": "He said \\"hello\\" and left."\n'
+        '}\n'
+        '```'
+    )
+    result = _extract_json(text)
+    assert result is not None
+    assert 'hello' in result["body_md"]
+
+
+def test_repair_escapes_bare_quotes():
+    """Bare double-quotes inside a JSON string value are escaped."""
+    raw = '{"body_md": "text with "inner quotes" in it"}'
+    repaired = _repair_json_control_chars(raw)
+    # The inner quotes should be escaped
+    assert repaired.count('\\"') >= 2
+    # Should now parse as valid JSON
+    import json
+    parsed = json.loads(repaired)
+    assert 'inner quotes' in parsed["body_md"]
+
+
+def test_repair_preserves_structural_quotes():
+    """Quotes followed by JSON structural chars stay unescaped."""
+    raw = '{"title_candidates": ["标题1", "标题2"], "body_md": "text"}'
+    repaired = _repair_json_control_chars(raw)
+    assert repaired == raw  # No change needed
+    import json
+    json.loads(repaired)  # Should parse fine

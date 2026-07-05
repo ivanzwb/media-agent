@@ -123,6 +123,62 @@ def publish_article(client: WeChatClient, config, meta: dict,
                 if is_temp:
                     temps.append(p)
                 break
+
+    # 3. Last resort: generate a minimal placeholder cover (900x500,
+    #    solid dark background with the title text) so the WeChat push
+    #    doesn't fail when no real cover / body image is available.
+    if cover_path is None:
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+            img = Image.new("RGB", (900, 500), "#1a1a2e")
+            draw = ImageDraw.Draw(img)
+            # Try to render the title text centre-aligned
+            txt = title or "Media Agent"
+            # Find a system font that supports Chinese
+            font = None
+            for fname in ("C:/Windows/Fonts/msyh.ttc",
+                          "C:/Windows/Fonts/simhei.ttf",
+                          "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                          "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"):
+                try:
+                    font = ImageFont.truetype(fname, 36)
+                    break
+                except (OSError, IOError):
+                    continue
+            if font:
+                # Word wrap
+                lines: list[str] = []
+                words = list(txt)
+                cur = ""
+                for ch in words:
+                    test = cur + ch
+                    bbox = draw.textbbox((0, 0), test, font=font)
+                    if bbox[2] > 840:
+                        lines.append(cur)
+                        cur = ch
+                    else:
+                        cur = test
+                if cur:
+                    lines.append(cur)
+                y = 200
+                for line in lines[:3]:  # max 3 lines
+                    bbox = draw.textbbox((0, 0), line, font=font)
+                    w = bbox[2] - bbox[0]
+                    draw.text(((900 - w) / 2, y), line, fill="#e0e0e0", font=font)
+                    y += 48
+            else:
+                # No CJK font — just draw a centred text without font
+                draw.text((450, 230), txt[:40], fill="#e0e0e0", anchor="mm")
+            import tempfile as tmp_module
+            fd, tmp = tmp_module.mkstemp(suffix=".png")
+            img.save(tmp, "PNG")
+            import os
+            os.close(fd)
+            cover_path = Path(tmp)
+            temps.append(cover_path)
+        except Exception:
+            pass  # if even PIL isn't available, give up
+
     if cover_path is not None and cover_path.stat().st_size <= _MATERIAL_IMG_MAX:
         try:
             thumb_media_id = client.add_material("image", cover_path).get(

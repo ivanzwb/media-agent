@@ -15,6 +15,7 @@ pillow==12.2.0
 APScheduler==3.10.4
 ddgs>=9.0.0              # DuckDuckGo search (image search for scrape-bg)
 curl_cffi>=0.7.0          # TLS fingerprint impersonation (bypasses Cloudflare)
+json5>=0.9.0              # Lenient JSON parser (handles LLM output violations)
 edge-tts>=6.1.0
 yt-dlp>=2024.1.1
 pytest==8.3.3

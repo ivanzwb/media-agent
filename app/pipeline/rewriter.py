@@ -205,6 +205,39 @@ _CODE_FENCE = re.compile(r'^```(?:\w+)?\s*\n(.*?)\n```\s*$', re.DOTALL)
 _CODE_FENCE_INLINE = re.compile(r'```(?:json)?\s*\n(.*?)\n```', re.DOTALL)
 
 
+def _try_parse_json(text: str) -> dict | None:
+    """Parse *text* as JSON with increasingly lenient parsers.
+
+    1. ``json.loads`` — strict spec-compliant parsing.
+    2. ``json5.loads`` — handles trailing commas, unescaped control
+       characters, single-quoted strings, comments.
+    3. ``_repair_json_control_chars`` + ``json.loads`` — escapes bare
+       newlines/tabs inside strings for LLM output that violates the spec.
+    """
+    # 1) Strict JSON
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 2) Lenient JSON5 (handles trailing commas, unescaped newlines, etc.)
+    try:
+        import json5  # type: ignore[import-untyped]
+        return json5.loads(text)
+    except Exception:
+        pass
+
+    # 3) Repair literal control chars, then strict JSON
+    repaired = _repair_json_control_chars(text)
+    if repaired != text:
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
 def _strip_code_fences(text: str) -> str | None:
     """If the entire text is wrapped in a markdown code fence, return the
     inner content stripped.  Otherwise return None."""
@@ -226,87 +259,90 @@ def _extract_code_fenced_json(text: str) -> str | None:
 
 
 def _repair_json_control_chars(text: str) -> str:
-    """Escape unescaped control characters (newlines, tabs) inside JSON
-    string values so ``json.loads`` can parse LLM output that violates
-    the JSON spec."""
+    """Escape unescaped control characters and bare double-quotes inside
+    JSON string values so ``json.loads`` can parse LLM output that
+    violates the JSON spec."""
     result: list[str] = []
     in_string = False
     escape_next = False
-    for ch in text:
+    i = 0
+    while i < len(text):
+        ch = text[i]
         if escape_next:
             result.append(ch)
             escape_next = False
+            i += 1
             continue
         if ch == '\\' and in_string:
             result.append(ch)
             escape_next = True
+            i += 1
             continue
         if ch == '"':
-            in_string = not in_string
-            result.append(ch)
+            if not in_string:
+                # Opening a JSON string
+                in_string = True
+                result.append(ch)
+            else:
+                # Closing or content? Check next non-whitespace char.
+                # If followed by , } ] or :, it's a structural closing quote.
+                # Otherwise it's unescaped content — escape it.
+                j = i + 1
+                while j < len(text) and text[j] in ' \t\r\n':
+                    j += 1
+                next_ch = text[j] if j < len(text) else ''
+                if next_ch in ',}]:':
+                    in_string = False
+                    result.append(ch)
+                else:
+                    # Bare quote inside string — escape it
+                    result.append('\\')
+                    result.append(ch)
+            i += 1
             continue
         if in_string and ch == '\n':
             result.append('\\n')
+            i += 1
             continue
         if in_string and ch == '\t':
             result.append('\\t')
+            i += 1
             continue
         if in_string and ch == '\r':
             result.append('\\r')
+            i += 1
             continue
         result.append(ch)
+        i += 1
     return ''.join(result)
 
 
 def _extract_json(text: str) -> dict | None:
     # 1) Direct parse
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
+    result = _try_parse_json(text)
+    if result:
+        return result
 
     # 2) Entire text is a single code fence
     inner = _strip_code_fences(text)
     if inner:
-        try:
-            return json.loads(inner)
-        except json.JSONDecodeError:
-            pass
-        repaired = _repair_json_control_chars(inner)
-        if repaired != inner:
-            try:
-                return json.loads(repaired)
-            except json.JSONDecodeError:
-                pass
+        result = _try_parse_json(inner)
+        if result:
+            return result
 
     # 3) Find first json code-fence block inside the text
     inner = _extract_code_fenced_json(text)
     if inner:
-        try:
-            return json.loads(inner)
-        except json.JSONDecodeError:
-            pass
-        repaired = _repair_json_control_chars(inner)
-        if repaired != inner:
-            try:
-                return json.loads(repaired)
-            except json.JSONDecodeError:
-                pass
+        result = _try_parse_json(inner)
+        if result:
+            return result
 
     # 4) Fallback: find the outermost { … } object
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if m:
-        obj = m.group(0)
-        try:
-            return json.loads(obj)
-        except json.JSONDecodeError:
-            pass
-        repaired = _repair_json_control_chars(obj)
-        if repaired != obj:
-            try:
-                return json.loads(repaired)
-            except json.JSONDecodeError:
-                pass
+        result = _try_parse_json(m.group(0))
+        if result:
+            return result
 
     return None
 
