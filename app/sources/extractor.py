@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
 
 import trafilatura
@@ -519,10 +519,19 @@ def extract_from_html(html: str, url: str) -> dict:
     content_md = _fix_markdown_tables(content_md)
 
     images = [urljoin(url, u) for u in images]
+
+    # ── Sanity checks ──────────────────────────────────────────────────
+    dt = _date_from_html(html)
+    now = datetime.now(timezone.utc)
+    # Reject dates more than 1 day in the future (common when scraping
+    # listing/event pages that have upcoming dates listed).
+    if dt is not None and dt > now + timedelta(days=1):
+        dt = None
+
     return {
         "title": _title_from_html(html),
         "content_md": content_md,
         "images": images,
         "videos": videos,
-        "published_at": _date_from_html(html),
+        "published_at": dt,
     }

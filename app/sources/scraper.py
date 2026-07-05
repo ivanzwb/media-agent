@@ -159,6 +159,11 @@ def _is_non_article(absolute: str) -> bool:
     if last in _NON_ARTICLE_TERMINAL and shallow:
         return True
 
+    # ── Tier 4b: index pages (index.html, index.php, index.aspx) ────
+    # /materials-science/news-events/events/index.php → blocked
+    if last.startswith("index."):
+        return True
+
     return False
 
 
@@ -352,6 +357,7 @@ def _is_article_content(data: dict) -> bool:
     Checks:
       - Minimum content length (300 chars)
       - At least 3 non‑link text lines (i.e. not just a link index)
+      - Title doesn't look like a navigation label or error page
     """
     md = (data.get("content_md") or "").strip()
     if len(md) < 300:  # noqa: PLR2004
@@ -362,7 +368,29 @@ def _is_article_content(data: dict) -> bool:
         if l.strip() and not l.strip().startswith("http")
         and not l.startswith("![")
     ]
-    return len(text_lines) >= 3
+    if len(text_lines) < 3:
+        return False
+
+    # ── Title quality: reject navigation/error/thin labels ──
+    title = (data.get("title") or "").strip().lower()
+    if not title or len(title) < 5:
+        return False
+    # Single-word or short generic titles (category/nav labels)
+    _nav_labels = {
+        "news", "events", "blog", "about", "contact", "home",
+        "international", "careers", "press", "media", "resources",
+        "products", "solutions", "services", "support", "faq",
+        "privacy", "terms", "404", "page not found", "not found",
+        "newsletter", "subscribe", "search", "archive", "category",
+        "cloud infrastructure", "department news", "department events",
+    }
+    if title in _nav_labels:
+        return False
+    # Title containing only navigation-ish words
+    if re.match(r'^(news|events?|blog|press|media|about|contact)\s+\d{4}$', title):
+        return False
+
+    return True
 
 
 def scrape_single(url: str, source_name: str, timeout: float = 20.0,
