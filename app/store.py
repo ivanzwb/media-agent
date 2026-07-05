@@ -3,11 +3,84 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
+import re
 
 import frontmatter
+import httpx
 
 from app.config import Config
 from app.models import Article, Draft, ArticleStatus, slugify as _slug
+
+_MD_IMG_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
+_HTML_IMG_RE = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.I)
+
+
+def _cover_is_tiny(cover_name: str, images_dir: Path) -> bool:
+    """Return True if the cover file exists but is too small (< 10KB)
+    — likely a mock-generated placeholder that WeChat rejects."""
+    p = (images_dir / cover_name).resolve()
+    return p.exists() and p.stat().st_size < 10_000
+
+
+def _first_body_image(body_md: str, images_dir: Path) -> str | None:
+    """Extract the first image URL from markdown/HTML body and copy it to
+    images_dir as a cover file.  Returns the filename (e.g. cover-xxx.jpg)
+    or None."""
+    # Find first image in body
+    urls = _MD_IMG_RE.findall(body_md) + _HTML_IMG_RE.findall(body_md)
+    src = urls[0] if urls else None
+    if not src:
+        return None
+
+    # Resolve to a local file
+    src_path: Path | None = None
+    is_temp = False
+    if src.startswith("/media/"):
+        # /media/<hash>/img-N.jpg → data_dir/media/<hash>/img-N.jpg
+        src_path = Path("data") / "media" / src[len("/media/"):].lstrip("/")
+        if not src_path.exists():
+            src_path = None
+    elif src.startswith("/images/"):
+        src_path = images_dir / src[len("/images/"):]
+        if not src_path.exists():
+            src_path = None
+    elif src.startswith(("/videos/", "data:")):
+        return None
+    elif src.startswith(("http://", "https://")):
+        # Download remote image
+        try:
+            resp = httpx.get(src, timeout=20, follow_redirects=True)
+            resp.raise_for_status()
+            ext = Path(urlparse(src).path).suffix or ".jpg"
+            import tempfile, os
+            fd, tmp = tempfile.mkstemp(suffix=ext)
+            Path(tmp).write_bytes(resp.content)
+            os.close(fd)
+            src_path = Path(tmp)
+            is_temp = True
+        except Exception:
+            return None
+    else:
+        return None
+
+    if src_path is None or not src_path.exists():
+        return None
+
+    # Generate a unique cover name
+    ext = src_path.suffix or ".jpg"
+    import uuid
+    name = f"cover-auto-{uuid.uuid4().hex[:8]}{ext}"
+    dest = images_dir / name
+    images_dir.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copy2(str(src_path), str(dest))
+    if is_temp:
+        try:
+            src_path.unlink()
+        except OSError:
+            pass
+    return name
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -107,6 +180,17 @@ class Store:
             meta["title_cn"] = draft.title_cn
         if draft.score is not None:
             meta["score"] = draft.score
+
+        # -- auto-cover: if no cover (or tiny mock placeholder < 10KB),
+        #    use the first body image --
+        if not draft.cover_image or _cover_is_tiny(
+            draft.cover_image, self.config.images_dir):
+            auto_cover = _first_body_image(
+                draft.body_md, self.config.images_dir)
+            if auto_cover:
+                draft.cover_image = auto_cover
+            meta["cover_image"] = draft.cover_image
+
         post = frontmatter.Post(draft.body_md, **meta)
         abs_path.write_text(frontmatter.dumps(post), encoding="utf-8")
         draft.draft_path = str(rel).replace("\\", "/")

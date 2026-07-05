@@ -113,7 +113,9 @@ def publish_article(client: WeChatClient, config, meta: dict,
     cover_path = None
     if cover_name:
         cand = (config.images_dir / cover_name).resolve()
-        if cand.exists():
+        # Tiny images (< 10 KB) are likely mock-generated placeholders
+        # that WeChat's content filter rejects; treat as missing.
+        if cand.exists() and cand.stat().st_size >= 10_000:
             cover_path = cand
     if cover_path is None:
         for src in image_srcs(markdown_to_html(body_md)):
@@ -124,51 +126,76 @@ def publish_article(client: WeChatClient, config, meta: dict,
                     temps.append(p)
                 break
 
-    # 3. Last resort: generate a minimal placeholder cover (900x500,
-    #    solid dark background with the title text) so the WeChat push
-    #    doesn't fail when no real cover / body image is available.
+    # 3. Last resort: generate a visual-rich placeholder cover (900x500,
+    #    gradient background + title + decorative shapes) so the WeChat
+    #    push doesn't fail when no real cover / body image is available.
+    #    A plain solid-color image gets rejected by WeChat's content filter.
     if cover_path is None:
         try:
             from PIL import Image, ImageDraw, ImageFont
-            img = Image.new("RGB", (900, 500), "#1a1a2e")
+            w, h = 900, 500
+            # Gradient background (deep blue → darker teal)
+            img = Image.new("RGB", (w, h))
+            for y in range(h):
+                r = int(10 + (y / h) * 20)
+                g = int(20 + (y / h) * 60)
+                b = int(50 + (y / h) * 40)
+                for x in range(w):
+                    img.putpixel((x, y), (r, g, b))
             draw = ImageDraw.Draw(img)
-            # Try to render the title text centre-aligned
+            # Decorative accent bar at top
+            for x in range(w):
+                for dy in range(4):
+                    img.putpixel((x, dy), (0, 180, 160))
+            # Subtle glow circles
+            for cx, cy, rad, alpha in [(700, 120, 80, 30), (150, 380, 60, 20)]:
+                for dx in range(-rad, rad + 1):
+                    for dy in range(-rad, rad + 1):
+                        if dx * dx + dy * dy <= rad * rad:
+                            px, py = cx + dx, cy + dy
+                            if 0 <= px < w and 0 <= py < h:
+                                orig = img.getpixel((px, py))
+                                blend = tuple(
+                                    min(255, c + alpha) for c in orig)
+                                img.putpixel((px, py), blend)
+            # Title text
             txt = title or "Media Agent"
-            # Find a system font that supports Chinese
             font = None
             for fname in ("C:/Windows/Fonts/msyh.ttc",
                           "C:/Windows/Fonts/simhei.ttf",
                           "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
                           "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"):
                 try:
-                    font = ImageFont.truetype(fname, 36)
+                    font = ImageFont.truetype(fname, 38)
                     break
                 except (OSError, IOError):
                     continue
             if font:
-                # Word wrap
                 lines: list[str] = []
-                words = list(txt)
                 cur = ""
-                for ch in words:
+                for ch in txt:
                     test = cur + ch
                     bbox = draw.textbbox((0, 0), test, font=font)
-                    if bbox[2] > 840:
+                    if bbox[2] > w - 60:
                         lines.append(cur)
                         cur = ch
                     else:
                         cur = test
                 if cur:
                     lines.append(cur)
-                y = 200
-                for line in lines[:3]:  # max 3 lines
+                y_pos = 180
+                for line in lines[:3]:
                     bbox = draw.textbbox((0, 0), line, font=font)
-                    w = bbox[2] - bbox[0]
-                    draw.text(((900 - w) / 2, y), line, fill="#e0e0e0", font=font)
-                    y += 48
+                    tw = bbox[2] - bbox[0]
+                    # Shadow
+                    draw.text(((w - tw) / 2 + 2, y_pos + 2), line,
+                              fill=(0, 0, 0, 120), font=font)
+                    draw.text(((w - tw) / 2, y_pos), line,
+                              fill=(240, 240, 240), font=font)
+                    y_pos += 52
             else:
-                # No CJK font — just draw a centred text without font
-                draw.text((450, 230), txt[:40], fill="#e0e0e0", anchor="mm")
+                draw.text((w / 2, 230), txt[:40], fill=(240, 240, 240),
+                          anchor="mm")
             import tempfile as tmp_module
             fd, tmp = tmp_module.mkstemp(suffix=".png")
             img.save(tmp, "PNG")
@@ -177,7 +204,7 @@ def publish_article(client: WeChatClient, config, meta: dict,
             cover_path = Path(tmp)
             temps.append(cover_path)
         except Exception:
-            pass  # if even PIL isn't available, give up
+            pass  # if PIL isn't available, give up
 
     if cover_path is not None and cover_path.stat().st_size <= _MATERIAL_IMG_MAX:
         try:

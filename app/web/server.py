@@ -23,6 +23,7 @@ from app.images.base import get_image_provider
 from app.llm.base import get_provider, get_rewrite_provider, Message
 from app.llm.providers import cli as cli_provider
 from app.models import Article, Draft
+from app.models import slugify as _slugify
 from app.pipeline.adapter import adapt, PLATFORMS
 from app.platforms.registry import get as get_platform, list_all as list_platforms
 from app.pipeline.images import attach_cover
@@ -1569,6 +1570,75 @@ def create_app(config: Config | None = None,
             "publish_url": p.publish_url if p else None,
             "platform_label": p.label if p else platform,
         })
+
+    @app.post("/drafts/{draft_id}/cover-generate")
+    def draft_cover_generate(draft_id: int):
+        """AI-generate a cover image for the draft."""
+        store = get_store()
+        meta = store.read_draft_body(draft_id)
+        if not meta:
+            return JSONResponse({"ok": False, "error": "草稿不存在"}, status_code=404)
+        run_config = Config.load(store=store)
+        provider = get_image_provider(
+            run_config.image_provider,
+            run_config.image_api_key or run_config.llm_api_key,
+            model=run_config.image_model,
+            base_url=run_config.image_api_base or run_config.llm_api_base)
+        title = (meta.get("title_cn")
+                 or (meta.get("title_candidates") or [""])[0]
+                 or "cover")
+        name = f"cover-{_slugify(title)[:40] or 'cover'}.png"
+        out = run_config.images_dir / name
+        try:
+            provider.generate(
+                prompt=f"科技自媒体封面图：{title}", out_path=out)
+            store.set_draft_cover(draft_id, name)
+            return {"ok": True, "cover_image": name}
+        except Exception as exc:
+            return {"ok": False, "error": f"封面生成失败：{exc}"}
+
+    @app.post("/drafts/{draft_id}/cover-scrape")
+    def draft_cover_scrape(draft_id: int):
+        """Search web for a cover image using the article title."""
+        store = get_store()
+        meta = store.read_draft_body(draft_id)
+        if not meta:
+            return JSONResponse({"ok": False, "error": "草稿不存在"}, status_code=404)
+        title = (meta.get("title_cn")
+                 or (meta.get("title_candidates") or [""])[0]
+                 or "")
+        if not title:
+            return {"ok": False, "error": "没有可用的标题用于搜索"}
+        run_config = Config.load(store=store)
+        try:
+            from ddgs import DDGS
+            results = list(DDGS().images(title, max_results=5))
+        except ImportError:
+            return {"ok": False, "error": "ddgs 未安装"}
+        except Exception as exc:
+            return {"ok": False, "error": f"搜索失败：{exc}"}
+
+        import uuid
+        import httpx
+        for img in results:
+            img_url = img.get("image") or img.get("thumbnail")
+            if not img_url:
+                continue
+            try:
+                resp = httpx.get(img_url, timeout=15, follow_redirects=True,
+                                 headers={"User-Agent": "Mozilla/5.0"})
+                resp.raise_for_status()
+                ext = Path(img_url).suffix.split("?")[0].lower() or ".jpg"
+                if ext not in (".jpg", ".jpeg", ".png"):
+                    ext = ".jpg"
+                name = f"cover-web-{uuid.uuid4().hex[:8]}{ext}"
+                dest = run_config.images_dir / name
+                dest.write_bytes(resp.content)
+                store.set_draft_cover(draft_id, name)
+                return {"ok": True, "cover_image": name}
+            except Exception:
+                continue
+        return {"ok": False, "error": "未搜到可下载的封面图片"}
 
     @app.post("/drafts/{draft_id}/publish/wechat")
     def draft_publish_wechat(draft_id: int, mode: str = Form("draft"),

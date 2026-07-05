@@ -31,12 +31,21 @@
 
 <div class="edit-grid">
   <div class="edit-sidebar">
-    {% if meta.cover_image %}
     <div class="sidebar-section">
       <p class="muted">封面：</p>
-      <img class="cover" src="/images/{{ meta.cover_image }}" alt="cover"/>
+      {% if meta.cover_image %}
+      <img class="cover" src="/images/{{ meta.cover_image }}" alt="cover" id="cover-img"/>
+      {% else %}
+      <div class="cover" style="width:100%;aspect-ratio:16/9;background:var(--surface2);display:flex;align-items:center;justify-content:center;border-radius:6px;border:1px dashed var(--border)" id="cover-placeholder">
+        <span class="muted">暂无封面</span>
+      </div>
+      {% endif %}
+      <p style="display:flex;gap:6px;margin-top:8px">
+        <button type="button" class="btn small" onclick="scrapeCover({{ draft.id }})" id="cover-scrape-btn">网上抓取</button>
+        <button type="button" class="btn small" onclick="generateCover({{ draft.id }})" id="cover-gen-btn">AI 生成</button>
+      </p>
+      <p id="cover-status" class="muted" style="font-size:0.9em"></p>
     </div>
-    {% endif %}
     <div class="sidebar-section">
       <p class="muted">来源</p>
       <p><a href="{{ meta.source_url }}" target="_blank" rel="noopener">{{ meta.source_name }}</a></p>
@@ -1230,6 +1239,63 @@
       });
     }
   });
+
+  // ---- cover image operations ----
+  async function scrapeCover(draftId) {
+    const btn = document.getElementById('cover-scrape-btn');
+    const status = document.getElementById('cover-status');
+    btn.disabled = true;
+    btn.textContent = '搜索中…';
+    status.textContent = '';
+    try {
+      const r = await fetch('/drafts/' + draftId + '/cover-scrape', {method: 'POST'});
+      const data = await r.json();
+      if (data.ok) {
+        updateCoverPreview(data.cover_image);
+        status.textContent = '封面已更新';
+      } else {
+        status.textContent = data.error || '抓取失败';
+      }
+    } catch (e) {
+      status.textContent = '请求失败';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '网上抓取';
+    }
+  }
+
+  async function generateCover(draftId) {
+    const btn = document.getElementById('cover-gen-btn');
+    const status = document.getElementById('cover-status');
+    btn.disabled = true;
+    btn.textContent = '生成中…';
+    status.textContent = '';
+    try {
+      const r = await fetch('/drafts/' + draftId + '/cover-generate', {method: 'POST'});
+      const data = await r.json();
+      if (data.ok) {
+        updateCoverPreview(data.cover_image);
+        status.textContent = '封面已生成';
+      } else {
+        status.textContent = data.error || '生成失败';
+      }
+    } catch (e) {
+      status.textContent = '请求失败';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'AI 生成';
+    }
+  }
+
+  function updateCoverPreview(name) {
+    const img = document.getElementById('cover-img');
+    const ph = document.getElementById('cover-placeholder');
+    if (img) {
+      img.src = '/images/' + name + '?t=' + Date.now();
+    } else if (ph) {
+      ph.outerHTML = '<img class="cover" src="/images/' + name + '?t=' + Date.now() + '" alt="cover" id="cover-img"/>';
+    }
+  }
 </script>
 
 <script>
