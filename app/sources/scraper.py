@@ -375,18 +375,23 @@ def _is_article_content(data: dict) -> bool:
     title = (data.get("title") or "").strip().lower()
     if not title or len(title) < 5:
         return False
-    # Single-word or short generic titles (category/nav labels)
+    # Always-garbage titles (errors, 404 pages)
+    if title in {"404", "page not found", "not found"}:
+        return False
+    # Navigation labels — only reject when the body is also thin (< 1000
+    # chars).  A real article could genuinely be titled "Cloud
+    # Infrastructure" or "Privacy"; a listing page never has a long body.
     _nav_labels = {
         "news", "events", "blog", "about", "contact", "home",
         "international", "careers", "press", "media", "resources",
         "products", "solutions", "services", "support", "faq",
-        "privacy", "terms", "404", "page not found", "not found",
-        "newsletter", "subscribe", "search", "archive", "category",
-        "cloud infrastructure", "department news", "department events",
+        "privacy", "terms", "newsletter", "subscribe", "search",
+        "archive", "category", "cloud infrastructure",
+        "department news", "department events",
     }
-    if title in _nav_labels:
+    if title in _nav_labels and len(md) < 1000:  # noqa: PLR2004
         return False
-    # Title containing only navigation-ish words
+    # Title containing only navigation-ish words (year-based listing pages)
     if re.match(r'^(news|events?|blog|press|media|about|contact)\s+\d{4}$', title):
         return False
 
