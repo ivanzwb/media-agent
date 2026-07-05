@@ -109,6 +109,7 @@ def publish_article(client: WeChatClient, config, meta: dict,
     # 2. Cover (thumb) — required by draft/add. Prefer draft.cover_image,
     #    else fall back to the first resolvable body image.
     thumb_media_id = None
+    cover_error = ""
     cover_name = meta.get("cover_image")
     cover_path = None
     if cover_name:
@@ -208,10 +209,17 @@ def publish_article(client: WeChatClient, config, meta: dict,
 
     if cover_path is not None and cover_path.stat().st_size <= _MATERIAL_IMG_MAX:
         try:
-            thumb_media_id = client.add_material("image", cover_path).get(
-                "media_id")
+            result = client.add_material("image", cover_path)
+            thumb_media_id = result.get("media_id")
+            if not thumb_media_id:
+                logger.warning("add_material returned no media_id: %s", result)
         except WeChatError as exc:
             logger.warning("cover upload failed: %s", exc)
+            # Surface the WeChat error to the user
+            cover_error = f"微信接口错误 {exc.errcode}: {exc.errmsg}"
+    else:
+        if cover_path is not None and cover_path.stat().st_size > _MATERIAL_IMG_MAX:
+            cover_error = f"封面图片过大 ({cover_path.stat().st_size} bytes > 10MB 限制)"
 
     # cleanup temp downloads
     for t in temps:
@@ -221,9 +229,10 @@ def publish_article(client: WeChatClient, config, meta: dict,
             pass
 
     if not thumb_media_id:
-        return {"ok": False,
-                "error": "缺少封面图：请先为草稿设置封面，或确保正文包含可用图片"
-                         "（微信图文必须有封面 thumb）。"}
+        msg = "缺少封面图：请先为草稿设置封面，或确保正文包含可用图片"
+        if cover_error:
+            msg += f"（{cover_error}）"
+        return {"ok": False, "error": msg}
 
     article = {
         "title": title,
