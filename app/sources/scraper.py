@@ -371,6 +371,15 @@ def _is_article_content(data: dict) -> bool:
     if len(text_lines) < 3:
         return False
 
+    # ── Link-density check: listing/year-index pages are mostly links ──
+    # Real articles have prose; listing pages have many [text](url) links.
+    # If >40% of non-whitespace characters are inside link markups, reject.
+    link_chars = sum(len(m.group(0)) for m in
+                     re.finditer(r'\[([^\]]+)\]\([^)]+\)', md))
+    total_chars = len(re.sub(r'\s', '', md))
+    if total_chars > 0 and link_chars / total_chars > 0.4:
+        return False
+
     # ── Always reject error/404 pages ──
     title = (data.get("title") or "").strip().lower()
     if title in {"404", "page not found", "not found"}:
