@@ -443,6 +443,72 @@ def _filter_article_images(images: list[str]) -> list[str]:
     return out
 
 
+# ── Cookie consent / privacy boilerplate patterns ────────────────────
+# These match cookie CONSENT NOTICES (overlay/popup templates), NOT
+# legitimate articles that happen to discuss cookies.
+# Key distinction: consent notices use formulaic legal/corporate phrasing
+# ("We use cookies to analyze...", "Cookie Settings", "browsing experience")
+# while articles about cookies have varied educational/editorial language.
+_COOKIE_CONSENT_PATTERNS = (
+    # "We use cookies" / "This website uses cookies" / "Our site uses cookies"
+    re.compile(r'(we|this\s+site|this\s+website|our\s+site)\s+uses?\s+cookies?\s', re.I),
+    # "Cookie Settings" / "Cookie Preferences" / "Cookie Policy" / "Cookie Notice"
+    re.compile(r'cookie\s+(settings|preferences|notice|policy|consent)', re.I),
+    # "Accept/Reject/Allow/Decline all cookies"
+    re.compile(r'(accept|reject|allow|decline)\s+(all\s+)?cookies?\b', re.I),
+    # "Manage your cookie/consent/preferences"
+    re.compile(r'manage your (cookie|cookies|consent|preferences)', re.I),
+    # "Customize your cookie settings"
+    re.compile(r'customize your cookie', re.I),
+    # "browsing experience"  (very specific to consent overlays)
+    re.compile(r'browsing experience', re.I),
+    # "analytics partners/providers/services"
+    re.compile(r'analytics (partners?|providers?|services?)', re.I),
+    # "Share information with our analytics/partners"
+    re.compile(r'share\s+(information|data)\s+with\s+our', re.I),
+    # "By continuing to use/browse/visit"
+    re.compile(r'by continuing to (use|browse|visit)', re.I),
+    # "To improve/enhance your browsing/user experience"
+    re.compile(r'(improve|enhance|analyze).*(browsing|user)\s+experience', re.I),
+    # "Learn more about our cookie/privacy policy"
+    re.compile(r'learn more about our (cookie|privacy)', re.I),
+    # Cookie consent vendor markers (OneTrust, Cookiebot, etc.)
+    re.compile(r'(onetrust|optanonwrapper|cookiebot)', re.I),
+)
+
+
+def _is_cookie_consent_line(text: str) -> bool:
+    """True if *text* matches known cookie consent boilerplate (not an article
+    about cookies).  Uses specific consent-template patterns rather than a
+    blunt keyword check so legitimate articles are never stripped."""
+    return any(p.search(text) for p in _COOKIE_CONSENT_PATTERNS)
+
+
+def _strip_cookie_consent(md: str) -> str:
+    """If ALL non-placeholder text lines match cookie-consent boilerplate
+    patterns, strip the consent text and return only image/video placeholders.
+    Mixed content or genuine articles about cookies are left untouched.
+
+    This prevents cookie-overlay-only pages from being archived as articles
+    while preserving legitimate articles that discuss cookies or privacy."""
+    lines = md.split("\n")
+    real = [
+        l.strip() for l in lines
+        if l.strip()
+        and not l.strip().startswith("[[IMG:")
+        and not l.strip().startswith("[[VIDEO:")
+    ]
+    if not real:
+        return md
+    if not all(_is_cookie_consent_line(l) for l in real):
+        return md  # mixed or genuine article — keep as-is
+    # All real text is consent boilerplate — keep only placeholders
+    kept = [l for l in lines
+            if l.strip().startswith("[[IMG:")
+            or l.strip().startswith("[[VIDEO:") or not l.strip()]
+    return "\n".join(kept).strip() if kept else ""
+
+
 def extract_from_html(html: str, url: str) -> dict:
     content_md = ""
     images: list[str] = []
@@ -517,6 +583,12 @@ def extract_from_html(html: str, url: str) -> dict:
         content_md = "\n\n".join(orphans) + "\n\n" + content_md
 
     content_md = _fix_markdown_tables(content_md)
+
+    # ── 5. Strip cookie consent / privacy boilerplate ──────────────────
+    # Cookie overlays that readability/trafilatura extract as "article body"
+    # are not real content.  Stripping them here leaves only placeholders,
+    # which naturally fail the article quality check in scrape_single.
+    content_md = _strip_cookie_consent(content_md)
 
     images = [urljoin(url, u) for u in images]
 

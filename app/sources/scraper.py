@@ -365,8 +365,11 @@ def _is_article_content(data: dict) -> bool:
     lines = md.split("\n")
     text_lines = [
         l for l in lines
-        if l.strip() and not l.strip().startswith("http")
+        if l.strip()
+        and not l.strip().startswith("http")
         and not l.startswith("![")
+        and not l.strip().startswith("[[IMG:")
+        and not l.strip().startswith("[[VIDEO:")
     ]
     if len(text_lines) < 3:
         return False
