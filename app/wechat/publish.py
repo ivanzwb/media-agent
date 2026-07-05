@@ -213,6 +213,7 @@ def publish_article(client: WeChatClient, config, meta: dict,
             thumb_media_id = result.get("media_id")
             if not thumb_media_id:
                 logger.warning("add_material returned no media_id: %s", result)
+                cover_error = "上传成功但未返回 media_id"
         except WeChatError as exc:
             logger.warning("cover upload failed: %s", exc)
             # Surface the WeChat error to the user
