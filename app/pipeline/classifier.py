@@ -27,6 +27,26 @@ def _keyword_match(article: Article, topics: list[Topic]) -> str | None:
     return None
 
 
+def _clean_reply(reply: str) -> str:
+    """Strip common agent wrappers (quotes, markdown, reasoning prefixes)."""
+    cleaned = reply.strip()
+    # Strip surrounding quotes: "AI" 「AI」 'AI' 「AI」
+    cleaned = re.sub(r'^[\u201c\u201d"\'"\u300c]\s*', '', cleaned)
+    cleaned = re.sub(r'\s*[\u201d\u201c"\'"\u300d]$', '', cleaned)
+    # Strip leading reasoning patterns like "根据内容，我认为属于 AI 类"
+    # or "I think this belongs to AI category"
+    for sep in ('：', ':', '属于', 'is '):
+        if sep in cleaned:
+            _, after = cleaned.rsplit(sep, 1)
+            if after.strip():
+                cleaned = after.strip()
+    # Strip trailing punctuation that isn't part of the name
+    cleaned = cleaned.rstrip('.,;!?。，；！？')
+    # Strip bold markers
+    cleaned = cleaned.strip('*')
+    return cleaned.strip()
+
+
 def classify(article: Article, topics: list[Topic],
              provider: LLMProvider) -> str:
     matched = _keyword_match(article, topics)
@@ -41,7 +61,24 @@ def classify(article: Article, topics: list[Topic],
         "Reply with only the topic name."
     )
     reply = provider.chat([Message(role="user", content=prompt)]).strip()
+
+    # 1) Exact match (fast path, backward-compatible)
     for name in names:
         if name.lower() == reply.lower():
             return name
+
+    # 2) Fuzzy match: strip wrapper text and search for topic name
+    cleaned = _clean_reply(reply)
+    for name in names:
+        if name.lower() == cleaned.lower():
+            return name
+
+    # 3) Substring match: topic name appears somewhere in the reply
+    # Sort by name length descending so longer names match first,
+    # avoiding "AI" matching when "AI安全" was meant.
+    reply_lower = reply.lower()
+    for name in sorted(names, key=lambda n: len(n), reverse=True):
+        if name.lower() in reply_lower:
+            return name
+
     return UNCATEGORIZED

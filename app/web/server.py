@@ -21,7 +21,7 @@ from app.db import connect, init_db
 from app.discovery import discover_from_url, discover_from_keyword
 from app.feeds import load_feeds, save_feeds, update_feeds, SourceConfig, Topic, FeedsConfig
 from app.images.base import get_image_provider
-from app.llm.base import get_provider, get_rewrite_provider, Message
+from app.llm.base import get_provider, get_rewrite_provider, Message, LLMProvider
 from app.llm.providers import cli as cli_provider
 from app.models import Article, Draft
 from app.models import slugify as _slugify
@@ -834,7 +834,7 @@ def create_app(config: Config | None = None,
         cfg = load_feeds(feeds_path) if feeds_path.exists() else None
         try:
             data = compute_hotness(store, feeds_cfg=cfg,
-                                   provider=_llm_provider())
+                                   provider=_resolve_provider())
         except Exception:
             # Fallback: store-only with no provider
             data = compute_hotness(store)
@@ -845,13 +845,15 @@ def create_app(config: Config | None = None,
 
     # ---- smart topic recommendation ----
 
-    def _llm_provider():
-        store = get_store()
-        run_config = Config.load(store=store)
-        return get_provider(run_config.llm_provider,
-                            run_config.llm_api_key,
-                            run_config.llm_model,
-                            base_url=run_config.llm_api_base)
+    def _resolve_provider(rc: Config | None = None) -> LLMProvider:
+        """Get LLM provider respecting cli_tool: Agent (opencode/codex/copilot)
+        first, then configured LLM provider, then mock."""
+        if rc is None:
+            rc = Config.load(store=get_store())
+        return get_rewrite_provider(
+            rc.llm_provider, rc.llm_api_key,
+            rc.llm_model, llm_api_base=rc.llm_api_base,
+            cli_tool=rc.cli_tool)
 
     def _build_tts(rc, tts_provider=None, tts_voice=None):
         provider = tts_provider if tts_provider is not None else rc.tts_provider
@@ -876,17 +878,17 @@ def create_app(config: Config | None = None,
     @app.post("/sources/topics/suggest")
     def topics_suggest(themes: str = Form(...)):
         theme_list = [t.strip() for t in re.split(r"[,，\n]", themes) if t.strip()]
-        subtopics = suggest_subtopics(theme_list, _llm_provider())
+        subtopics = suggest_subtopics(theme_list, _resolve_provider())
         return {"themes": theme_list, "subtopics": subtopics}
 
     @app.post("/sources/topics/keywords")
     def topics_keywords(subtopic: str = Form(...)):
-        keywords = suggest_keywords(subtopic.strip(), _llm_provider())
+        keywords = suggest_keywords(subtopic.strip(), _resolve_provider())
         return {"subtopic": subtopic.strip(), "keywords": keywords}
 
     @app.post("/sources/suggest-sources")
     def sources_suggest_frontier(topic: str = Form(...)):
-        candidates = suggest_sources(topic.strip(), _llm_provider())
+        candidates = suggest_sources(topic.strip(), _resolve_provider())
         return {"topic": topic.strip(), "candidates": candidates}
 
     @app.post("/sources/discover-add")
@@ -1199,9 +1201,7 @@ def create_app(config: Config | None = None,
         def worker():
             try:
                 run_config = Config.load(store=get_store())
-                llm = get_provider(run_config.llm_provider,
-                                   run_config.llm_api_key, run_config.llm_model,
-                                   base_url=run_config.llm_api_base)
+                llm = _resolve_provider(run_config)
                 tts = _build_tts(run_config, tts_provider, tts_voice)
                 generate_narration(draft_id, get_store(), llm, tts, config,
                                    tts_provider=tts_provider,
@@ -1661,10 +1661,7 @@ def create_app(config: Config | None = None,
             return JSONResponse({"error": "draft not found"}, status_code=404)
         titles = meta.get("title_candidates") or ["稿件"]
         run_config = Config.load(store=store)
-        provider = get_provider(run_config.llm_provider,
-                                run_config.llm_api_key,
-                                run_config.llm_model,
-                                base_url=run_config.llm_api_base)
+        provider = _resolve_provider(run_config)
         result = adapt(meta.get("body_md", ""), titles[0], platform, provider)
 
         # Append promotion footer if configured
@@ -1804,14 +1801,7 @@ def create_app(config: Config | None = None,
             return JSONResponse({"ok": False, "error": "draft not found"},
                                 status_code=404)
         run_config = Config.load(store=store)
-        provider = None
-        try:
-            provider = get_provider(run_config.llm_provider,
-                                    run_config.llm_api_key,
-                                    run_config.llm_model,
-                                    base_url=run_config.llm_api_base)
-        except Exception:                           # noqa: BLE001
-            provider = None
+        provider = _resolve_provider(run_config)
         from app.wechat.channels import (
             build_channels_caption, CHANNELS_CREATE_URL)
         cap = build_channels_caption(meta, provider)
@@ -1851,14 +1841,7 @@ def create_app(config: Config | None = None,
                 {"ok": False, "error": f"{p.label} 暂不支持视频半自动发布"},
                 status_code=400)
         run_config = Config.load(store=store)
-        provider = None
-        try:
-            provider = get_provider(run_config.llm_provider,
-                                    run_config.llm_api_key,
-                                    run_config.llm_model,
-                                    base_url=run_config.llm_api_base)
-        except Exception:                           # noqa: BLE001
-            provider = None
+        provider = _resolve_provider(run_config)
         from app.platforms.video_prepare import build_video_caption
         cap = build_video_caption(meta, provider, p.video_caption_style())
         mp4 = video_path(draft_id, config)
