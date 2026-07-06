@@ -242,8 +242,8 @@ async function rewriteArticle(id, isRewrite) {
       cell.innerHTML = '<span class="muted">已有任务在进行</span>';
       return;
     }
-    // Progress now shown in the rewrite panel — restore the button
-    cell.innerHTML = origHTML;
+    // Show progress inline so user sees state change immediately
+    cell.innerHTML = '<span class="muted">⏳ 转写中</span>';
     rewriteArticleId = id;
     showRewritePanel(id);
     pollRewrite();
