@@ -35,6 +35,11 @@
       <span id="run-title">运行中…</span>
       <div>
         <span id="run-stats" class="run-stats"></span>
+        <span id="run-controls">
+          <button id="run-pause-btn" type="button" class="btn small" onclick="pauseRun()" style="display:none">⏸ 暂停</button>
+          <button id="run-resume-btn" type="button" class="btn small" onclick="resumeRun()" style="display:none">▶ 恢复</button>
+          <button id="run-stop-btn" type="button" class="btn small danger" onclick="stopRun()" style="display:none">⏹ 停止</button>
+        </span>
         <button type="button" class="run-close" onclick="hideRunPanel()">×</button>
       </div>
     </div>
@@ -59,14 +64,34 @@
 
     const btn = document.getElementById('run-btn');
     const title = document.getElementById('run-title');
+    const pauseBtn = document.getElementById('run-pause-btn');
+    const resumeBtn = document.getElementById('run-resume-btn');
+    const stopBtn = document.getElementById('run-stop-btn');
     if (s.running) {
       btn.disabled = true;
       btn.textContent = '⏳ 运行中…';
-      title.textContent = '运行中…';
+      if (s.paused) {
+        title.textContent = '⏸ 已暂停';
+        pauseBtn.style.display = 'none';
+        resumeBtn.style.display = 'inline-block';
+        stopBtn.style.display = 'inline-block';
+      } else {
+        title.textContent = '运行中…';
+        pauseBtn.style.display = 'inline-block';
+        resumeBtn.style.display = 'none';
+        stopBtn.style.display = 'inline-block';
+      }
     } else {
       btn.disabled = false;
       btn.textContent = '▶ 立即运行';
-      title.textContent = s.error ? ('运行失败：' + s.error) : '运行完成';
+      pauseBtn.style.display = 'none';
+      resumeBtn.style.display = 'none';
+      stopBtn.style.display = 'none';
+      if (s.stopped) {
+        title.textContent = '运行已停止';
+      } else {
+        title.textContent = s.error ? ('运行失败：' + s.error) : '运行完成';
+      }
     }
   }
 
@@ -94,6 +119,21 @@
       }
     } catch (e) { /* ignore, poll will reflect state */ }
     pollRun();
+  }
+
+  async function pauseRun() {
+    await fetch('/run/pause', {method: 'POST'});
+    renderRun(await (await fetch('/api/run-status')).json());
+  }
+  async function resumeRun() {
+    await fetch('/run/resume', {method: 'POST'});
+    renderRun(await (await fetch('/api/run-status')).json());
+  }
+  async function stopRun() {
+    if (!confirm('确定要停止当前运行吗？')) return;
+    await fetch('/run/stop', {method: 'POST'});
+    renderRun(await (await fetch('/api/run-status')).json());
+    // Keep polling so logs keep arriving as the worker shuts down
   }
 
   // On page load, resume the panel if a run is in progress.

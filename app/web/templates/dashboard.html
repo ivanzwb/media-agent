@@ -27,6 +27,53 @@
   </form>
 </div>
 
+<!-- ====== HOTNESS RANKING ====== -->
+<section class="hotness">
+  <div class="reco-row">
+    <h2 style="margin:0">热度排名</h2>
+    <button type="button" class="btn primary small" id="hotness-refresh-btn" onclick="refreshHotness()">
+      ⟳ 刷新热度
+    </button>
+    <span id="hotness-status" class="muted">
+      {% if hotness_updated %}上次更新：{{ hotness_updated[:19] | replace('T', ' ') }}{% endif %}
+    </span>
+  </div>
+  <div id="hotness-body" style="display:{{ 'block' if hotness else 'none' }}">
+  {% if hotness %}
+  <div class="hotness-grid">
+    <div class="hotness-col">
+      <h3>🔥 主题热度</h3>
+      <ol class="hotness-list">
+      {% for t in hotness.topics[:10] %}
+        <li>
+          <span class="hotness-rank">{{ loop.index }}</span>
+          <span class="hotness-name">{{ t.name }}</span>
+          <span class="hotness-bar"><span style="width:{{ t.score // 2 }}px"></span></span>
+          <span class="hotness-score">{{ t.score }}</span>
+          <span class="muted">{{ t.recent }}篇/周 · {{ t.total }}篇</span>
+        </li>
+      {% endfor %}
+      </ol>
+    </div>
+    <div class="hotness-col">
+      <h3>🔥 来源热度</h3>
+      <ol class="hotness-list">
+      {% for s in hotness.sources[:10] %}
+        <li>
+          <span class="hotness-rank">{{ loop.index }}</span>
+          <span class="hotness-name">{{ s.name }}</span>
+          <span class="hotness-bar"><span style="width:{{ s.score // 2 }}px"></span></span>
+          <span class="hotness-score">{{ s.score }}</span>
+          <span class="muted">{{ s.recent }}篇/周 · {{ s.total }}篇</span>
+        </li>
+      {% endfor %}
+      </ol>
+    </div>
+  </div>
+  {% endif %}
+  </div>
+</section>
+
 <h2>最近运行</h2>
 {% if runs %}
 <table>
@@ -47,4 +94,14 @@
   {% endfor %}
 </ul>
 {% else %}<p class="muted">还没有草稿。</p>{% endif %}
+
+<script>
+function refreshHotness() {
+  var btn = document.getElementById('hotness-refresh-btn');
+  btn.disabled = true; btn.textContent = '⟳ 刷新中…';
+  fetch('/sources/refresh-hotness', {method: 'POST'})
+    .then(function () { location.reload(); })
+    .catch(function () { btn.disabled = false; btn.textContent = '⟳ 刷新热度'; });
+}
+</script>
 {% endblock %}

@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,7 +19,7 @@ from fastapi.templating import Jinja2Templates
 from app.config import Config
 from app.db import connect, init_db
 from app.discovery import discover_from_url, discover_from_keyword
-from app.feeds import load_feeds, save_feeds, SourceConfig, Topic, FeedsConfig
+from app.feeds import load_feeds, save_feeds, update_feeds, SourceConfig, Topic, FeedsConfig
 from app.images.base import get_image_provider
 from app.llm.base import get_provider, get_rewrite_provider, Message
 from app.llm.providers import cli as cli_provider
@@ -119,6 +120,7 @@ def create_app(config: Config | None = None,
     run_state = {
         "running": False, "started_at": None, "finished_at": None,
         "stats": {}, "logs": [], "error": None,
+        "paused": False, "stop_requested": False, "stopped": False,
     }
 
     # ---- operations DB-backed registry (survives page refresh) ----
@@ -176,6 +178,18 @@ def create_app(config: Config | None = None,
             if stats is not None:
                 run_state["stats"] = dict(stats)
 
+    def _pausable_log(msg, stats=None):
+        """Like _log but blocks while paused / raises when stop requested."""
+        while True:
+            with run_lock:
+                if run_state["stop_requested"]:
+                    run_state["stopped"] = True
+                    raise SystemExit("stopped")
+                if not run_state["paused"]:
+                    break
+            time.sleep(0.3)
+        _log(msg, stats)
+
     def _scheduled_run():
         """Scheduler callback — mirrors trigger_run so scheduled runs
         show real-time progress and disable the Run Now button."""
@@ -184,10 +198,11 @@ def create_app(config: Config | None = None,
                 return  # already running, skip this cycle
             run_state.update(running=True, error=None, stats={}, logs=[],
                              started_at=datetime.now().isoformat(timespec="seconds"),
-                             finished_at=None)
+                             finished_at=None, paused=False,
+                             stop_requested=False, stopped=False)
         try:
             _log("开始定时运行流水线")
-            stats = run_now(progress=_log)
+            stats = run_now(progress=_pausable_log)
             with run_lock:
                 if stats:
                     run_state["stats"] = dict(stats)
@@ -208,8 +223,12 @@ def create_app(config: Config | None = None,
         stats = store.dashboard_stats()
         runs = store.list_runs(limit=10)
         drafts = store.list_drafts()[:10]
+        raw_hot = store.get_setting("hotness_data")
+        hotness = json.loads(raw_hot) if raw_hot else None
+        hotness_updated = store.get_setting("hotness_updated_at")
         return templates.TemplateResponse(request, "dashboard.html", {
             "stats": stats, "runs": runs, "drafts": drafts,
+            "hotness": hotness, "hotness_updated": hotness_updated,
             "active": "dashboard"})
 
     @app.get("/api/stats")
@@ -774,25 +793,25 @@ def create_app(config: Config | None = None,
                     exclude_pattern: str = Form(""),
                     max_pages: str = Form("1"),
                     render_js: str = Form("")):
-        cfg = load_feeds(feeds_path)
         topic_list = [t.strip() for t in topics.split(",") if t.strip()]
-        cfg.add_source(SourceConfig(
-            name=name, type=type, url=url, topics=topic_list, mode=mode,
-            include_pattern=include_pattern or None,
-            exclude_pattern=exclude_pattern or None,
-            max_pages=_to_int(max_pages, 1),
-            render_js=render_js in ("1", "on", "true")))
-        save_feeds(cfg, feeds_path)
+        def _do_add(cfg):
+            cfg.add_source(SourceConfig(
+                name=name, type=type, url=url, topics=topic_list, mode=mode,
+                include_pattern=include_pattern or None,
+                exclude_pattern=exclude_pattern or None,
+                max_pages=_to_int(max_pages, 1),
+                render_js=render_js in ("1", "on", "true")))
+        update_feeds(feeds_path, _do_add)
         return RedirectResponse(url="/sources", status_code=303)
 
     def _append_sources(found):
-        cfg = load_feeds(feeds_path)
         added = 0
-        for s in found:
-            if cfg.add_source(s) is not None:
-                added += 1
-        if added:
-            save_feeds(cfg, feeds_path)
+        def _do_append(cfg):
+            nonlocal added
+            for s in found:
+                if cfg.add_source(s) is not None:
+                    added += 1
+        update_feeds(feeds_path, _do_append)
         return added
 
     @app.post("/sources/discover")
@@ -882,34 +901,81 @@ def create_app(config: Config | None = None,
         return {"url": url, "added": added, "found": len(found),
                 "status": status}
 
+    @app.post("/sources/batch-discover-add")
+    async def sources_batch_discover_add(request: Request):
+        body = await request.json()
+        items = body.get("items", [])
+        found = []
+        for item in items:
+            name = item.get("name", "")
+            url = item.get("url", "")
+            if not url:
+                continue
+            topics = item.get("topics", [])
+            if isinstance(topics, str):
+                topics = [t.strip() for t in topics.split(",") if t.strip()]
+            found.append(SourceConfig(
+                name=name, type="rss", url=url, topics=topics))
+        added = _append_sources(found)
+        return {"added": added, "total": len(found)}
+
+    @app.post("/sources/batch-add")
+    async def sources_batch_add(request: Request):
+        body = await request.json()
+        items = body.get("items", [])
+        found = []
+        for item in items:
+            name = item.get("name", "").strip()
+            url = item.get("url", "").strip()
+            if not url:
+                continue
+            typ = item.get("type", "rss") or "rss"
+            topics = item.get("topics", [])
+            if isinstance(topics, str):
+                topics = [t.strip() for t in topics.split(",") if t.strip()]
+            mode = item.get("mode", "single") or "single"
+            found.append(SourceConfig(
+                name=name, type=typ, url=url,
+                topics=topics, mode=mode,
+                include_pattern=item.get("include_pattern") or None,
+                exclude_pattern=item.get("exclude_pattern") or None,
+                max_pages=_to_int(item.get("max_pages"), 1),
+                render_js=item.get("render_js", False) in (True, "1", "on", "true"),
+            ))
+        added = _append_sources(found)
+        return {"added": added, "total": len(found)}
+
     # ---- topic management ----
 
     @app.post("/sources/topics/add")
     def topics_add(name: str = Form(...), keywords: str = Form("")):
-        cfg = load_feeds(feeds_path)
         kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
-        cfg.add_topic(Topic(name=name.strip(), keywords=kw_list))
-        save_feeds(cfg, feeds_path)
+        def _do_add(cfg):
+            cfg.add_topic(Topic(name=name.strip(), keywords=kw_list))
+        update_feeds(feeds_path, _do_add)
         return RedirectResponse(url="/sources", status_code=303)
 
     @app.post("/sources/topics/edit")
     def topics_edit(old_name: str = Form(...), name: str = Form(...),
                     keywords: str = Form("")):
-        cfg = load_feeds(feeds_path)
         kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
-        for t in cfg.topics:
-            if t.name == old_name.strip():
-                t.name = name.strip()
-                t.keywords = kw_list
-                break
-        save_feeds(cfg, feeds_path)
+        _old = old_name.strip()
+        _name = name.strip()
+        def _do_edit(cfg):
+            for t in cfg.topics:
+                if t.name == _old:
+                    t.name = _name
+                    t.keywords = kw_list
+                    break
+        update_feeds(feeds_path, _do_edit)
         return RedirectResponse(url="/sources", status_code=303)
 
     @app.post("/sources/topics/delete")
     def topics_delete(name: str = Form(...)):
-        cfg = load_feeds(feeds_path)
-        cfg.topics = [t for t in cfg.topics if t.name != name.strip()]
-        save_feeds(cfg, feeds_path)
+        _name = name.strip()
+        def _do_delete(cfg):
+            cfg.topics = [t for t in cfg.topics if t.name != _name]
+        update_feeds(feeds_path, _do_delete)
         return RedirectResponse(url="/sources", status_code=303)
 
     # ---- source management ----
@@ -922,27 +988,29 @@ def create_app(config: Config | None = None,
                      exclude_pattern: str = Form(""),
                      max_pages: str = Form("1"),
                      render_js: str = Form("")):
-        cfg = load_feeds(feeds_path)
         topic_list = [t.strip() for t in topics.split(",") if t.strip()]
-        for s in cfg.sources:
-            if s.url == url.strip():
-                s.name = name.strip()
-                s.type = type.strip()
-                s.topics = topic_list
-                s.mode = mode.strip()
-                s.include_pattern = include_pattern.strip() or None
-                s.exclude_pattern = exclude_pattern.strip() or None
-                s.max_pages = _to_int(max_pages, 1)
-                s.render_js = render_js in ("1", "on", "true")
-                break
-        save_feeds(cfg, feeds_path)
+        _url = url.strip()
+        def _do_edit(cfg):
+            for s in cfg.sources:
+                if s.url == _url:
+                    s.name = name.strip()
+                    s.type = type.strip()
+                    s.topics = topic_list
+                    s.mode = mode.strip()
+                    s.include_pattern = include_pattern.strip() or None
+                    s.exclude_pattern = exclude_pattern.strip() or None
+                    s.max_pages = _to_int(max_pages, 1)
+                    s.render_js = render_js in ("1", "on", "true")
+                    break
+        update_feeds(feeds_path, _do_edit)
         return RedirectResponse(url="/sources", status_code=303)
 
     @app.post("/sources/delete")
     def sources_delete(url: str = Form(...)):
-        cfg = load_feeds(feeds_path)
-        cfg.sources = [s for s in cfg.sources if s.url != url.strip()]
-        save_feeds(cfg, feeds_path)
+        _url = url.strip()
+        def _do_delete(cfg):
+            cfg.sources = [s for s in cfg.sources if s.url != _url]
+        update_feeds(feeds_path, _do_delete)
         return RedirectResponse(url="/sources", status_code=303)
 
     @app.post("/sources/delete-batch")
@@ -951,12 +1019,15 @@ def create_app(config: Config | None = None,
         urls = body.get("items", [])
         if not urls:
             return {"deleted": 0}
-        cfg = load_feeds(feeds_path)
         url_set = set(u.strip() for u in urls)
-        before = len(cfg.sources)
-        cfg.sources = [s for s in cfg.sources if s.url not in url_set]
-        save_feeds(cfg, feeds_path)
-        return {"deleted": before - len(cfg.sources)}
+        deleted = 0
+        def _do_delete(cfg):
+            nonlocal deleted
+            before = len(cfg.sources)
+            cfg.sources = [s for s in cfg.sources if s.url not in url_set]
+            deleted = before - len(cfg.sources)
+        update_feeds(feeds_path, _do_delete)
+        return {"deleted": deleted}
 
     @app.post("/sources/topics/delete-batch")
     async def topics_delete_batch(request: Request):
@@ -964,21 +1035,25 @@ def create_app(config: Config | None = None,
         names = body.get("items", [])
         if not names:
             return {"deleted": 0}
-        cfg = load_feeds(feeds_path)
         name_set = set(n.strip() for n in names)
-        before = len(cfg.topics)
-        cfg.topics = [t for t in cfg.topics if t.name not in name_set]
-        save_feeds(cfg, feeds_path)
-        return {"deleted": before - len(cfg.topics)}
+        deleted = 0
+        def _do_delete(cfg):
+            nonlocal deleted
+            before = len(cfg.topics)
+            cfg.topics = [t for t in cfg.topics if t.name not in name_set]
+            deleted = before - len(cfg.topics)
+        update_feeds(feeds_path, _do_delete)
+        return {"deleted": deleted}
 
     @app.post("/sources/toggle")
     def sources_toggle(url: str = Form(...)):
-        cfg = load_feeds(feeds_path)
-        for s in cfg.sources:
-            if s.url == url.strip():
-                s.enabled = not s.enabled
-                break
-        save_feeds(cfg, feeds_path)
+        _url = url.strip()
+        def _do_toggle(cfg):
+            for s in cfg.sources:
+                if s.url == _url:
+                    s.enabled = not s.enabled
+                    break
+        update_feeds(feeds_path, _do_toggle)
         return RedirectResponse(url="/sources", status_code=303)
 
     @app.post("/run")
@@ -989,20 +1064,27 @@ def create_app(config: Config | None = None,
                         "message": "已有运行正在进行"}
             run_state.update(running=True, error=None, stats={}, logs=[],
                              started_at=datetime.now().isoformat(timespec="seconds"),
-                             finished_at=None)
+                             finished_at=None, paused=False,
+                             stop_requested=False, stopped=False)
 
         def worker():
             op_key = "run"
             op_conn = _db_conn()
             ops.begin(op_key, "run", 0, op_conn)
             try:
-                _log("开始运行流水线")
-                stats = run_now(progress=_log)
+                _pausable_log("开始运行流水线")
+                stats = run_now(progress=_pausable_log)
                 with run_lock:
                     if stats:
                         run_state["stats"] = dict(stats)
-                _log("运行成功结束", run_state["stats"])
+                _pausable_log("运行成功结束", run_state["stats"])
                 ops.done(op_key, stats, op_conn)
+            except SystemExit:
+                with run_lock:
+                    run_state["stopped"] = True
+                    run_state["error"] = "已手动停止"
+                _log("运行已手动停止")
+                ops.error(op_key, "stopped", op_conn)
             except Exception as e:  # noqa: BLE001 - surface to UI log
                 with run_lock:
                     run_state["error"] = str(e)
@@ -1017,6 +1099,31 @@ def create_app(config: Config | None = None,
         threading.Thread(target=worker, daemon=True).start()
         return {"started": True, "running": True}
 
+    @app.post("/run/pause")
+    def run_pause():
+        with run_lock:
+            if not run_state["running"]:
+                return {"paused": False, "error": "没有运行中的任务"}
+            run_state["paused"] = True
+        return {"paused": True}
+
+    @app.post("/run/resume")
+    def run_resume():
+        with run_lock:
+            if not run_state["running"]:
+                return {"resumed": False, "error": "没有运行中的任务"}
+            run_state["paused"] = False
+        return {"resumed": True}
+
+    @app.post("/run/stop")
+    def run_stop():
+        with run_lock:
+            if not run_state["running"]:
+                return {"stopped": False, "error": "没有运行中的任务"}
+            run_state["stop_requested"] = True
+            run_state["paused"] = False  # unblock pausable_log so it can exit
+        return {"stopped": True}
+
     @app.get("/api/run-status")
     def api_run_status():
         with run_lock:
@@ -1027,6 +1134,8 @@ def create_app(config: Config | None = None,
                 "stats": dict(run_state["stats"]),
                 "logs": list(run_state["logs"]),
                 "error": run_state["error"],
+                "paused": run_state["paused"],
+                "stopped": run_state["stopped"],
             }
 
     # ---- rewrite progress (per-article) ----

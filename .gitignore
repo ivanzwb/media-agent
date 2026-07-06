@@ -13,3 +13,4 @@ test_out.txt
 pretrained_models/
 server*.log
 /media/
+feeds.yaml

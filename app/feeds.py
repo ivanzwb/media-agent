@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import tempfile
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -44,6 +48,12 @@ class FeedsConfig:
         return src
 
 
+# ── Thread-level lock for feeds.yaml ─────────────────────────────────
+# Prevents concurrent read-modify-write races when two uvicorn worker
+# threads both load the file before either saves.
+_feeds_lock = threading.Lock()
+
+
 def load_feeds(path: Path | str) -> FeedsConfig:
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     topics = [Topic(name=t["name"], keywords=t.get("keywords", []))
@@ -65,7 +75,8 @@ def load_feeds(path: Path | str) -> FeedsConfig:
     return FeedsConfig(topics=topics, sources=sources)
 
 
-def save_feeds(config: FeedsConfig, path: Path | str) -> None:
+def _build_feeds_data(config: FeedsConfig) -> dict:
+    """Convert FeedsConfig to the dict structure expected by yaml.safe_dump."""
     data = {
         "topics": [{"name": t.name, "keywords": t.keywords}
                    for t in config.topics],
@@ -88,6 +99,42 @@ def save_feeds(config: FeedsConfig, path: Path | str) -> None:
             if not s.render_js:
                 entry["render_js"] = s.render_js
         data["sources"].append(entry)
-    Path(path).write_text(
-        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
-        encoding="utf-8")
+    return data
+
+
+def _save_feeds_unlocked(config: FeedsConfig, path: Path | str) -> None:
+    """Write feeds.yaml via tempfile + rename (caller MUST hold _feeds_lock)."""
+    data = _build_feeds_data(config)
+    yaml_text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+    dst = Path(path)
+
+    # Atomic write: temp file in the same directory → os.replace (atomic on same FS).
+    fd, tmp = tempfile.mkstemp(dir=dst.parent, suffix=".yaml", prefix=".feeds_tmp_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(yaml_text)
+        os.replace(tmp, str(dst))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def save_feeds(config: FeedsConfig, path: Path | str) -> None:
+    """Atomically write feeds.yaml (thread-safe wrapper)."""
+    with _feeds_lock:
+        _save_feeds_unlocked(config, path)
+
+
+def update_feeds(path: Path | str, modifier: Callable[[FeedsConfig], None]) -> None:
+    """Load feeds.yaml, run *modifier* (e.g. add_topic/add_source), then save.
+
+    The entire load→modify→save sequence is protected by the thread lock,
+    preventing concurrent-reader/writer races.
+    """
+    with _feeds_lock:
+        cfg = load_feeds(path)
+        modifier(cfg)
+        _save_feeds_unlocked(cfg, path)

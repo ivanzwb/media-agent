@@ -11,61 +11,27 @@
   <div class="reco-row">
     <input id="reco-themes" placeholder="如：科技, 财经" style="max-width:320px"/>
     <button type="button" class="btn primary" onclick="recoSubtopics()">推荐子主题</button>
+    <button type="button" class="btn success" onclick="autoDiscoverAll()">⚡ 自动一键发现</button>
     <span id="reco-status" class="muted"></span>
+    <span id="auto-status" class="muted" style="margin-left:8px"></span>
   </div>
 
   <div id="reco-subtopics-wrap" style="display:none">
-    <div class="reco-label">① 选择子主题（可多选，选中即推荐其关键词）：</div>
+    <div class="reco-label">
+      ① 选择子主题（可多选，选中即推荐其关键词）：
+      <span style="margin-left:12px;font-size:0.85em">
+        <a href="#" onclick="selectAllSubtopics(true);return false">全选</a>
+        ·
+        <a href="#" onclick="selectAllSubtopics(false);return false">取消全选</a>
+      </span>
+    </div>
     <div id="reco-subtopics" class="chips"></div>
   </div>
 
   <div id="reco-groups"></div>
-</section>
-
-<!-- ====== HOTNESS RANKING ====== -->
-<section class="hotness">
-  <div class="reco-row">
-    <h2 style="margin:0">热度排名</h2>
-    <button type="button" class="btn primary small" id="hotness-refresh-btn" onclick="refreshHotness()">
-      ⟳ 刷新热度
-    </button>
-    <span id="hotness-status" class="muted">
-      {% if hotness_updated %}上次更新：{{ hotness_updated[:19] | replace('T', ' ') }}{% endif %}
-    </span>
-  </div>
-  <div id="hotness-body" style="display:{{ 'block' if hotness else 'none' }}">
-  {% if hotness %}
-  <div class="hotness-grid">
-    <div class="hotness-col">
-      <h3>🔥 主题热度</h3>
-      <ol class="hotness-list">
-      {% for t in hotness.topics[:10] %}
-        <li>
-          <span class="hotness-rank">{{ loop.index }}</span>
-          <span class="hotness-name">{{ t.name }}</span>
-          <span class="hotness-bar"><span style="width:{{ t.score // 2 }}px"></span></span>
-          <span class="hotness-score">{{ t.score }}</span>
-          <span class="muted">{{ t.recent }}篇/周 · {{ t.total }}篇</span>
-        </li>
-      {% endfor %}
-      </ol>
-    </div>
-    <div class="hotness-col">
-      <h3>🔥 来源热度</h3>
-      <ol class="hotness-list">
-      {% for s in hotness.sources[:10] %}
-        <li>
-          <span class="hotness-rank">{{ loop.index }}</span>
-          <span class="hotness-name">{{ s.name }}</span>
-          <span class="hotness-bar"><span style="width:{{ s.score // 2 }}px"></span></span>
-          <span class="hotness-score">{{ s.score }}</span>
-          <span class="muted">{{ s.recent }}篇/周 · {{ s.total }}篇</span>
-        </li>
-      {% endfor %}
-      </ol>
-    </div>
-  </div>
-  {% endif %}
+  <div id="reco-batch-bar" class="batch-bar" style="display:none">
+    <button type="button" class="btn primary small" onclick="batchAddTopics()">＋ 批量加为主题</button>
+    <span id="reco-batch-status" class="muted"></span>
   </div>
 </section>
 
@@ -74,6 +40,7 @@
 <h2>主题</h2>
 <div class="batch-bar">
   <button type="button" class="btn small danger" onclick="batchDelete('topic')" id="topic-batch-del" style="display:none">批量删除</button>
+  <button type="button" class="btn primary small" onclick="batchDiscoverSources()" id="topic-batch-discover" style="display:none">批量发现来源</button>
 </div>
 <table id="topics-table">
   <thead><tr>
@@ -127,6 +94,17 @@
 </table>
 
 <p class="muted" style="margin-top:10px">主题通过上方「智能推荐主题」添加；每个主题可在「操作」里一键发现前沿来源。</p>
+
+<!-- ====== BATCH DISCOVER RESULTS ====== -->
+<div id="batch-discover-wrap" style="display:none">
+  <h2>批量发现来源</h2>
+  <div id="batch-discover-status" class="muted" style="margin-bottom:8px"></div>
+  <div id="batch-discover-groups"></div>
+  <div class="reco-row" id="batch-discover-add-row" style="display:none">
+    <button type="button" class="btn primary" onclick="batchAddDiscovered()">添加全部来源</button>
+    <span id="batch-discover-add-status" class="muted"></span>
+  </div>
+</div>
 
 <!-- ====== SOURCES ====== -->
 <h2>来源</h2>
@@ -228,6 +206,21 @@
   <button type="submit" class="btn primary">按关键词发现</button>
 </form>
 
+<div style="margin:16px 0">
+  <a href="#" onclick="toggleBatchAdd();return false" id="batch-add-toggle">＋ 批量添加来源</a>
+</div>
+<div id="batch-add-panel" style="display:none">
+  <p class="muted">每行一个来源，格式：<code>名称 | URL | 类型(rss/scrape) | 主题(逗号分隔) | 模式(single/list)</code></p>
+  <textarea id="batch-add-input" rows="8" style="width:100%;max-width:640px;font-family:monospace;font-size:0.9em" placeholder="OpenAI Blog | https://openai.com/blog | | AI
+Google DeepMind | https://deepmind.google/discover/blog/ | scrape | AI, 物理AI | list
+Hugging Face Blog | https://huggingface.co/blog | rss | AI
+Anthropic | https://anthropic.com/blog | scrape | AI | single"></textarea>
+  <div class="reco-row" style="margin-top:8px">
+    <button type="button" class="btn primary" onclick="batchAddSources()">批量添加</button>
+    <span id="batch-add-status" class="muted"></span>
+  </div>
+</div>
+
 <script>
 function toggleEdit(id) {
   var el = document.getElementById(id);
@@ -279,7 +272,149 @@ function toggleSubtopic(chip, subtopic) {
   } else if (chip._group) {
     chip._group.remove();
     chip._group = null;
+    updateRecoBatchBar();
   }
+}
+
+function updateRecoBatchBar() {
+  const count = document.querySelectorAll('#reco-groups .reco-group').length;
+  const bar = document.getElementById('reco-batch-bar');
+  if (bar) bar.style.display = count > 1 ? 'block' : 'none';
+}
+
+async function batchAddTopics() {
+  const cards = document.querySelectorAll('#reco-groups .reco-group');
+  const status = document.getElementById('reco-batch-status');
+  const btn = document.querySelector('#reco-batch-bar .btn');
+  btn.disabled = true;
+  let ok = 0, fail = 0;
+  for (const card of cards) {
+    const name = card.querySelector('.reco-name').value.trim();
+    const badge = card.querySelector('.reco-badge');
+    if (!name) { badge.textContent = '请填写名称'; fail++; continue; }
+    const keywords = Array.from(card.querySelectorAll('.reco-kw .chip.on'))
+      .map(function (c) { return c.textContent; }).join(', ');
+    badge.textContent = '添加中…';
+    try {
+      await postForm('/sources/topics/add', {name, keywords});
+      badge.className = 'reco-badge added';
+      badge.textContent = '✓ 已添加';
+      ok++;
+      status.textContent = ok + '/' + cards.length + ' 已完成';
+    } catch (e) {
+      badge.textContent = '添加失败';
+      fail++;
+    }
+  }
+  status.textContent = '完成：' + ok + ' 成功' + (fail ? '，' + fail + ' 失败' : '');
+  btn.disabled = false;
+  refreshTopicsTable();
+}
+
+// ---- fully automated: subtopics → keywords → add topics → discover sources → add sources ----
+async function autoDiscoverAll() {
+  const themes = document.getElementById('reco-themes').value.trim();
+  const autoStatus = document.getElementById('auto-status');
+  const autoBtn = document.querySelector('[onclick="autoDiscoverAll()"]');
+  if (!themes) { autoStatus.textContent = '请先输入主题'; return; }
+
+  autoBtn.disabled = true;
+  const set = function (msg) { autoStatus.textContent = msg; };
+
+  try {
+    // Step 1: recommend subtopics
+    set('① 推荐子主题…');
+    const subData = await (await postForm('/sources/topics/suggest', {themes})).json();
+    const subtopics = subData.subtopics || [];
+    if (!subtopics.length) { set('没有推荐出子主题'); autoBtn.disabled = false; return; }
+    set('① 推荐了 ' + subtopics.length + ' 个子主题');
+
+    // Step 2: get keywords for ALL subtopics in parallel
+    set('② 获取关键词… 0/' + subtopics.length);
+    const kwResults = await Promise.all(subtopics.map(async function (st, i) {
+      const data = await (await postForm('/sources/topics/keywords', {subtopic: st})).json();
+      set('② 获取关键词… ' + (i + 1) + '/' + subtopics.length + ' (' + st + ')');
+      return {name: st, keywords: data.keywords || []};
+    }));
+    set('② 关键词获取完成');
+
+    // Step 3: batch add all as topics (sequentially to avoid feeds.yaml races)
+    set('③ 批量加为主题…');
+    let addedTopics = [];
+    for (let i = 0; i < kwResults.length; i++) {
+      const item = kwResults[i];
+      set('③ 添加主题… ' + (i + 1) + '/' + kwResults.length + ' (' + item.name + ')');
+      try {
+        await postForm('/sources/topics/add', {
+          name: item.name,
+          keywords: item.keywords.join(', '),
+        });
+        addedTopics.push(item.name);
+      } catch (e) {
+        // topic may already exist, skip
+      }
+    }
+    if (!addedTopics.length) { set('没有新增主题'); autoBtn.disabled = false; return; }
+    set('③ 已添加 ' + addedTopics.length + ' 个主题');
+
+    // Step 4: discover sources for each new topic (sequentially)
+    set('④ 发现来源… 0/' + addedTopics.length);
+    let allCands = [];
+    let seenUrls = new Set();
+    for (let i = 0; i < addedTopics.length; i++) {
+      const t = addedTopics[i];
+      set('④ 发现来源… ' + (i + 1) + '/' + addedTopics.length + ' (' + t + ')');
+      try {
+        const data = await (await postForm('/sources/suggest-sources', {topic: t})).json();
+        (data.candidates || []).forEach(function (c) {
+          if (!seenUrls.has(c.url)) {
+            seenUrls.add(c.url);
+            allCands.push({name: c.name, url: c.url, topics: [t]});
+          }
+        });
+      } catch (e) { /* skip failed topic */ }
+    }
+    if (!allCands.length) {
+      set('④ 没有发现可添加的来源，已完成主题添加');
+      refreshTopicsTable();
+      autoBtn.disabled = false;
+      return;
+    }
+    set('④ 发现 ' + allCands.length + ' 个来源');
+
+    // Step 5: batch add all discovered sources
+    set('⑤ 添加来源…');
+    const addResp = await fetch('/sources/batch-discover-add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({items: allCands}),
+    });
+    const addData = await addResp.json();
+    set('✓ 完成：新增 ' + addData.added + '/' + addData.total + ' 个主题+来源');
+  } catch (e) {
+    set('✗ 流程出错：' + (e.message || '未知错误'));
+  }
+  refreshTopicsTable();
+  refreshSourcesTable();
+  autoBtn.disabled = false;
+}
+
+function selectAllSubtopics(select) {
+  const chips = document.querySelectorAll('#reco-subtopics .chip');
+  chips.forEach(function (chip) {
+    const isOn = chip.classList.contains('on');
+    if (select && !isOn) {
+      chip.classList.add('on');
+      addKeywordGroup(chip.textContent, chip);
+    } else if (!select && isOn) {
+      chip.classList.remove('on');
+      if (chip._group) {
+        chip._group.remove();
+        chip._group = null;
+      }
+    }
+  });
+  if (!select) updateRecoBatchBar();
 }
 
 async function addKeywordGroup(subtopic, chip) {
@@ -296,6 +431,7 @@ async function addKeywordGroup(subtopic, chip) {
   document.getElementById('reco-groups').appendChild(card);
   if (chip) chip._group = card;
   card.querySelector('button').onclick = function () { addTopicFromGroup(card); };
+  updateRecoBatchBar();
   try {
     const data = await (await postForm('/sources/topics/keywords', {subtopic})).json();
     const kwWrap = card.querySelector('.reco-kw');
@@ -404,6 +540,152 @@ async function refreshSourcesTable() {
   } catch (e) { /* best-effort */ }
 }
 
+// ---- batch discover sources ----
+async function batchDiscoverSources() {
+  const topics = Array.from(document.querySelectorAll('.topic-cb:checked'))
+    .map(function (cb) { return cb.value; });
+  if (!topics.length) return;
+
+  const wrap = document.getElementById('batch-discover-wrap');
+  const status = document.getElementById('batch-discover-status');
+  const groups = document.getElementById('batch-discover-groups');
+  const addRow = document.getElementById('batch-discover-add-row');
+  addRow.style.display = 'none';
+  document.getElementById('batch-discover-add-status').textContent = '';
+  groups.innerHTML = '';
+  wrap.style.display = 'block';
+  status.textContent = '发现中… 0/' + topics.length;
+
+  // Collect candidates per topic, dedup by URL
+  let allCands = [];       // [{name, url, topic}]
+  let seenUrls = new Set();
+  for (let i = 0; i < topics.length; i++) {
+    const t = topics[i];
+    status.textContent = '发现中… ' + (i + 1) + '/' + topics.length + ' (' + t + ')';
+    try {
+      const data = await (await postForm('/sources/suggest-sources', {topic: t})).json();
+      const card = document.createElement('div');
+      card.className = 'reco-group';
+      card.innerHTML =
+        '<div class="reco-group-head"><strong>' + escapeAttr(t) + '</strong></div>' +
+        '<div class="chips" id="bdg-' + i + '"></div>';
+      groups.appendChild(card);
+      const kwWrap = card.querySelector('.chips');
+      let count = 0;
+      (data.candidates || []).forEach(function (c) {
+        if (!seenUrls.has(c.url)) {
+          seenUrls.add(c.url);
+          allCands.push({name: c.name, url: c.url, topic: t});
+        }
+        const chip = document.createElement('span');
+        chip.className = 'chip on';
+        chip.textContent = c.name;
+        chip.title = c.url;
+        chip.onclick = function () { chip.classList.toggle('on'); };
+        kwWrap.appendChild(chip);
+        count++;
+      });
+      if (!count) kwWrap.innerHTML = '<span class="muted">没有发现结果</span>';
+    } catch (e) {
+      const card = document.createElement('div');
+      card.className = 'reco-group';
+      card.innerHTML = '<div class="reco-group-head"><strong>' + escapeAttr(t) +
+        '</strong> <span class="muted">推荐失败</span></div>';
+      groups.appendChild(card);
+    }
+  }
+  status.textContent = '共发现 ' + allCands.length + ' 个来源';
+  addRow.style.display = allCands.length ? 'flex' : 'none';
+  // Store candidates for batch add
+  document.getElementById('batch-discover-add-row').dataset.cands =
+    JSON.stringify(allCands);
+}
+
+async function batchAddDiscovered() {
+  const addRow = document.getElementById('batch-discover-add-row');
+  const allCands = JSON.parse(addRow.dataset.cands || '[]');
+  if (!allCands.length) return;
+
+  // Only include chips that are still selected (.on)
+  const selected = [];
+  const chips = document.querySelectorAll('#batch-discover-groups .chip.on');
+  chips.forEach(function (chip) {
+    const url = chip.title;
+    const found = allCands.find(function (c) { return c.url === url; });
+    if (found) selected.push(found);
+  });
+  if (!selected.length) { alert('请至少选择一个来源'); return; }
+
+  const btn = addRow.querySelector('.btn');
+  const addStatus = document.getElementById('batch-discover-add-status');
+  btn.disabled = true;
+  addStatus.textContent = '添加中…';
+  try {
+    const resp = await fetch('/sources/batch-discover-add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({items: selected.map(function (c) {
+        return {name: c.name, url: c.url, topics: [c.topic]};
+      })}),
+    });
+    const data = await resp.json();
+    addStatus.textContent = '✓ 新增 ' + data.added + ' / ' + data.total + ' 个来源';
+    // Mark all chips as done
+    chips.forEach(function (chip) {
+      chip.classList.remove('on');
+      chip.classList.add('done');
+    });
+    refreshSourcesTable();
+  } catch (e) {
+    addStatus.textContent = '添加失败';
+  }
+  btn.disabled = false;
+}
+
+// ---- batch add sources (manual input) ----
+function toggleBatchAdd() {
+  const panel = document.getElementById('batch-add-panel');
+  const toggle = document.getElementById('batch-add-toggle');
+  const shown = panel.style.display !== 'none';
+  panel.style.display = shown ? 'none' : 'block';
+  toggle.textContent = shown ? '＋ 批量添加来源' : '－ 收起批量添加';
+}
+async function batchAddSources() {
+  const input = document.getElementById('batch-add-input');
+  const status = document.getElementById('batch-add-status');
+  const text = input.value.trim();
+  if (!text) { alert('请粘贴要批量添加的来源'); return; }
+
+  // Parse lines: name | url | type | topics | mode
+  const items = [];
+  const lines = text.split('\n').filter(Boolean);
+  for (const line of lines) {
+    const parts = line.split('|').map(function (s) { return s.trim(); });
+    const name = parts[0] || '';
+    const url = parts[1] || '';
+    if (!url) continue;
+    const typ = (parts[2] || 'rss').toLowerCase();
+    const topics = parts[3] ? parts[3].split(',').map(function (s) { return s.trim(); }).filter(Boolean) : [];
+    const mode = (parts[4] || 'single').toLowerCase();
+    items.push({name: name, url: url, type: typ, topics: topics, mode: mode});
+  }
+  if (!items.length) { alert('没有解析出有效的来源 URL'); return; }
+
+  status.textContent = '添加中… 0/' + items.length;
+  try {
+    const resp = await fetch('/sources/batch-add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({items: items}),
+    });
+    const data = await resp.json();
+    status.textContent = '✓ 新增 ' + data.added + ' / ' + data.total + ' 个来源';
+    if (data.added > 0) refreshSourcesTable();
+  } catch (e) {
+    status.textContent = '✗ 添加失败：' + (e.message || '未知错误');
+  }
+}
+
 // ---- batch delete ----
 function toggleAll(type) {
   const checked = document.getElementById(type + '-select-all').checked;
@@ -412,17 +694,13 @@ function toggleAll(type) {
 }
 
 function toggleBatchBtn(type) {
-  const btn = document.getElementById(type + '-batch-del');
+  const delBtn = document.getElementById(type + '-batch-del');
   const any = document.querySelectorAll('.' + type + '-cb:checked').length > 0;
-  btn.style.display = any ? 'inline-block' : 'none';
-}
-
-function refreshHotness() {
-  var btn = document.getElementById('hotness-refresh-btn');
-  btn.disabled = true; btn.textContent = '⟳ 刷新中…';
-  fetch('/sources/refresh-hotness', {method: 'POST'})
-    .then(function () { location.reload(); })
-    .catch(function () { btn.disabled = false; btn.textContent = '⟳ 刷新热度'; });
+  delBtn.style.display = any ? 'inline-block' : 'none';
+  if (type === 'topic') {
+    const discBtn = document.getElementById('topic-batch-discover');
+    if (discBtn) discBtn.style.display = any ? 'inline-block' : 'none';
+  }
 }
 
 function batchDelete(type) {
