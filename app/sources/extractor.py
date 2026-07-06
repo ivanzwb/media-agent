@@ -628,6 +628,16 @@ def extract_from_html(html: str, url: str) -> dict:
     # the data model consistent and avoids bloating the article record.
     images = images[:_MAX_IMG_PLACEHOLDERS]
 
+    # ── 4d. Force [[IMG:N]] in body if images exist but are unreferenced ──
+    # When all extraction/fallback paths produce HTML with <img> tags
+    # instead of markdown with [[IMG:N]] tokens (e.g. trafilatura returns
+    # empty, last-resort _content_fallback preserves raw HTML), the body
+    # has no way to reference its images.  Prepend all placeholders so
+    # the rewriter can inline them.
+    if images and not re.search(r'\[\[(?:IMG|VID):\d+\]\]', content_md):
+        content_md = "\n\n".join(f"[[IMG:{i}]]"
+                                 for i in range(len(images))) + "\n\n" + content_md
+
     # ── Sanity checks ──────────────────────────────────────────────────
     dt = _date_from_html(html)
     now = datetime.now(timezone.utc)

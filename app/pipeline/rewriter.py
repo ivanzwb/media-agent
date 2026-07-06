@@ -188,10 +188,13 @@ def _media_block(images: list[str], videos: list[str], existing: str) -> str:
     """Append original images/videos so they survive the rewrite.
 
     Skips media whose URL already appears in the rewritten body to avoid
-    duplicates.
+    duplicates.  Checks both the absolute URL (from front-matter) and the
+    relativized form (../../media/…) used in markdown.
     """
-    imgs = [u for u in _unique(images or []) if u not in existing][:_MAX_IMG]
-    vids = [u for u in _unique(videos or []) if u not in existing][:_MAX_VID]
+    imgs = [u for u in _unique(images or [])
+            if u not in existing and _relativize_media(u) not in existing][:_MAX_IMG]
+    vids = [u for u in _unique(videos or [])
+            if u not in existing and _relativize_media(u) not in existing][:_MAX_VID]
     parts: list[str] = []
     if imgs:
         parts.extend(f"\n\n![]({_relativize_media(u)})" for u in imgs)
@@ -352,6 +355,14 @@ def _inline_content(content_md: str, images: list[str],
     """Replace [[IMG:N]] / [[VIDEO:N]] placeholders from the extractor with
     real markdown / video embeds so the LLM sees them in context and can
     place them naturally."""
+    # Safety net: if images exist but the body has no [[IMG:N]] tokens
+    # (e.g. legacy archives stored as raw HTML), inject all placeholders
+    # so the LLM can still reference them.
+    if images and not re.search(r'\[\[IMG:\d+\]\]', content_md):
+        placeholder_block = "\n\n".join(
+            f"[[IMG:{i}]]" for i in range(len(images)))
+        content_md = f"{placeholder_block}\n\n{content_md}"
+
     for i, url in enumerate(images or []):
         content_md = content_md.replace(
             f"[[IMG:{i}]]", f"\n\n![]({_relativize_media(url)})\n\n")
