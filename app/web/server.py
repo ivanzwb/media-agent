@@ -460,6 +460,7 @@ def create_app(config: Config | None = None,
                 item["display_title"] = candidates[0] if candidates else None
             else:
                 item["display_title"] = None
+            item["draft_filename"] = os.path.basename(item.get("draft_path", ""))
             # Convert updated_at UTC → local (CST)
             raw = item.get("updated_at", "")
             if raw:
