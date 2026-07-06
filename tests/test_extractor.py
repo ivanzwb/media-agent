@@ -716,3 +716,67 @@ def test_extract_keeps_past_date():
     assert result["published_at"] is not None
     assert (result["published_at"].year, result["published_at"].month) == (
         past.year, past.month)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# extract_from_html  —  force [[IMG:N]] when body has no tokens (4d)
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_extract_forces_img_placeholders_when_body_has_no_tokens():
+    """4d safety net: when images are found via _content_fallback (step 3) but
+    content_md has no [[IMG:N]] tokens, the orphan-injector (4b) or safety net
+    (4d) prepends all placeholders so the rewriter can inline them."""
+    # A minimal HTML that readability/trafilatura can't extract meaningfully
+    # from, forcing step 3 (_content_fallback), which produces plain <p> text
+    # without any [[IMG:N]] tokens.  Images are detected separately.
+    html = (
+        '<html><body>'
+        '<p>Article text without image placeholders.</p>'
+        '<img src="/pic1.jpg" />'
+        '<img src="/pic2.jpg" />'
+        '</body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    assert len(result["images"]) >= 2
+    # The content_md should contain [[IMG:0]] and [[IMG:1]] (injected
+    # by orphan detector 4b or safety net 4d)
+    assert "[[IMG:0]]" in result["content_md"], (
+        "4b/4d should inject [[IMG:0]] into content_md")
+    assert "[[IMG:1]]" in result["content_md"], (
+        "4b/4d should inject [[IMG:1]] into content_md")
+    # Original body text preserved
+    assert "Article text" in result["content_md"]
+
+
+def test_extract_does_not_duplicate_placeholders_when_present():
+    """4b/4d: if body already has [[IMG:N]] tokens (via normal processing or
+    literal text), the safety net does NOT add extra duplicates."""
+    html = (
+        '<html><body>'
+        '<p>正文已有 [[IMG:0]] 占位符</p>'
+        '<img src="/pic1.jpg" />'
+        '<img src="/pic2.jpg" />'
+        '</body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    # After re-numbering, at most one [[IMG:0]] from normal processing plus
+    # one from the literal text may coexist — but the safety net should NOT
+    # add a third.
+    im0_count = result["content_md"].count("[[IMG:0]]")
+    assert im0_count <= 2, (
+        f"Expected at most 2 [[IMG:0]], got {im0_count}")
+    # The two images in the HTML should produce at most [[IMG:0]] and [[IMG:1]]
+    # (step-4 re-numbering may consolidate duplicates)
+    assert "[[IMG:1]]" in result["content_md"] or len(result["images"]) >= 1
+
+
+def test_extract_no_images_no_placeholder_injection():
+    """4d safety net: no images → no injection."""
+    html = (
+        '<html><body>'
+        '<p>Plain text article without any images.</p>'
+        '</body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    assert "[[IMG:" not in result["content_md"]

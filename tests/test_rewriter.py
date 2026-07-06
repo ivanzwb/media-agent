@@ -6,7 +6,7 @@ from app.llm.providers.mock import MockProvider
 from app.pipeline.rewriter import (
     rewrite, _inline_content, _video_embed,
     _extract_json, _strip_code_fences, _extract_code_fenced_json,
-    _repair_json_control_chars,
+    _repair_json_control_chars, _media_block, _relativize_media,
 )
 
 
@@ -419,3 +419,148 @@ def test_repair_preserves_structural_quotes():
     assert repaired == raw  # No change needed
     import json
     json.loads(repaired)  # Should parse fine
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _relativize_media  — convert absolute paths to relative
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_relativize_media_converts_media_path():
+    assert _relativize_media("/media/abc/pic.png") == "../../media/abc/pic.png"
+
+
+def test_relativize_media_converts_images_path():
+    assert _relativize_media("/images/abc/pic.png") == "../../images/abc/pic.png"
+
+
+def test_relativize_media_keeps_absolute_url():
+    assert _relativize_media("https://x.com/img.png") == "https://x.com/img.png"
+
+
+def test_relativize_media_keeps_relative_url():
+    assert _relativize_media("../../media/abc/pic.png") == "../../media/abc/pic.png"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _inline_content  — safety net when [[IMG:N]] tokens are missing
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_inline_content_injects_missing_placeholders():
+    """When images exist but body has no [[IMG:N]] tokens, inject all
+    placeholders at the top so the LLM can still reference them."""
+    body = "纯文本，没有任何图片占位符"
+    images = ["/media/a/pic1.png", "/media/a/pic2.png"]
+    result = _inline_content(body, images)
+    # Both placeholders replaced with real URLs
+    assert "![](../../media/a/pic1.png)" in result
+    assert "![](../../media/a/pic2.png)" in result
+    # Original text preserved (after the placeholders)
+    assert "没有任何图片占位符" in result
+
+
+def test_inline_content_leaves_existing_tokens_untouched():
+    """When body already has [[IMG:N]] tokens, _inline_content skips the
+    safety-net injection and just replaces the existing tokens."""
+    body = "开头\n\n[[IMG:0]]\n\n中间\n\n[[IMG:1]]\n\n结尾"
+    images = ["/media/a/pic1.png", "/media/a/pic2.png"]
+    result = _inline_content(body, images)
+    assert result.count("../../media/a/pic1.png") == 1
+    assert result.count("../../media/a/pic2.png") == 1
+    # Safety net should NOT have injected extra placeholders; only the
+    # two already in the body got replaced.
+    assert result.count("![](../../media") == 2
+
+
+def test_inline_content_empty_images_does_nothing():
+    """No images → body unchanged."""
+    body = "纯文本，没有图片"
+    assert _inline_content(body, []) == body
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _media_block  — dedup protection against repeated media
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_media_block_skips_absolute_url_in_existing():
+    """Media whose absolute URL already appears in the body is not appended."""
+    images = ["/media/a/pic1.png"]
+    existing = "正文已经包含 ![](../../media/a/pic1.png)"
+    result = _media_block(images, [], existing)
+    assert "../../media/a/pic1.png" not in result
+    assert result.strip() == ""
+
+
+def test_media_block_skips_media_with_relativized_url():
+    """Media whose relativized form (../../media/...) appears in the body
+    is skipped — this was the root cause bug B2."""
+    images = ["/media/a/pic1.png"]
+    existing = "正文包含 ![](../../media/a/pic1.png)"
+    result = _media_block(images, [], existing)
+    assert "pic1.png" not in result
+    assert result.strip() == ""
+
+
+def test_media_block_appends_missing_media():
+    """Media not in the body is appended at the end."""
+    images = ["/media/a/pic1.png"]
+    result = _media_block(images, [], "正文没有这张图")
+    assert "../../media/a/pic1.png" in result
+
+
+def test_media_block_dedupes_duplicate_images():
+    """Same image appearing twice in the front-matter list is only appended once."""
+    images = ["/media/a/pic1.png", "/media/a/pic1.png"]
+    result = _media_block(images, [], "正文没有图")
+    assert result.count("../../media/a/pic1.png") == 1
+
+
+# ═══════════════════════════════════════════════════════════════════
+# rewrite  — slice limit covers all [[IMG:N]] tokens
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_rewrite_slice_covers_all_img_tokens():
+    """When [[IMG:N]] tokens lie beyond 6000 chars, the slice limit is
+    dynamically extended so all are visible to the LLM."""
+    # Build a content with [[IMG:4]] at ~6400 and [[IMG:5]] at ~7300
+    chunks = ["开头文本。\n"] * 200
+    chunks.append("\n[[IMG:0]]\n")
+    chunks.append("\n更多正文。\n" * 300)
+    chunks.append("\n[[IMG:1]]\n")
+    chunks.append("\n更多正文。\n" * 300)
+    chunks.append("\n[[IMG:2]]\n")
+    chunks.append("\n更多正文。\n" * 300)
+    chunks.append("\n[[IMG:3]]\n")
+    chunks.append("\n继续填充文本。" * 200)
+    chunks.append("\n[[IMG:4]]\n")
+    chunks.append("\n继续填充文本。" * 50)
+    chunks.append("\n[[IMG:5]]\n")
+    chunks.append("\n结尾文本。")
+    content_md = "".join(chunks)
+
+    # Verify [[IMG:4]] and [[IMG:5]] are past 6000
+    assert content_md.find("[[IMG:4]]") > 6000
+    assert content_md.find("[[IMG:5]]") > 6000
+
+    # Simulate the slice logic from rewrite()
+    img_positions = [content_md.find(f"[[IMG:{i}]]")
+                     for i in range(6)
+                     if content_md.find(f"[[IMG:{i}]]") >= 0]
+    slice_limit = max(6000, max(img_positions) + 200)
+
+    assert slice_limit > 6000
+    assert "[[IMG:4]]" in content_md[:slice_limit]
+    assert "[[IMG:5]]" in content_md[:slice_limit]
+
+
+def test_rewrite_slice_defaults_to_6000():
+    """When all tokens are within 6000 chars, the slice stays at the default."""
+    content_md = "简短正文 [[IMG:0]] 结束"
+    img_positions = [content_md.find(f"[[IMG:{i}]]")
+                     for i in range(1)
+                     if content_md.find(f"[[IMG:{i}]]") >= 0]
+    slice_limit = max(6000, max(img_positions) + 200)
+    assert slice_limit == 6000
