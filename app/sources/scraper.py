@@ -141,8 +141,14 @@ def _is_non_article(absolute: str) -> bool:
 
     # ── Tier 2: hard denylist — reject at ANY depth ─────────────────
     # /privacy, /help/legal/terms-of-use, /x/y/privacy-policy …
+    # Also handles /newsletter.html, /cookie-policy.aspx etc. by stripping
+    # common server-side extensions from the segment before matching.
     for seg in segments:
         if seg in _HARD_NON_ARTICLE:
+            return True
+        # Strip .html/.htm/.php/.aspx suffix for hard-denylist matching
+        seg_stripped = re.sub(r'\.(html?|php|aspx?|jsp)$', '', seg)
+        if seg_stripped != seg and seg_stripped in _HARD_NON_ARTICLE:
             return True
 
     # ── Tier 3: soft denylist — reject only on shallow paths ────────
@@ -212,8 +218,15 @@ def _render_with_playwright(url: str, timeout: float) -> str | None:
     def _do_launch(p, **kwargs):
         browser = p.chromium.launch(headless=True, **kwargs)
         page = browser.new_page(user_agent=_UA_STR)
-        page.goto(url, wait_until="load",
-                  timeout=int(timeout * 1000))
+        response = page.goto(url, wait_until="load",
+                             timeout=int(timeout * 1000))
+        # Reject HTTP error pages (4xx, 5xx) — Playwright renders them as
+        # fully-styled HTML which would pass through as fake "article" content.
+        if response and response.status >= 400:
+            logger.debug("playwright: %s returned HTTP %d — skipping",
+                         url, response.status)
+            browser.close()
+            return None
         # Extra wait for client-side rendering (Webflow, Next.js, etc.)
         page.wait_for_timeout(3000)
         html = page.content()
@@ -385,7 +398,21 @@ def _is_article_content(data: dict) -> bool:
 
     # ── Always reject error/404 pages ──
     title = (data.get("title") or "").strip().lower()
+    # Exact match first
     if title in {"404", "page not found", "not found"}:
+        return False
+    # Broader match: title contains "404" AND "not found" (e.g. "404 Not Found – Emotiv")
+    if "404" in title and "not found" in title:
+        return False
+
+    # ── Reject listing/archive/newsletter pages ──
+    # These are not individual articles even when they pass length checks.
+    listing_keywords = re.compile(
+        r'^(news(\s*&?\s*events)?|newsletter|archive|blog\s+archive'
+        r'|events?\s+archive|article\s+archive|press\s+release)',
+        re.I,
+    )
+    if listing_keywords.match(title.replace("\u00a0", " ")):
         return False
 
     return True

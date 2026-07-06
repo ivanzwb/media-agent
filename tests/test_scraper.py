@@ -310,6 +310,42 @@ def test_article_content_rejects_404_titles():
         assert not _is_article_content({"title": title, "content_md": body})
 
 
+def test_article_content_rejects_broader_404_wording():
+    """Titles combining "404" with "not found" are rejected (e.g. "404 Not Found – Emotiv")."""
+    from app.sources.scraper import _is_article_content
+    body = "Some page content that is long enough to pass the 300-char threshold. " * 10
+    for title in ("404 Not Found – Emotiv", "404 – Page Not Found",
+                  "Error 404: Not Found"):
+        assert not _is_article_content({"title": title, "content_md": body}), title
+
+
+def test_article_content_rejects_listing_titles():
+    """Newsletter / Archive / Blog Archive / Press Release titles are listing pages."""
+    from app.sources.scraper import _is_article_content
+    body = "Some page content that is long enough to pass the 300-char threshold. " * 10
+    for title in ("Newsletter", "Newsletter – Jan 2026",
+                  "Archive", "Blog Archive",
+                  "Press Release", "Press Releases",
+                  "News & Events", "News Events",
+                  "Article Archive"):
+        assert not _is_article_content({"title": title, "content_md": body}), title
+
+
+def test_article_content_keeps_news_in_title():
+    """A real article whose title merely CONTAINS "News" should NOT be rejected."""
+    from app.sources.scraper import _is_article_content
+    body = """## Latest AI News
+
+This is a real article about the latest developments in artificial intelligence.
+The title starts with "Latest AI News" not the bare word "News" so it should
+be treated as a genuine article. The text is long enough to pass all checks and
+contains actual prose rather than a list of links. Machine learning continues to
+advance at a rapid pace, with new breakthroughs every month. Researchers are
+finding novel applications for deep learning in healthcare, robotics, and more.
+These developments promise to transform industries across the board."""
+    assert _is_article_content({"title": "Latest AI News", "content_md": body})
+
+
 def test_article_content_accepts_valid_article():
     from app.sources.scraper import _is_article_content
     body = """## Introduction
@@ -359,3 +395,18 @@ def test_is_non_article_index_pages():
     # But a real article slug like "indexical-philosophy" is NOT blocked
     # because it doesn't start with "index."
     assert not _is_non_article("https://x.com/blog/indexical-philosophy")
+
+
+def test_is_non_article_html_extension_stripping():
+    """Hard-denylist words with .html/.php suffix are also rejected.
+
+    e.g. /materials-science/news-events/newsletter.html has segment
+    "newsletter.html" which is NOT directly in _HARD_NON_ARTICLE, but
+    after stripping the .html → "newsletter" which IS.
+    """
+    assert _is_non_article(
+        "https://mccormick.northwestern.edu/materials-science/"
+        "news-events/newsletter.html")
+    assert _is_non_article("https://x.com/legal/terms.html")
+    assert _is_non_article("https://x.com/cookie-policy.aspx")
+    assert _is_non_article("https://x.com/privacy/index.html")

@@ -437,6 +437,108 @@ def test_filter_empty_list():
 
 
 # ═══════════════════════════════════════════════════════════════════
+# _renumber_content  — image index remapping after filtering
+# ═══════════════════════════════════════════════════════════════════
+
+def test_image_placeholder_renumbering_after_filter():
+    """When _filter_article_images removes some entries, [[IMG:N]] tokens
+    in content_md should be renumbered to match the filtered list."""
+    html = (
+        '<html><body>'
+        '<article>'
+        '<h1>Article Title</h1>'
+        '<p>First paragraph of the article with substantial content that '
+        'describes the topic in detail and provides useful information for '
+        'readers who want to learn more about this interesting subject.</p>'
+        '<img src="/hero.jpg" />'
+        '<p>Middle paragraph with additional context and analysis of the '
+        'key findings from the research team at the university laboratory.</p>'
+        '<img src="/page_loader.png" />'
+        '<p>Third paragraph covering the implications of this research for '
+        'future developments in the field and what it means for practitioners.</p>'
+        '<img src="/favicon-32x32.png" />'
+        '<p>Fourth paragraph wrapping up with conclusions and next steps '
+        'for further investigation and follow-up studies in this area.</p>'
+        '<img src="/chart.png" />'
+        '<p>Final paragraph that concludes the article and offers a summary '
+        'of the most important takeaways for the reader to remember.</p>'
+        '</article>'
+        '</body></html>'
+    )
+    result = extract_from_html(html, url="https://x.com/post")
+    imgs = result["images"]
+    content_md = result["content_md"]
+
+    # Images with "page_loader" or "favicon" should be removed
+    assert all("page_loader" not in img for img in imgs)
+    assert all("favicon" not in img for img in imgs)
+
+    # Kept images should remain
+    assert any("hero.jpg" in img for img in imgs)
+    assert any("chart.png" in img for img in imgs)
+
+    # All [[IMG:N]] tokens in content_md must reference valid indices
+    import re
+    for m in re.finditer(r'\[\[IMG:(\d+)\]\]', content_md):
+        idx = int(m.group(1))
+        assert 0 <= idx < len(imgs), (
+            f"[[IMG:{idx}]] out of range (max {len(imgs)-1}) in content_md")
+
+
+def test_image_placeholder_renumbering_no_filter():
+    """When no images are filtered, indices remain unchanged."""
+    html = (
+        '<html><body>'
+        '<article>'
+        '<h1>Article Title</h1>'
+        '<p>First paragraph with meaningful content that is long enough for '
+        'trafilatura to extract properly without dropping the text content.</p>'
+        '<img src="/photo-a.jpg" />'
+        '<p>Second paragraph continues with more analysis and discussion of '
+        'the main topic to provide a comprehensive overview of the subject.</p>'
+        '<img src="/photo-b.jpg" />'
+        '<p>Third paragraph wrapping up and providing concluding thoughts on '
+        'the matter discussed in the previous paragraphs above this one.</p>'
+        '</article>'
+        '</body></html>'
+    )
+    result = extract_from_html(html, url="https://x.com/post")
+    imgs = result["images"]
+    content_md = result["content_md"]
+
+    # With only clean article images, nothing should be filtered
+    assert any("photo-a.jpg" in img for img in imgs)
+    assert any("photo-b.jpg" in img for img in imgs)
+    assert len(imgs) <= 12  # cap applied
+
+    # All [[IMG:N]] must be in range
+    import re
+    for m in re.finditer(r'\[\[IMG:(\d+)\]\]', content_md):
+        idx = int(m.group(1))
+        assert 0 <= idx < len(imgs), (
+            f"[[IMG:{idx}]] out of range (max {len(imgs)-1})")
+
+
+def test_image_count_capped_at_max():
+    """extract_from_html caps images to _MAX_IMG_PLACEHOLDERS (12)."""
+    # Create HTML with many distinct images
+    imgs_html = "".join(
+        f'<img src="/img{i}.jpg" />' for i in range(20)
+    )
+    html = (
+        '<html><body><article>'
+        '<h1>Many Images</h1>'
+        '<p>Article with many images. ' * 20
+        + imgs_html +
+        '<p>More text to ensure the article is long enough. ' * 10 +
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://x.com/post")
+    assert len(result["images"]) <= 12, (
+        f"images capped at 12, got {len(result['images'])}")
+
+
+# ═══════════════════════════════════════════════════════════════════
 # extract_from_html  — readability → fallback → JSON-LD integration
 # ═══════════════════════════════════════════════════════════════════
 

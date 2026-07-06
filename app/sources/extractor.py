@@ -22,6 +22,8 @@ _IMAGE_EXTS = ("png", "jpg", "jpeg", "webp", "gif", "avif")
 _VIDEO_EXTS = ("mp4", "webm", "mov", "m4v", "ogv", "m3u8")
 # Max images that get [[IMG:N]] position placeholders. Matches rewriter _MAX_IMG.
 _MAX_IMG_PLACEHOLDERS = 12
+# Regex for [[IMG:N]] tokens used in content_md re-numbering.
+_IMG_TOKEN_RE = re.compile(r'\[\[IMG:(\d+)\]\]')
 
 
 def _attr(tag: str, name: str) -> str | None:
@@ -568,12 +570,40 @@ def extract_from_html(html: str, url: str) -> dict:
     # ── 3b. Strip site chrome (loaders, favicons, CMS thumbnails) ──
     # Applied to ALL extraction paths so sidebar/header cruft that leaked
     # through steps 2-3 is removed in addition to the step-1b filtering.
+    old_images = images[:]
     images = _filter_article_images(images)
 
-    # ── 4. Re-inject orphaned image placeholders ──
+    # ── 4. Re-number image placeholders after filtering ──
+    # _filter_article_images may have removed entries from the images list,
+    # which shifts the index that [[IMG:N]] tokens in content_md reference.
+    # Build a mapping from old index → new index and re-number accordingly.
+    old_to_new: dict[int, int] = {}
+    removed_indices: set[int] = set()
+    for old_idx, img in enumerate(old_images):
+        if img in images:
+            new_idx = images.index(img)
+            if old_idx != new_idx:
+                old_to_new[old_idx] = new_idx
+        else:
+            removed_indices.add(old_idx)
+
+    if old_to_new or removed_indices:
+        def _renumber_content(md: str) -> str:
+            """Re-number [[IMG:old]] -> [[IMG:new]] in markdown body."""
+            def _repl(m: re.Match) -> str:
+                old = int(m.group(1))
+                if old in old_to_new:
+                    return f"[[IMG:{old_to_new[old]}]]"
+                if old in removed_indices:
+                    return ""  # image was filtered out
+                return m.group(0)  # out of range — leave as-is
+            return _IMG_TOKEN_RE.sub(_repl, md)
+        content_md = _renumber_content(content_md)
+
+    # ── 4b. Re-inject orphaned image placeholders ──
     # If trafilatura stripped some [[IMG:N]] placeholders (e.g. figure
-    # elements readability kept but trafilatura dropped), prepend them
-    # at the very top so they aren't lost entirely.
+    # elements readability kept but trafilatura dropped), prepend them at
+    # the very top so they aren't lost entirely.
     orphans: list[str] = []
     for i in range(len(images)):
         placeholder = f"[[IMG:{i}]]"
@@ -591,6 +621,12 @@ def extract_from_html(html: str, url: str) -> dict:
     content_md = _strip_cookie_consent(content_md)
 
     images = [urljoin(url, u) for u in images]
+
+    # ── 4c. Cap total images to match rewriter _MAX_IMG ──
+    # The rewriter (rewriter.py) only consumes _MAX_IMG=12 images;
+    # anything beyond that is silently dropped.  Capping here keeps
+    # the data model consistent and avoids bloating the article record.
+    images = images[:_MAX_IMG_PLACEHOLDERS]
 
     # ── Sanity checks ──────────────────────────────────────────────────
     dt = _date_from_html(html)
