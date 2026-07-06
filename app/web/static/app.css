@@ -774,6 +774,17 @@ input[type="checkbox"] {
   transition: color .15s;
 }
 .run-close:hover { color: var(--text); }
+.run-minimize {
+  background: none;
+  border: none;
+  color: var(--text3);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  transition: color .15s;
+}
+.run-minimize:hover { color: var(--text); }
 .run-logs {
   font-family: var(--font-mono);
   font-size: 12px;

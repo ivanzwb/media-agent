@@ -44,10 +44,14 @@ def collect_sources(feeds: FeedsConfig,
     if not enabled:
         return []
     workers = max(1, workers or (os.cpu_count() or 4))
+    total = len(enabled)
+    _counter = [0]  # mutable thread-safe counter for closure
 
     def fetch_one(src):
+        _counter[0] += 1
+        idx = _counter[0]
         if progress:
-            progress(f"抓取来源：{src.name}")
+            progress(f"抓取来源 [{idx}/{total}]：{src.name}")
         try:
             items = _fetch_source(src)
         except Exception as e:  # noqa: BLE001

@@ -121,7 +121,9 @@ def create_app(config: Config | None = None,
         "running": False, "started_at": None, "finished_at": None,
         "stats": {}, "logs": [], "error": None,
         "paused": False, "stop_requested": False, "stopped": False,
+        "source_current": 0, "source_total": 0,
     }
+    _SOURCE_PROG_RE = re.compile(r"抓取来源 \[(\d+)/(\d+)\]")
 
     # ---- operations DB-backed registry (survives page refresh) ----
     from app.db import start_op, finish_op, fail_op, _op_log, get_running_ops
@@ -177,6 +179,11 @@ def create_app(config: Config | None = None,
                 del run_state["logs"][:-500]
             if stats is not None:
                 run_state["stats"] = dict(stats)
+            # Parse source progress from "抓取来源 [n/m]：..."
+            m = _SOURCE_PROG_RE.search(line)
+            if m:
+                run_state["source_current"] = int(m.group(1))
+                run_state["source_total"] = int(m.group(2))
 
     def _pausable_log(msg, stats=None):
         """Like _log but blocks while paused / raises when stop requested."""
@@ -1138,6 +1145,8 @@ def create_app(config: Config | None = None,
                 "error": run_state["error"],
                 "paused": run_state["paused"],
                 "stopped": run_state["stopped"],
+                "source_current": run_state["source_current"],
+                "source_total": run_state["source_total"],
             }
 
     # ---- rewrite progress (per-article) ----

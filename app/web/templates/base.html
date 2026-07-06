@@ -35,12 +35,13 @@
       <span id="run-title">运行中…</span>
       <div>
         <span id="run-stats" class="run-stats"></span>
-        <span id="run-controls">
-          <button id="run-pause-btn" type="button" class="btn small" onclick="pauseRun()" style="display:none">⏸ 暂停</button>
-          <button id="run-resume-btn" type="button" class="btn small" onclick="resumeRun()" style="display:none">▶ 恢复</button>
-          <button id="run-stop-btn" type="button" class="btn small danger" onclick="stopRun()" style="display:none">⏹ 停止</button>
-        </span>
-        <button type="button" class="run-close" onclick="hideRunPanel()">×</button>
+          <span id="run-controls">
+            <button id="run-pause-btn" type="button" class="btn small" onclick="pauseRun()" style="display:none">⏸ 暂停</button>
+            <button id="run-resume-btn" type="button" class="btn small" onclick="resumeRun()" style="display:none">▶ 恢复</button>
+            <button id="run-stop-btn" type="button" class="btn small danger" onclick="stopRun()" style="display:none">⏹ 停止</button>
+          </span>
+          <button id="run-min-btn" type="button" class="run-minimize" onclick="toggleMinimize()" title="最小化">_</button>
+          <button type="button" class="run-close" onclick="hideRunPanel()">×</button>
       </div>
     </div>
     <pre id="run-logs" class="run-logs"></pre>
@@ -48,15 +49,34 @@
 
   <script>
   let runPollTimer = null;
+  let _minimized = localStorage.getItem('runMinimized') === 'true';
 
-  function showRunPanel() { document.getElementById('run-panel').style.display = 'flex'; }
+  function showRunPanel() { document.getElementById('run-panel').style.display = 'flex'; applyMinimized(); }
   function hideRunPanel() { document.getElementById('run-panel').style.display = 'none'; }
+
+  function applyMinimized() {
+    const logs = document.getElementById('run-logs');
+    const btn = document.getElementById('run-min-btn');
+    if (!logs || !btn) return;
+    logs.style.display = _minimized ? 'none' : '';
+    btn.textContent = _minimized ? '‒' : '_';
+  }
+
+  function toggleMinimize() {
+    _minimized = !_minimized;
+    localStorage.setItem('runMinimized', _minimized);
+    applyMinimized();
+  }
 
   function renderRun(s) {
     const st = s.stats || {};
-    document.getElementById('run-stats').textContent =
-      '抓取 ' + (st.fetched || 0) + ' · 归档 ' + (st.archived || 0) +
-      ' · 草稿 ' + (st.drafted || 0);
+    let parts = [];
+    if (s.source_total) {
+      parts.push('来源 ' + s.source_current + '/' + s.source_total);
+    }
+    parts.push('抓取 ' + (st.fetched || 0) + ' · 归档 ' + (st.archived || 0) +
+      ' · 草稿 ' + (st.drafted || 0));
+    document.getElementById('run-stats').textContent = parts.join(' · ');
     const logs = document.getElementById('run-logs');
     const atBottom = logs.scrollTop + logs.clientHeight >= logs.scrollHeight - 20;
     logs.textContent = (s.logs || []).join('\n');
@@ -112,6 +132,10 @@
     btn.disabled = true;
     btn.textContent = '⏳ 启动中…';
     showRunPanel();
+    // Reset minimize for new run
+    _minimized = false;
+    localStorage.setItem('runMinimized', 'false');
+    applyMinimized();
     try {
       const data = await (await fetch('/run', {method: 'POST'})).json();
       if (data.started === false) {
