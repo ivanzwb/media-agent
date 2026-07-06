@@ -921,16 +921,13 @@
     const btn = document.getElementById('rewrite-btn');
     const status = document.getElementById('draft-op-status');
     if (!confirm('重写会覆盖该文章已有的主稿草稿，确定吗？')) return;
-    const prevText = btn.textContent;
     btn.disabled = true;
-    btn.textContent = '⏳ 转写中…';
     status.textContent = '';
     try {
       const resp = await fetch('/archive/' + articleId + '/rewrite', {method: 'POST'});
       const data = await resp.json();
       if (data.started === false) {
         status.textContent = '已有任务在进行';
-        btn.textContent = prevText;
         btn.disabled = false;
         return;
       }
@@ -938,7 +935,6 @@
       showRewriteDraftPanel();
       pollRewriteDraft();
     } catch (e) {
-      btn.textContent = prevText;
       btn.disabled = false;
       alert('转写请求失败');
     }
