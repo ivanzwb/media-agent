@@ -377,7 +377,15 @@ def rewrite(article: Article, provider: LLMProvider) -> Draft:
     videos = getattr(article, "videos", []) or []
 
     # Replace [[IMG:N]] / [[VIDEO:N]] with real media so the LLM sees them inline
-    content = _inline_content(article.content_md[:6000],
+    # Extend the slice to cover all image placeholders — if images lie beyond
+    # 6000 chars they'd be invisible to the LLM and _media_block would
+    # blindly append them as duplicates.
+    body = article.content_md or ""
+    img_end = max([body.find(f"[[IMG:{i}]]")
+                   for i in range(len(article.images or []))
+                   if body.find(f"[[IMG:{i}]]") >= 0] or [0])
+    slice_limit = max(6000, img_end + 200)  # 200 extra chars after last IMG
+    content = _inline_content(body[:slice_limit],
                               article.images or [], videos)
 
     rewrite_prompt = REWRITE_INSTRUCTION.format(
