@@ -50,7 +50,7 @@
       <p class="muted">来源</p>
       <p><a href="{{ meta.source_url }}" target="_blank" rel="noopener">{{ meta.source_name }}</a></p>
       {% if article_id %}
-      <p style="margin-top:4px"><a href="/archive/{{ article_id }}/view" target="_blank" rel="noopener" class="btn small">查看原文</a></p>
+      <p style="margin-top:4px"><button type="button" class="btn small" onclick="viewArticle({{ article_id }})">查看原文</button></p>
       {% endif %}
     </div>
     {% if article_id %}
@@ -1318,6 +1318,32 @@ window.addEventListener('ops-resume', function (e) {
       vidTimer = setTimeout(function () { pollVideo(op.target_id); }, 200);
     }
   });
+  });
+</script>
+
+<!-- Article Viewer Modal (same as archive) -->
+<div id="viewer-modal" class="modal-overlay" style="display:none" onclick="closeViewer(event)">
+  <div class="modal-content">
+    <div class="modal-head">
+      <span class="modal-title">原文</span>
+      <button type="button" class="run-close" onclick="closeViewer()">×</button>
+    </div>
+    <iframe id="viewer-iframe" class="modal-iframe" src="about:blank"></iframe>
+  </div>
+</div>
+
+<script>
+function viewArticle(id) {
+  document.getElementById('viewer-iframe').src = '/archive/' + id + '/view?embed=1';
+  document.getElementById('viewer-modal').style.display = 'flex';
+}
+function closeViewer(e) {
+  if (e && e.target !== e.currentTarget) return;
+  document.getElementById('viewer-modal').style.display = 'none';
+  document.getElementById('viewer-iframe').src = 'about:blank';
+}
+window.addEventListener('message', function (e) {
+  if (e.data === 'close-viewer') closeViewer();
 });
 </script>
 

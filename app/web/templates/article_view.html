@@ -2,12 +2,35 @@
 {% block title %}原文 · {{ article.title }}{% endblock %}
 {% block head %}
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+(function(){
+  if (new URLSearchParams(location.search).get('embed') === '1') {
+    document.documentElement.classList.add('embed');
+  }
+})();
+</script>
+<style>
+.embed .topbar { display: none !important; }
+.embed .container { padding-top: 0; }
+.article-body img { width: 100% !important; max-width: 100% !important; height: auto !important; }
+</style>
 {% endblock %}
 {% block content %}
 <div class="article-head">
-  <a class="btn small" href="/archive">← 返回归档</a>
-  <a class="btn small" href="{{ article.url }}" target="_blank" rel="noopener">原始链接 ↗</a>
+  <a class="btn small" href="/archive" id="btn-back-archive">← 返回归档</a>
+  <a class="btn small" href="{{ article.url }}" target="_blank" rel="noopener" id="btn-original-link">原始链接 ↗</a>
 </div>
+<script>
+(function() {
+  var p = new URLSearchParams(location.search);
+  if (p.get('embed') === '1') {
+    var b = document.getElementById('btn-back-archive');
+    var l = document.getElementById('btn-original-link');
+    if (b) b.style.display = 'none';
+    if (l) l.style.display = 'none';
+  }
+})();
+</script>
 
 <h1>{{ article.title }}</h1>
 <p class="muted">
@@ -48,7 +71,7 @@
   }
 
   function imgHtml(u) {
-    return '<img src="' + u + '" alt="" style="max-width:100%;height:auto;display:block;margin:1em 0" />';
+    return '<img src="' + u + '" alt="" style="width:100%;max-width:100%;height:auto;display:block;margin:1em 0" />';
   }
 
   // Replace [[IMG:N]] / [[VIDEO:N]] placeholders with actual media,
@@ -102,6 +125,27 @@
     outHtml += _imgOrphansUpTo(images.length);
   }
   document.getElementById('article-body').innerHTML = outHtml;
+
+  // Force-fit all images to article-body width (prevents overflow in modals)
+  (function fitImgs() {
+    var b = document.getElementById('article-body');
+    if (!b || !b.querySelectorAll) return;
+    var w = b.clientWidth;
+    if (!w) { setTimeout(fitImgs, 100); return; }
+    b.querySelectorAll('img').forEach(function(img) {
+      img.style.setProperty('width', w + 'px', 'important');
+      img.style.setProperty('height', 'auto', 'important');
+    });
+  })();
+  window.addEventListener('resize', function() {
+    var b = document.getElementById('article-body');
+    if (!b || !b.querySelectorAll) return;
+    var w = b.clientWidth;
+    b.querySelectorAll('img').forEach(function(img) {
+      img.style.setProperty('width', w + 'px', 'important');
+      img.style.setProperty('height', 'auto', 'important');
+    });
+  });
 
   // Orphaned videos (unlikely) — append at the end.
   var extraVids = videos.filter(function (_u, i) { return !placedVid[i]; });
