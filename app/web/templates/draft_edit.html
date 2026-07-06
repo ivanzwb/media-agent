@@ -49,6 +49,9 @@
     <div class="sidebar-section">
       <p class="muted">来源</p>
       <p><a href="{{ meta.source_url }}" target="_blank" rel="noopener">{{ meta.source_name }}</a></p>
+      {% if article_id %}
+      <p style="margin-top:4px"><a href="/archive/{{ article_id }}/view" target="_blank" rel="noopener" class="btn small">查看原文</a></p>
+      {% endif %}
     </div>
     {% if article_id %}
     <div class="sidebar-section">
