@@ -665,6 +665,35 @@ input[type="checkbox"] {
 .warn strong { color: var(--amber); }
 .warn ul { margin: 6px 0 0; padding-left: 18px; }
 
+/* Collapsible warning — details hidden by default, toggle on header click */
+.collapse-warn { padding: 0; }
+.collapse-header {
+  padding: 10px 16px;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.collapse-header:hover { background: rgba(245,158,11,.12); }
+.collapse-arrow {
+  font-size: 11px;
+  transition: transform .2s;
+  color: var(--amber);
+}
+.collapse-warn.open .collapse-arrow { transform: rotate(90deg); }
+.collapse-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height .25s ease, padding .25s ease;
+  padding: 0 16px;
+}
+.collapse-warn.open .collapse-body {
+  max-height: 600px;
+  padding: 0 16px 12px;
+}
+.collapse-warn.open .collapse-body ul { margin: 6px 0 0; }
+
 /* Alert variants */
 .alert {
   padding: 10px 14px;
@@ -820,6 +849,78 @@ input[type="checkbox"] {
   background: var(--rose);
   box-shadow: 0 0 8px var(--rose);
 }
+
+/* ── Rewrite Multi-Entry Panel ── */
+.rewrite-entries {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.rewrite-entry {
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.rewrite-entry:last-child { border-bottom: none; }
+.rewrite-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s;
+}
+.rewrite-entry-head:hover { background: var(--surface2); }
+.rewrite-glow {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.rewrite-glow.running {
+  background: var(--amber);
+  box-shadow: 0 0 6px var(--amber);
+  animation: breatheIn 1.5s ease-in-out infinite;
+}
+.rewrite-glow.done {
+  background: var(--emerald);
+  box-shadow: 0 0 6px var(--emerald);
+}
+.rewrite-glow.error {
+  background: var(--rose);
+  box-shadow: 0 0 6px var(--rose);
+}
+.rewrite-entry-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.rewrite-entry-status {
+  font-size: 11px;
+  color: var(--text3);
+  flex-shrink: 0;
+}
+.rewrite-entry-logs {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text2);
+  background: var(--bg);
+  padding: 6px 14px 10px 14px;
+  margin: 0;
+  overflow-y: auto;
+  max-height: 140px;
+  white-space: pre-wrap;
+  display: none;
+}
+.rewrite-entry.open .rewrite-entry-logs { display: block; }
+.rewrite-entry.open .rewrite-entry-head { background: var(--surface2); }
+
+/* Rewrite panel minimized state */
+#rewrite-panel.minimized .rewrite-entries { display: none; }
 
 /* ── Dashboard Timeline ── */
 .timeline {
