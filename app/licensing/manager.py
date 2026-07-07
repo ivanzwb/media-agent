@@ -55,6 +55,11 @@ class LicenseManager:
             self.features = set(F.PRO_FEATURES)
             self.reason = "开发者模式（MEDIA_AGENT_LICENSE_DEV）"
             return
+        # Tamper check: a swapped public key invalidates all licenses.
+        from app.licensing import integrity
+        if not integrity.public_key_ok():
+            self.reason = "授权组件完整性校验失败"
+            return
         blob = lstore.load_blob(self.data_dir)
         if not blob:
             return

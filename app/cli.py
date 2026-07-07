@@ -74,5 +74,10 @@ def serve(host: str = typer.Option("127.0.0.1"),
     uvicorn.run(create_app(cfg, feeds_path=feeds), host=host, port=port)
 
 
+def main():
+    """Console-script entry point (see pyproject.toml [project.scripts])."""
+    app()
+
+
 if __name__ == "__main__":
     app()

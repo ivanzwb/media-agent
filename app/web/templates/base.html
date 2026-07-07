@@ -6,6 +6,21 @@
   <title>{% block title %}Media Agent{% endblock %}</title>
   <link rel="icon" type="image/svg+xml" href="/static/logo.svg"/>
   <link rel="stylesheet" href="/static/app.css"/>
+  <style>
+    .lic-badge{font-size:12px;padding:2px 8px;border-radius:10px;margin-left:6px;
+      text-decoration:none;border:1px solid transparent}
+    .lic-badge.free{background:#f0f0f0;color:#888;border-color:#ddd}
+    .lic-badge.pro{background:#07C160;color:#fff}
+    .lic-badge.dev{background:#2f6fb3;color:#fff}
+    .pro-feature.locked{opacity:.45;cursor:not-allowed}
+    .lic-modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);
+      display:none;align-items:center;justify-content:center;z-index:9999}
+    .lic-modal{background:#fff;max-width:440px;width:90%;border-radius:10px;
+      padding:22px 24px;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+    .lic-modal h3{margin:0 0 8px}
+    .lic-modal ul{margin:10px 0;padding-left:20px;line-height:1.9;color:#555}
+    .lic-modal .row{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
+  </style>
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -20,6 +35,8 @@
       <a href="/drafts" class="{{ 'on' if active=='drafts' else '' }}">草稿</a>
       <a href="/sources" class="{{ 'on' if active=='sources' else '' }}">来源</a>
       <a href="/settings" class="{{ 'on' if active=='settings' else '' }}">设置</a>
+      <a id="lic-badge" class="lic-badge free" href="/settings#sec-license"
+         title="授权状态"></a>
     </nav>
     <div class="run-form">
       <button id="run-btn" type="button" class="btn primary" onclick="startRun()">▶ 立即运行</button>
@@ -46,6 +63,65 @@
     </div>
     <pre id="run-logs" class="run-logs"></pre>
   </div>
+
+  <!-- first-run license guide -->
+  <div id="lic-modal-mask" class="lic-modal-mask">
+    <div class="lic-modal">
+      <h3>升级 Pro 版，解锁全部功能</h3>
+      <p class="muted">当前为免费版。免费版可用：RSS/网页抓取、去重归档、主题分类、
+        kitten 配音、每日 1 篇 LLM 改写。</p>
+      <p>Pro 版额外解锁：</p>
+      <ul>
+        <li>无限 LLM 改写</li>
+        <li>讲解视频生成</li>
+        <li>平台同步 / 一键发布（公众号 / 头条 / 视频号）</li>
+        <li>声音复刻配音</li>
+        <li>定时调度</li>
+      </ul>
+      <div class="row">
+        <button type="button" class="btn" onclick="dismissLicenseGuide()">稍后再说</button>
+        <button type="button" class="btn primary" onclick="location.href='/settings#sec-license'">去激活</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  function openLicenseGuide() {
+    const m = document.getElementById('lic-modal-mask');
+    if (m) m.style.display = 'flex';
+  }
+  function dismissLicenseGuide() {
+    localStorage.setItem('lic_guide_dismissed', '1');
+    const m = document.getElementById('lic-modal-mask');
+    if (m) m.style.display = 'none';
+  }
+  // Reflect license status: nav badge + grey Pro-only controls + first-run guide.
+  document.addEventListener('DOMContentLoaded', async function () {
+    try {
+      const lic = await (await fetch('/api/license/status')).json();
+      const badge = document.getElementById('lic-badge');
+      if (badge) {
+        badge.textContent = lic.dev ? 'DEV' : (lic.active ? 'Pro 版' : '免费版');
+        badge.className = 'lic-badge ' + (lic.dev ? 'dev' : (lic.active ? 'pro' : 'free'));
+      }
+      if (!lic.active) {
+        document.querySelectorAll('.pro-feature').forEach(function (el) {
+          el.classList.add('locked');
+          el.setAttribute('title', '此功能需升级 Pro 版');
+          if (el.tagName === 'BUTTON') {
+            el.disabled = true;
+          } else {
+            el.setAttribute('aria-disabled', 'true');
+            el.addEventListener('click', function (e) {
+              e.preventDefault(); e.stopPropagation(); openLicenseGuide();
+            }, true);
+          }
+        });
+        if (localStorage.getItem('lic_guide_dismissed') !== '1') openLicenseGuide();
+      }
+    } catch (e) { /* ignore */ }
+  });
+  </script>
 
   <script>
   let runPollTimer = null;

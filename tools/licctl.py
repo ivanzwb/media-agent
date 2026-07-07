@@ -47,10 +47,21 @@ def keygen() -> None:
         serialization.NoEncryption())
     pub_raw = priv.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    pub_str = _b64(pub_raw)
     _PRIV.write_text(_b64(priv_raw), encoding="utf-8")
-    _PUB.write_text(_b64(pub_raw), encoding="utf-8")
+    _PUB.write_text(pub_str, encoding="utf-8")
+    # Pin the public key hash for the tamper self-check (integrity.py).
+    import hashlib
+    import re
+    h = hashlib.sha256(pub_str.encode("utf-8")).hexdigest()
+    integ = _ROOT / "app" / "licensing" / "integrity.py"
+    txt = integ.read_text(encoding="utf-8")
+    txt = re.sub(r'EXPECTED_PUBKEY_SHA256 = "[^"]*"',
+                 f'EXPECTED_PUBKEY_SHA256 = "{h}"', txt)
+    integ.write_text(txt, encoding="utf-8")
     print(f"private key -> {_PRIV}  (SECRET — do not commit)")
     print(f"public  key -> {_PUB}   (commit this)")
+    print(f"pinned hash -> app/licensing/integrity.py (commit this)")
 
 
 def _load_priv() -> Ed25519PrivateKey:

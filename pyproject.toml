@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "media-agent"
+version = "0.1.0"
+description = "本地自媒体内容流水线：抓取 → 去重归档 → 主题分类 → LLM 改写 → 讲解视频 → 多平台同步"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "ivanzwb" }]
+dependencies = [
+    "feedparser>=6.0.11",
+    "httpx>=0.27.2",
+    "trafilatura>=1.12.2",
+    "readability-lxml>=0.8.4.1",
+    "PyYAML>=6.0.2",
+    "python-frontmatter>=1.1.0",
+    "typer>=0.12.5",
+    "click>=8.1.7",
+    "openai>=1.54.4",
+    "fastapi>=0.115.5",
+    "uvicorn[standard]>=0.32.1",
+    "jinja2>=3.1.4",
+    "python-multipart>=0.0.12",
+    "pillow>=12.2.0",
+    "APScheduler>=3.10.4",
+    "ddgs>=9.0.0",
+    "curl_cffi>=0.7.0",
+    "json5>=0.9.0",
+    "edge-tts>=6.1.0",
+    "yt-dlp>=2024.1.1",
+    "cryptography>=42.0.0",
+]
+
+[project.optional-dependencies]
+# Heavy / optional integrations (see README + requirements.txt notes).
+voice = ["fish-audio-sdk"]
+render = ["playwright"]
+dev = ["pytest>=8.3.3", "build", "pyinstaller"]
+
+[project.scripts]
+media-agent = "app.cli:main"
+
+# Ship only the app package. `tools/` (vendor licctl + the SIGNING PRIVATE KEY)
+# is intentionally NOT packaged, so the private key can never end up in a wheel.
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+# Bundle templates / static / the trusted PUBLIC key into the wheel.
+[tool.setuptools.package-data]
+"app.web" = ["templates/*.html", "static/*", "static/fonts/*"]
+"app.licensing" = ["public_key.b64"]

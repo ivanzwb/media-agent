@@ -103,6 +103,17 @@ def test_free_rewrite_daily_quota(tmp_path, monkeypatch):
     assert not G.rewrite_allowed(mgr, store)     # quota exhausted
 
 
+def test_integrity_rejects_swapped_public_key(tmp_path, monkeypatch):
+    priv = _keypair(monkeypatch)
+    # pin integrity to a hash that won't match the (test) public key
+    monkeypatch.setattr("app.licensing.integrity.EXPECTED_PUBKEY_SHA256",
+                        "deadbeef")
+    mgr = LicenseManager(tmp_path)
+    ok, msg = mgr.activate(_sign(priv))
+    assert not ok and "完整性" in msg
+    assert not mgr.active
+
+
 def test_pro_rewrite_unlimited(tmp_path, monkeypatch):
     priv = _keypair(monkeypatch)
     mgr = LicenseManager(tmp_path)

@@ -92,15 +92,15 @@
         <option value="warm">暖橙·杂志</option>
         <option value="blue">科技蓝</option>
       </select>
-      <button type="button" class="btn small primary" title="先保存草稿，再推送图文到公众号草稿箱"
+      <button type="button" class="btn small primary pro-feature" title="先保存草稿，再推送图文到公众号草稿箱"
               onclick="publishWeChat({{ draft.id }}, 'draft', 'article')">推送草稿箱</button>
-      <button type="button" class="btn small" title="创建草稿并直接发布（不可撤回）"
+      <button type="button" class="btn small pro-feature" title="创建草稿并直接发布（不可撤回）"
               onclick="publishWeChat({{ draft.id }}, 'publish', 'article')">直接发布</button>
-      <button type="button" class="btn small" title="复制美化后的 HTML，粘贴到公众号编辑器正文"
+      <button type="button" class="btn small pro-feature" title="复制美化后的 HTML，粘贴到公众号编辑器正文"
               onclick="copyStyledHtml({{ draft.id }}, 'wechat')">复制美化HTML</button>
       <span class="tb-sep">|</span>
       <span class="tb-label">头条：</span>
-      <button type="button" class="btn small primary" title="复制美化 HTML 并打开头条图文发布页，正文里 Ctrl+V 粘贴"
+      <button type="button" class="btn small primary pro-feature" title="复制美化 HTML 并打开头条图文发布页，正文里 Ctrl+V 粘贴"
               onclick="copyStyledHtml({{ draft.id }}, 'toutiao', 'https://mp.toutiao.com/profile_v4/graphic/publish')">复制并打开头条</button>
       <a class="btn small" href="javascript:void(0)" onclick="goBackOrList()">返回列表</a>
     </div>
@@ -130,7 +130,7 @@
   <select id="tts-voice" style="margin-bottom:4px"></select>
 </div>
 <div class="adapt-row">
-  <button type="button" class="btn primary" id="nar-btn"
+  <button type="button" class="btn primary pro-feature" id="nar-btn"
           onclick="startNarration({{ draft.id }})">
     {{ '重新生成讲解脚本+配音' if narration else '生成讲解脚本+配音' }}
   </button>
@@ -156,7 +156,7 @@
      data-article-title="{{ article_title }}"></div>
 
 <div class="adapt-row" style="margin-top:14px">
-  <button type="button" class="btn primary" id="vid-btn"
+  <button type="button" class="btn primary pro-feature" id="vid-btn"
           onclick="startVideo({{ draft.id }})">
     {{ '重新合成讲解视频' if has_video else '合成讲解视频（mp4）' }}
   </button>
@@ -189,14 +189,14 @@
      onclick="syncToPlatform('{{ p.id }}', {{ draft.id }})">{{ p.label }}</a>
   {% endfor %}
   <span class="tb-sep">|</span>
-  <button type="button" class="btn small primary"
+  <button type="button" class="btn small primary pro-feature"
           title="上传该视频到公众号素材库（≤10MB MP4）"
           onclick="publishWeChat({{ draft.id }}, 'draft', 'video')">上传视频到公众号素材库</button>
-  <button type="button" class="btn small"
+  <button type="button" class="btn small pro-feature"
           title="生成视频号文案并打开视频号助手发表页（半自动，无封号风险）"
           onclick="prepareChannels({{ draft.id }})">视频号发布（半自动）</button>
   {% for p in platforms %}{% if p.video_publish_url %}
-  <button type="button" class="btn small"
+  <button type="button" class="btn small pro-feature"
           title="生成{{ p.label }}视频文案并打开发布页（半自动）"
           onclick="preparePlatformVideo({{ draft.id }}, '{{ p.id }}')">{{ p.label }}（半自动）</button>
   {% endif %}{% endfor %}

@@ -1,0 +1,7 @@
+recursive-include app/web/templates *
+recursive-include app/web/static *
+include app/licensing/public_key.b64
+include requirements.txt
+include README.md
+# Never ship the license signing private key.
+exclude tools/license_private_key.b64
