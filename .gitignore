@@ -20,3 +20,7 @@ output.json
 tools/license_private_key.b64
 license.bin
 .licstate
+# Python build artifacts
+dist/
+build/
+*.egg-info/
