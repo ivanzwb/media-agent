@@ -1,0 +1,157 @@
+name: Build Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+          pip install "click<8.2" pyinstaller fish-audio-sdk playwright
+
+      - name: Build
+        shell: pwsh
+        run: |
+          pyinstaller --onedir `
+            --name "media-agent" `
+            --add-data "app/web/templates;app/web/templates" `
+            --add-data "app/web/static;app/web/static" `
+            --add-data "app/licensing/public_key.b64;app/licensing" `
+            --exclude-module "torch" `
+            --exclude-module "torchvision" `
+            --exclude-module "torchaudio" `
+            --exclude-module "transformers" `
+            --exclude-module "scipy" `
+            --exclude-module "matplotlib" `
+            --exclude-module "pandas" `
+            --exclude-module "sklearn" `
+            --exclude-module "scikit-learn" `
+            --exclude-module "librosa" `
+            --exclude-module "numba" `
+            --exclude-module "soundfile" `
+            --exclude-module "onnxruntime" `
+            --exclude-module "tensorflow" `
+            --exclude-module "pyarrow" `
+            --exclude-module "IPython" `
+            --exclude-module "jedi" `
+            --exclude-module "parso" `
+            --exclude-module "pytest" `
+            --exclude-module "nbformat" `
+            --exclude-module "jsonschema" `
+            --exclude-module "lark" `
+            --exclude-module "modelscope" `
+            --exclude-module "lightning" `
+            --exclude-module "hydra" `
+            --exclude-module "altair" `
+            --hidden-import "uvicorn" `
+            --hidden-import "uvicorn.logging" `
+            --hidden-import "uvicorn.loops.auto" `
+            --hidden-import "uvicorn.protocols.http.auto" `
+            --hidden-import "uvicorn.protocols.websockets.auto" `
+            --hidden-import "fastapi" `
+            --hidden-import "jinja2" `
+            --hidden-import "cryptography" `
+            --hidden-import "cryptography.fernet" `
+            --hidden-import "apscheduler" `
+            --hidden-import "apscheduler.triggers.cron" `
+            --hidden-import "httpx" `
+            --console `
+            app/cli.py
+          Remove-Item -Recurse -Force build, media-agent.spec -ErrorAction SilentlyContinue
+          Copy-Item setup-optional.bat dist/media-agent/setup-optional.bat
+
+      - name: Package (zip)
+        shell: bash
+        run: |
+          cd dist
+          zip -r "media-agent-${GITHUB_REF_NAME}-win64.zip" media-agent/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: media-agent-windows
+          path: dist/media-agent-*.zip
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+          pip install "click<8.2" pyinstaller fish-audio-sdk playwright
+
+      - name: Build
+        run: |
+          pyinstaller --onedir \
+            --name "media-agent" \
+            --add-data "app/web/templates:app/web/templates" \
+            --add-data "app/web/static:app/web/static" \
+            --add-data "app/licensing/public_key.b64:app/licensing" \
+            --exclude-module "torch" \
+            --exclude-module "torchvision" \
+            --exclude-module "torchaudio" \
+            --exclude-module "transformers" \
+            --exclude-module "scipy" \
+            --exclude-module "matplotlib" \
+            --exclude-module "pandas" \
+            --exclude-module "sklearn" \
+            --exclude-module "scikit-learn" \
+            --exclude-module "librosa" \
+            --exclude-module "numba" \
+            --exclude-module "soundfile" \
+            --exclude-module "onnxruntime" \
+            --exclude-module "tensorflow" \
+            --exclude-module "pyarrow" \
+            --exclude-module "IPython" \
+            --exclude-module "jedi" \
+            --exclude-module "parso" \
+            --exclude-module "pytest" \
+            --exclude-module "nbformat" \
+            --exclude-module "jsonschema" \
+            --exclude-module "lark" \
+            --exclude-module "modelscope" \
+            --exclude-module "lightning" \
+            --exclude-module "hydra" \
+            --exclude-module "altair" \
+            --hidden-import "uvicorn" \
+            --hidden-import "uvicorn.logging" \
+            --hidden-import "uvicorn.loops.auto" \
+            --hidden-import "uvicorn.protocols.http.auto" \
+            --hidden-import "uvicorn.protocols.websockets.auto" \
+            --hidden-import "fastapi" \
+            --hidden-import "jinja2" \
+            --hidden-import "cryptography" \
+            --hidden-import "cryptography.fernet" \
+            --hidden-import "apscheduler" \
+            --hidden-import "apscheduler.triggers.cron" \
+            --hidden-import "httpx" \
+            --console \
+            app/cli.py
+          rm -rf build media-agent.spec
+
+      - name: Package (zip)
+        run: |
+          cp setup-optional.sh dist/media-agent/
+          cd dist
+          zip -r "media-agent-${GITHUB_REF_NAME}-macos.zip" media-agent/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: media-agent-macos
+          path: dist/media-agent-*.zip
