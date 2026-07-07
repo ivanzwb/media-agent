@@ -74,8 +74,17 @@ jobs:
       - name: Package (zip)
         shell: bash
         run: |
-          cd dist
-          zip -r "media-agent-${GITHUB_REF_NAME}-win64.zip" media-agent/
+          python -c "
+          import zipfile
+          name = f'media-agent-\${{ github.ref_name }}-win64.zip'
+          with zipfile.ZipFile(f'dist/{name}', 'w', zipfile.ZIP_DEFLATED) as z:
+              import os
+              for dp, _, files in os.walk('dist/media-agent'):
+                  for f in files:
+                      fp = os.path.join(dp, f)
+                      z.write(fp, os.path.relpath(fp, 'dist'))
+          print(f'Created dist/{name}')
+          "
 
       - uses: actions/upload-artifact@v4
         with:
@@ -148,8 +157,17 @@ jobs:
       - name: Package (zip)
         run: |
           cp setup-optional.sh dist/media-agent/
-          cd dist
-          zip -r "media-agent-${GITHUB_REF_NAME}-macos.zip" media-agent/
+          python -c "
+          import zipfile
+          name = f'media-agent-${{ github.ref_name }}-macos.zip'
+          with zipfile.ZipFile(f'dist/{name}', 'w', zipfile.ZIP_DEFLATED) as z:
+              import os
+              for dp, _, files in os.walk('dist/media-agent'):
+                  for f in files:
+                      fp = os.path.join(dp, f)
+                      z.write(fp, os.path.relpath(fp, 'dist'))
+          print(f'Created dist/{name}')
+          "
 
       - uses: actions/upload-artifact@v4
         with:
