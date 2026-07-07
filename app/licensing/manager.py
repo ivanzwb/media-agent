@@ -69,7 +69,7 @@ class LicenseManager:
             return
         # machine binding
         bound = payload.get("machine_id")
-        if bound and bound != machine_id():
+        if bound and bound != machine_id()[:len(bound)]:
             self.reason = "授权绑定到其他机器"
             return
         # clock rollback check
@@ -129,7 +129,7 @@ class LicenseManager:
         if not payload or not lverify.verify_payload(payload, sig):
             return False, "激活码无效或签名校验失败"
         bound = payload.get("machine_id")
-        if bound and bound != machine_id():
+        if bound and bound != machine_id()[:len(bound)]:
             return False, "该激活码绑定到其他机器，无法在本机使用"
         exp = _parse_dt(payload.get("expires_at"))
         if exp and datetime.now(timezone.utc) > exp:
