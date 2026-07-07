@@ -75,15 +75,19 @@ REWRITE_INSTRUCTION = (
     "- 不得不确定原文是否提及就写「据 X 报道/分析」\n"
     "- 引用原文一定要准确对应，不要混淆不同来源的信息\n\n"
     "### 图文结合\n\n"
-    "- 原文正文中的图片（![]()）与视频（<iframe>）已嵌入对应段落之间\n"
-    "- 改写时保留最相关的 **2-4 张** 图片，放在正文中最合适的位置\n"
-    "- 如果有原文视频（<iframe>），也必须放在正文中与内容相关的合适位置，不要堆在开头或结尾\n"
+    "{manifest}\n\n"
+    "### 图片/视频插入规则\n\n"
+    "- 原文中的图片已经用 `![](url)` 格式嵌入在正文中了。"
+    "在改写时，**保留这些 `![](url)` 在原文中出现的位置附近**，不要全部移到文末。\n"
+    "- 保留最相关的 **2-4 张** 图片，每张插在与内容最相关的段落之间\n"
+    "- 如果有原文视频（<iframe>），也必须在相关内容附近插入 `[[VID:0]]`，不要堆在开头或结尾\n"
     "- 每张图/每个视频要与附近文字内容相关\n"
-    "- 如果某张图/视频跟内容不相关就删掉，不要硬塞\n\n"
+    "- 如果某张图/视频跟内容不相关就删掉，不要硬塞\n"
+    "- 如果一个 `![](url)` 已经在正文中合适的位置，就保留它\n\n"
     "输出严格的 JSON，字段：\n"
     '  "title_candidates": [3 个吸睛但不虚假的标题],\n'
     '  "body_md": "Markdown 正文（中文数字编号章节+短段落+'
-    '图片用 ![]() 语法、视频用 <iframe> 语法在相关段落间自然嵌入）"\n'
+    '图片用 ![](url) 保留或 [[IMG:0]] 短占位符、视频用 [[VID:0]] 插入）"\n'
     "不要输出 JSON 以外的任何内容。\n\n"
     "原文标题：{title}\n来源：{source}\n\n原文正文：\n{content}"
 )
@@ -98,7 +102,7 @@ CHECK_INSTRUCTION = (
 
 _MAX_IMG = 12
 _MAX_VID = 8
-_PLACEHOLDER_RE = re.compile(r"\[{1,2}\s*(IMG|VID)\s*(\d+)\s*\]{1,2}", re.I)
+_PLACEHOLDER_RE = re.compile(r"\[{1,2}\s*(IMG|VID)\s*:\s*(\d+)\s*\]{1,2}", re.I)
 
 
 def _unique(items: list[str]) -> list[str]:
@@ -139,7 +143,14 @@ def _video_embed(url: str) -> str:
 def _build_manifest(images: list[str], videos: list[str]):
     """Return (manifest_text, media_map) for placeholder-based insertion.
 
-    media_map maps a token like "IMG1" -> ("img"|"vid", url).
+    Uses zero-indexed colon format (``[[IMG:0]]``) matching the extractor's
+    output so the LLM sees consistent tokens in the source body and can
+    reproduce them in its output.  media_map maps a token like ``"IMG0"`` ->
+    ``("img"|"vid", url)``.
+
+    The manifest text now primarily describes the images for the LLM's
+    awareness — they are already pre-expanded as ``![](url)`` inline in
+    the source body by the time the LLM sees them.
     """
     imgs = _unique(images or [])[:_MAX_IMG]
     vids = _unique(videos or [])[:_MAX_VID]
@@ -147,22 +158,23 @@ def _build_manifest(images: list[str], videos: list[str]):
     lines: list[str] = []
     if imgs:
         lines.append(
-            "【可用配图】请在 body_md 中与内容相关的段落之间插入下列占位符"
-            "（每个独占一行，最多用一次，内容不相关就不要插入）：")
-        for i, u in enumerate(imgs, 1):
+            "【可用配图】已用 `![](url)` 格式嵌入在原文正文中。"
+            "改写时根据内容相关性保留（与原文位置相近、与段落内容相关），"
+            "不相关可删除：")
+        for i, u in enumerate(imgs):
             tok = f"IMG{i}"
             media_map[tok] = ("img", u)
-            lines.append(f"[[{tok}]] - {_hint(u)}")
+            lines.append(f"- {_hint(u)}")
     if vids:
-        lines.append("【可用视频】同理用下列占位符：")
-        for i, u in enumerate(vids, 1):
+        lines.append("【可用视频】用 [[VID:0]] 占位符插入正文最相关位置：")
+        for i, u in enumerate(vids):
             tok = f"VID{i}"
             media_map[tok] = ("vid", u)
-            lines.append(f"[[{tok}]] - {_hint(u)}")
+            lines.append(f"  [[VID:{i}]] - {_hint(u)}")
     if media_map:
         lines.append(
-            "规则：每张图片都必须在正文最相关的位置插入占位符（如 [[IMG1]]），"
-            "不要编造不存在的图片/视频，不要把所有图片堆在文末。")
+            "规则：不要编造不存在的图片或视频，不要把所有媒体堆在文末，"
+            "确保每张图/视频与附近文字内容相关。")
     return "\n".join(lines), media_map
 
 
@@ -202,6 +214,77 @@ def _media_block(images: list[str], videos: list[str], existing: str) -> str:
         parts.append("\n\n## 视频（来自原文）\n")
         parts.extend(_video_embed(_relativize_media(u)) for u in vids)
     return "\n".join(parts)
+
+
+def _interleave_missing_images(body_md: str, images: list[str]) -> str:
+    """Distribute images NOT already in *body_md* at section boundaries
+    (``## …`` headings) instead of dumping them all at the end.
+
+    Images whose URL (absolute or relativized) already appears in the body
+    are skipped to avoid duplicates.  The remaining images are spread across
+    natural section breaks in the article, giving a reading flow closer to
+    the original layout.  Any overflow past available section boundaries
+    falls back to appending at the end.
+    """
+    images = _unique(images or [])[:_MAX_IMG]
+    if not images:
+        return body_md
+
+    # Determine which images are already present in the body
+    missing: list[str] = []
+    for u in images:
+        if u not in body_md and _relativize_media(u) not in body_md:
+            missing.append(u)
+    if not missing:
+        return body_md
+
+    # Collect insertion points: blank-line-bounded paragraph breaks plus
+    # lines that start a new `##` section heading.
+    lines = body_md.split("\n")
+    # Prefer section headings — insert ONE image before each `## …` heading
+    # (skipping the very first heading to avoid leading-image clutter).
+    heading_indices = [
+        i for i, ln in enumerate(lines)
+        if re.match(r"^## ", ln)
+    ]
+    # If there aren't enough section headings, also use paragraph breaks
+    # (blank lines followed by non-heading text).
+    para_break_indices: list[int] = []
+    if len(heading_indices) < len(missing):
+        for i in range(1, len(lines)):
+            if lines[i - 1].strip() == "" and lines[i].strip():
+                if i not in heading_indices:
+                    para_break_indices.append(i)
+
+    # Build the combined list of insertion positions.
+    # Place images BEFORE the heading/paragraph so they visually anchor
+    # the following section.
+    insert_positions: list[int] = []
+    # Use headings first (skipping the very first one)
+    for idx in heading_indices[1:]:
+        insert_positions.append(idx)
+    # Fill remaining slots with paragraph breaks
+    need = len(missing) - len(insert_positions)
+    if need > 0:
+        insert_positions.extend(para_break_indices[:need])
+
+    # Insert images at each position (walk forward, tracking offset so
+    # earlier insertions don't shift later positions).
+    result_lines = list(lines)
+    offset = 0
+    for i, pos in enumerate(sorted(set(insert_positions))):
+        if i >= len(missing):
+            break
+        img_url = _relativize_media(missing[i])
+        result_lines.insert(pos + offset, f"\n![]({img_url})\n")
+        offset += 1
+
+    # Any remaining images go at the very end (original fallback)
+    for i in range(len(missing) - offset):
+        img_url = _relativize_media(missing[offset + i])
+        result_lines.append(f"\n![]({img_url})\n")
+
+    return "\n".join(result_lines)
 
 
 _CODE_FENCE = re.compile(r'^```(?:\w+)?\s*\n(.*?)\n```\s*$', re.DOTALL)
@@ -374,23 +457,33 @@ def _inline_content(content_md: str, images: list[str],
 
 
 def rewrite(article: Article, provider: LLMProvider) -> Draft:
+    images = article.images or []
     videos = getattr(article, "videos", []) or []
 
-    # Replace [[IMG:N]] / [[VIDEO:N]] with real media so the LLM sees them inline
-    # Extend the slice to cover all image placeholders — if images lie beyond
-    # 6000 chars they'd be invisible to the LLM and _media_block would
-    # blindly append them as duplicates.
-    body = article.content_md or ""
-    img_end = max([body.find(f"[[IMG:{i}]]")
-                   for i in range(len(article.images or []))
-                   if body.find(f"[[IMG:{i}]]") >= 0] or [0])
-    slice_limit = max(6000, img_end + 200)  # 200 extra chars after last IMG
-    content = _inline_content(body[:slice_limit],
-                              article.images or [], videos)
+    # Build manifest so LLM knows which media tokens it can use
+    manifest, media_map = _build_manifest(images, videos)
+
+    # Pre-expand [[IMG:N]] / [[VIDEO:N]] tokens to real markdown images so
+    # the LLM sees them IN CONTEXT at their original positions — this is much
+    # more reliable than asking the LLM to manually reproduce [[IMG:N]] tokens.
+    body_raw = article.content_md or ""
+    body = _inline_content(body_raw, images, videos)
+
+    # Ensure the visible body is long enough that images embedded by
+    # _inline_content are meaningful (no strict slice — we want the full
+    # article context with images inline).
+    img_end = max(
+        [body.find(_relativize_media(u)) for u in images
+         if body.find(_relativize_media(u)) >= 0]
+        or [body.find(_relativize_media(v)) for v in videos
+            if body.find(_relativize_media(v)) >= 0]
+        or [0])
+    slice_limit = max(8000, img_end + 500)
+    content = body[:slice_limit]
 
     rewrite_prompt = REWRITE_INSTRUCTION.format(
         title=article.title, source=article.source_name,
-        content=content)
+        manifest=manifest, content=content)
     raw = provider.chat([
         Message(role="system", content=REWRITE_SYSTEM),
         Message(role="user", content=rewrite_prompt),
@@ -403,16 +496,25 @@ def rewrite(article: Article, provider: LLMProvider) -> Draft:
         title_candidates = [article.title]
         body_md = raw
 
-    # Append any remaining (unused) media at the end so nothing is lost
-    media = _media_block(article.images, videos, body_md)
+    # Replace any stray [[IMG:N]] / [[VID:N]] tokens the LLM may have output
+    body_md = _apply_placeholders(body_md, media_map)
+
+    # Distribute images the LLM didn't place inline across section boundaries
+    # (instead of dumping them all at the end).
+    body_md = _interleave_missing_images(body_md, images)
+
+    # Append any remaining (unused) videos at the end so nothing is lost
+    vid_block = _media_block([], videos, body_md)
     body_with_source = (
-        f"{body_md}{media}\n\n---\n**信息来源**："
+        f"{body_md}{vid_block}\n\n---\n**信息来源**："
         f"[{article.source_name}]({article.url})\n"
     )
 
-    # Fact-check on the plain rewritten text
+    # Fact-check on the PLAIN rewritten text (use body_raw without inlined
+    # image URLs so the fact-checker compares text against text).
+    check_content = body_raw[:slice_limit]
     check_prompt = CHECK_INSTRUCTION.format(
-        source_content=content, draft=body_md)
+        source_content=check_content, draft=body_md)
     check_raw = provider.chat([Message(role="user", content=check_prompt)])
     check_parsed = _extract_json(check_raw) or {}
     flagged = check_parsed.get("flagged_claims", []) or []

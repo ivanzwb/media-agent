@@ -7,6 +7,7 @@ from app.pipeline.rewriter import (
     rewrite, _inline_content, _video_embed,
     _extract_json, _strip_code_fences, _extract_code_fenced_json,
     _repair_json_control_chars, _media_block, _relativize_media,
+    _build_manifest, _apply_placeholders, _interleave_missing_images,
 )
 
 
@@ -518,49 +519,215 @@ def test_media_block_dedupes_duplicate_images():
 
 
 # ═══════════════════════════════════════════════════════════════════
+# _interleave_missing_images  — position unused images before section
+# headings instead of dumping at the end
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_interleave_missing_images_no_headings_appends_at_end():
+    """Body with no headings and no paragraph breaks → image appended at end."""
+    body = "纯文本段落。\n没有标题。"
+    result = _interleave_missing_images(body, ["/media/x/pic1.png"])
+    assert "pic1.png" in result
+    assert result.strip().endswith("![](../../media/x/pic1.png)")
+
+
+def test_interleave_missing_images_placed_image_skipped():
+    """Image already in body is NOT treated as missing."""
+    body = "## 开头\n\n![](../../media/x/pic1.png)\n\n## 结尾"
+    result = _interleave_missing_images(body, ["/media/x/pic1.png"])
+    # No change — already present
+    assert result.count("pic1.png") == 1
+    assert result == body
+
+
+def test_interleave_missing_images_inserts_before_second_heading():
+    """Missing image inserted before the second ## heading."""
+    body = "## 一、开头\n\n内容\n\n## 二、深入\n\n详情"
+    result = _interleave_missing_images(body, ["/media/x/missing.png"])
+    assert result.count("missing.png") == 1
+    # Inserted before "## 二、深入"
+    assert "missing.png" in result
+    assert result.index("missing.png") < result.index("## 二、深入")
+
+
+def test_interleave_missing_images_multiple_missing():
+    """Multiple missing images — each inserted before a different heading."""
+    body = "## A\n\ntext\n\n## B\n\ntext\n\n## C\n\ntext"
+    result = _interleave_missing_images(body, ["/media/x/m1.png", "/media/x/m2.png"])
+    assert result.count("m1.png") == 1
+    assert result.count("m2.png") == 1
+    # m1 inserted before B, m2 inserted before C
+    assert result.index("m1.png") < result.index("## B")
+    assert result.index("m2.png") > result.index("## B")
+    assert result.index("m2.png") < result.index("## C")
+
+
+def test_interleave_missing_images_fallback_when_all_positions_exhausted():
+    """More missing images than headings → extras appended at end."""
+    body = "## 唯一标题\n\n正文"
+    result = _interleave_missing_images(
+        body, ["/media/x/p1.png", "/media/x/p2.png", "/media/x/p3.png"])
+    assert result.count("p1.png") == 1
+    assert result.count("p2.png") == 1
+    assert result.count("p3.png") == 1
+
+
+def test_interleave_missing_images_empty_body():
+    """Empty body → images appended."""
+    result = _interleave_missing_images("", ["/media/x/pic1.png"])
+    assert "pic1.png" in result
+
+
+def test_interleave_missing_images_no_images():
+    """No images list → body unchanged."""
+    body = "## 标题\n内容"
+    assert _interleave_missing_images(body, []) == body
+
+
+def test_interleave_missing_images_mixed_missing_and_present():
+    """Only images not in body get interleaved; already-placed images stay."""
+    body = "## A\n\n![](../../media/x/kept.png)\n\n## B\n\n## C"
+    result = _interleave_missing_images(
+        body, ["/media/x/kept.png", "/media/x/missing1.png", "/media/x/missing2.png"])
+    assert result.count("kept.png") == 1  # unchanged
+    assert result.count("missing1.png") == 1
+    assert result.count("missing2.png") == 1
+    # missing before B, missing2 before C (or appended if only 2 headings)
+    assert result.index("missing1.png") > result.index("kept.png")
+
+
+# ═══════════════════════════════════════════════════════════════════
 # rewrite  — slice limit covers all [[IMG:N]] tokens
 # ═══════════════════════════════════════════════════════════════════
 
 
-def test_rewrite_slice_covers_all_img_tokens():
-    """When [[IMG:N]] tokens lie beyond 6000 chars, the slice limit is
+def test_rewrite_slice_covers_all_img_urls():
+    """When relativized image URLs lie beyond 8000 chars, the slice limit is
     dynamically extended so all are visible to the LLM."""
-    # Build a content with [[IMG:4]] at ~6400 and [[IMG:5]] at ~7300
-    chunks = ["开头文本。\n"] * 200
-    chunks.append("\n[[IMG:0]]\n")
-    chunks.append("\n更多正文。\n" * 300)
-    chunks.append("\n[[IMG:1]]\n")
-    chunks.append("\n更多正文。\n" * 300)
-    chunks.append("\n[[IMG:2]]\n")
-    chunks.append("\n更多正文。\n" * 300)
-    chunks.append("\n[[IMG:3]]\n")
-    chunks.append("\n继续填充文本。" * 200)
-    chunks.append("\n[[IMG:4]]\n")
-    chunks.append("\n继续填充文本。" * 50)
-    chunks.append("\n[[IMG:5]]\n")
-    chunks.append("\n结尾文本。")
-    content_md = "".join(chunks)
+    # Build content where both URLs are past 8000 chars
+    # 900 * 9 = 8100 chars of "填充文本AAAA\n" before first URL
+    chunks = ["填充文本AAAA\n" * 900]
+    chunks.append("![](../../media/x/late1.png)\n")
+    chunks.append("填充文本AAAA\n" * 300)
+    chunks.append("![](../../media/x/late2.png)\n")
+    chunks.append("结尾文本。")
+    body = "".join(chunks)
 
-    # Verify [[IMG:4]] and [[IMG:5]] are past 6000
-    assert content_md.find("[[IMG:4]]") > 6000
-    assert content_md.find("[[IMG:5]]") > 6000
+    # Verify URLs are past 8000
+    assert body.find("late1.png") > 8000, f"late1.png at {body.find('late1.png')}"
+    assert body.find("late2.png") > 8000, f"late2.png at {body.find('late2.png')}"
 
     # Simulate the slice logic from rewrite()
-    img_positions = [content_md.find(f"[[IMG:{i}]]")
-                     for i in range(6)
-                     if content_md.find(f"[[IMG:{i}]]") >= 0]
-    slice_limit = max(6000, max(img_positions) + 200)
+    images = ["/media/x/late1.png", "/media/x/late2.png"]
+    img_end = max(
+        [body.find(_relativize_media(u)) for u in images
+         if body.find(_relativize_media(u)) >= 0]
+        or [0])
+    slice_limit = max(8000, img_end + 500)
 
-    assert slice_limit > 6000
-    assert "[[IMG:4]]" in content_md[:slice_limit]
-    assert "[[IMG:5]]" in content_md[:slice_limit]
+    assert slice_limit > 8000
+    assert "late1.png" in body[:slice_limit]
+    assert "late2.png" in body[:slice_limit]
 
 
-def test_rewrite_slice_defaults_to_6000():
-    """When all tokens are within 6000 chars, the slice stays at the default."""
-    content_md = "简短正文 [[IMG:0]] 结束"
-    img_positions = [content_md.find(f"[[IMG:{i}]]")
-                     for i in range(1)
-                     if content_md.find(f"[[IMG:{i}]]") >= 0]
-    slice_limit = max(6000, max(img_positions) + 200)
-    assert slice_limit == 6000
+def test_rewrite_slice_defaults_to_8000():
+    """When all image URLs are within 8000 chars, the slice stays at the default."""
+    body = "简短正文 ![](/media/x/pic.png) 结束"
+    images = ["/media/x/pic.png"]
+    img_end = max(
+        [body.find(_relativize_media(u)) for u in images
+         if body.find(_relativize_media(u)) >= 0]
+        or [0])
+    slice_limit = max(8000, img_end + 500)
+    assert slice_limit == 8000
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _build_manifest & _apply_placeholders — manifest+placeholder flow
+# ═══════════════════════════════════════════════════════════════════
+
+def test_build_manifest_generates_entries():
+    """_build_manifest creates entries for images and videos with 0-indexed tokens."""
+    manifest_text, media_map = _build_manifest(
+        ["/media/a/img1.png", "/media/a/img2.png"],
+        ["https://youtube.com/embed/x"])
+    assert "IMG0" in media_map
+    assert media_map["IMG0"] == ("img", "/media/a/img1.png")
+    assert "IMG1" in media_map
+    assert media_map["IMG1"] == ("img", "/media/a/img2.png")
+    assert "VID0" in media_map
+    assert media_map["VID0"] == ("vid", "https://youtube.com/embed/x")
+    # Images listed as bullet points (pre-expanded inline)
+    assert "img1.png" in manifest_text
+    assert "img2.png" in manifest_text
+    # Videos still use [[VID:0]] placeholder format
+    assert "[[VID:0]]" in manifest_text
+
+
+def test_build_manifest_empty_inputs():
+    """_build_manifest returns empty strings/maps when there's no media."""
+    manifest_text, media_map = _build_manifest([], [])
+    assert manifest_text == ""
+    assert media_map == {}
+
+
+def test_apply_placeholders_replaces_img_tokens():
+    """_apply_placeholders replaces [[IMG:0]] with markdown image syntax."""
+    media_map = {"IMG0": ("img", "/media/x/fig1.png")}
+    result = _apply_placeholders("正文\n\n[[IMG:0]]\n\n结尾", media_map)
+    assert "[[IMG:0]]" not in result
+    assert "![](/media/x/fig1.png)" in result
+    assert result.index("正文") < result.index("fig1.png") < result.index("结尾")
+
+
+def test_apply_placeholders_replaces_vid_tokens():
+    """_apply_placeholders replaces [[VID:0]] with video embed."""
+    media_map = {"VID0": ("vid", "https://youtube.com/embed/abc")}
+    result = _apply_placeholders("正文\n\n[[VID:0]]\n\n结尾", media_map)
+    assert "[[VID:0]]" not in result
+    assert "youtube.com/embed/abc" in result
+    assert '<iframe' in result
+
+
+def test_apply_placeholders_removes_unknown_tokens():
+    """Unknown placeholders are removed from the body."""
+    media_map = {"IMG0": ("img", "/media/x/pic.png")}
+    result = _apply_placeholders("[[IMG:0]]\n[[IMG:99]]\n[[VID:999]]", media_map)
+    assert "![](/media/x/pic.png)" in result  # known token replaced
+    assert "[[IMG:99]]" not in result  # unknown removed
+    assert "[[VID:999]]" not in result  # unknown removed
+
+
+def test_apply_placeholders_handles_bracket_variants():
+    """Both [[IMG:0]] and [IMG:0] bracket styles are handled."""
+    media_map = {"IMG0": ("img", "/media/x/pic.png")}
+    result = _apply_placeholders("[[IMG:0]] and [IMG:0]", media_map)
+    assert result.count("pic.png") == 2
+    # _apply_placeholders wraps each replacement in \n\n padding
+    assert "![](/media/x/pic.png)" in result
+    assert result.count("/media/x/pic.png") == 2
+
+
+def test_rewrite_through_manifest_flow():
+    """LLM outputs [[IMG:N]] markers → _apply_placeholders → real URLs in body.
+    This validates the manifest+placeholder integration in rewrite()."""
+    art = Article(
+        title="t", content_md="正文含 [[IMG:0]] 标记",
+        url="https://x.com/a", source_name="X", source_type="scrape",
+        published_at=None,
+        images=["/media/x/fig1.png", "/media/x/fig2.png"],
+        raw_summary=None, fetched_at=datetime.now(timezone.utc), topic="AI")
+    # LLM places [[IMG:0]] in output but omits [[IMG:1]]
+    body = "## 一、开头\n\n[[IMG:0]]\n\n## 二、深度内容"
+    resp = json.dumps({"title_candidates": ["标题"], "body_md": body})
+    provider = MockProvider(responses=[resp, json.dumps({"flagged_claims": []})])
+    draft = rewrite(art, provider)
+    b = draft.body_md
+    # [[IMG:0]] replaced with real URL by _apply_placeholders
+    assert "[[IMG:0]]" not in b
+    assert "![](/media/x/fig1.png)" in b
+    # fig1 appears before 二、深度内容 (placed by LLM, not appended at end)
+    assert b.index("fig1.png") < b.index("深度内容")
+    # fig2 was NOT placed by LLM → appended by _media_block as safety net
+    assert "fig2.png" in b
