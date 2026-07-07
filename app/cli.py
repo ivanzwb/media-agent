@@ -45,7 +45,7 @@ def run(feeds: str = typer.Option("feeds.yaml", help="Path to feeds.yaml"),
     feeds_cfg = load_feeds(Path(feeds))
     provider = get_rewrite_provider(cfg.llm_provider, cfg.llm_api_key,
                                     cfg.llm_model, llm_api_base=cfg.llm_api_base,
-                                    cli_tool=cfg.cli_tool)
+                                    cli_tool=cfg.cli_tool, timeout=cfg.cli_timeout)
     image_provider = None
     if with_images:
         from app.images.base import get_image_provider

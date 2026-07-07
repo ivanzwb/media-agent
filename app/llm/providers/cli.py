@@ -226,7 +226,7 @@ class CLIProvider:
     # for future use if a stdin-based tool is added.
     _STDIN_TOOLS: ClassVar[set[str]] = set()
 
-    def __init__(self, tool_id: str, timeout: int = 300,
+    def __init__(self, tool_id: str, timeout: int = 500,
                  model: str = "") -> None:
         td = _TOOLS.get(tool_id)
         if td is None:

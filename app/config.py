@@ -57,6 +57,7 @@ class Config:
     wechat_appsecret: str | None = None  # WeChat Official Account AppSecret
     wechat_author: str | None = None     # default author shown on published 图文
     cli_tool: str | None = None          # "auto" | "opencode" | "codex" | "copilot" | "none"
+    cli_timeout: int = 500               # CLI agent timeout in seconds
 
     @property
     def archive_dir(self) -> Path:
@@ -123,6 +124,7 @@ class Config:
             wechat_appsecret=os.environ.get("MEDIA_AGENT_WECHAT_APPSECRET"),
             wechat_author=os.environ.get("MEDIA_AGENT_WECHAT_AUTHOR"),
             cli_tool=os.environ.get("MEDIA_AGENT_CLI_TOOL", "none"),
+            cli_timeout=_int_env("MEDIA_AGENT_CLI_TIMEOUT") or 500,
         )
         if store is not None:
             config._apply_db_overrides(store)
@@ -177,6 +179,12 @@ class Config:
             parsed = _int_str(workers)
             if parsed is not None:
                 self.download_workers = parsed
+
+        cli_to = store.get_setting("cli_timeout")
+        if cli_to is not None:
+            parsed = _int_str(cli_to)
+            if parsed is not None:
+                self.cli_timeout = parsed
 
     def ensure_dirs(self) -> None:
         for d in (self.archive_dir, self.drafts_dir, self.images_dir,

@@ -17,7 +17,8 @@ class LLMProvider(Protocol):
 
 def get_provider(name: str, api_key: str | None = None,
                  model: str | None = None,
-                 base_url: str | None = None) -> LLMProvider:
+                 base_url: str | None = None,
+                 timeout: int | None = None) -> LLMProvider:
     if name == "mock":
         from app.llm.providers.mock import MockProvider
         return MockProvider()
@@ -32,12 +33,18 @@ def get_provider(name: str, api_key: str | None = None,
         if path is None:
             raise RuntimeError(
                 f"CLI tool '{name}' is not installed ({path or 'not found in PATH'})")
-        return CLIProvider(name, model=model or "")
+        kwargs = {"model": model or ""}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        return CLIProvider(name, **kwargs)
     if name == "auto":
         from app.llm.providers.cli import CLIProvider, detect_all
         tool = detect_all()
         if tool:
-            return CLIProvider(tool)
+            kwargs = {}
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            return CLIProvider(tool, **kwargs)
         # Fall through to LLM provider below
     if name == "auto":
         from app.llm.providers.mock import MockProvider
@@ -48,7 +55,8 @@ def get_provider(name: str, api_key: str | None = None,
 def get_rewrite_provider(llm_provider: str, llm_api_key: str | None = None,
                          llm_model: str | None = None,
                          llm_api_base: str | None = None,
-                         cli_tool: str | None = None) -> LLMProvider:
+                         cli_tool: str | None = None,
+                         timeout: int | None = None) -> LLMProvider:
     """Return the best available provider for article rewriting.
 
     Priority:
@@ -68,11 +76,15 @@ def get_rewrite_provider(llm_provider: str, llm_api_key: str | None = None,
                 # Don't pass llm_model here — CLI tools have their own
                 # model defaults (e.g. opencode/big-pickle) that are
                 # independent of the user's LLM provider model config.
-                return CLIProvider(tool_id)
+                kwargs = {}
+                if timeout is not None:
+                    kwargs["timeout"] = timeout
+                return CLIProvider(tool_id, **kwargs)
     # Fall back to regular LLM provider (or mock)
     try:
         return get_provider(llm_provider, api_key=llm_api_key,
-                            model=llm_model, base_url=llm_api_base)
+                            model=llm_model, base_url=llm_api_base,
+                            timeout=timeout)
     except (ValueError, RuntimeError):
         from app.llm.providers.mock import MockProvider
         return MockProvider()
