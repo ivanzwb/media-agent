@@ -64,26 +64,27 @@
   </div>
 </div>
 
-<!-- Rewrite Progress Panel (matches run-panel style) -->
+<!-- Rewrite Progress Panel (multi-entry) -->
 <div id="rewrite-panel" class="run-panel" style="display:none; z-index:60">
   <div class="run-panel-head">
     <div style="display:flex;align-items:center;gap:8px">
       <span class="run-glow running" id="rewrite-glow"></span>
-      <span id="rewrite-title">转写中…</span>
+      <span id="rewrite-title">转写中</span>
     </div>
     <div>
       <span id="rewrite-stats" class="run-stats"></span>
+      <button type="button" class="run-minimize" id="rewrite-min-btn" onclick="toggleRewriteMin()" title="最小化">_</button>
       <button type="button" class="run-close" onclick="cancelRewritePoll()">×</button>
     </div>
   </div>
-  <pre id="rewrite-logs" class="run-logs"></pre>
+  <div id="rewrite-entries" class="rewrite-entries"></div>
 </div>
 
 <script>
 
 function viewArticle(id) {
   const iframe = document.getElementById('viewer-iframe');
-  iframe.src = '/archive/' + id + '/view';
+  iframe.src = '/archive/' + id + '/view?embed=1';
   document.getElementById('viewer-modal').style.display = 'flex';
 }
 function closeViewer(e) {
@@ -170,63 +171,124 @@ async function refetchArticle(id) {
   }
 }
 
-// ---- rewrite progress polling ----
+// ---- rewrite progress polling (multi-entry) ----
 let rewritePollTimer = null;
-let rewriteArticleId = null;
+let trackedArticleIds = {};  // article_id → {title}
 
-function showRewritePanel(id) {
-  document.getElementById('rewrite-title').textContent = '转写中…';
-  document.getElementById('rewrite-stats').textContent = '';
-  document.getElementById('rewrite-logs').textContent = '';
-  document.getElementById('rewrite-panel').style.display = 'flex';
-  const glow = document.getElementById('rewrite-glow');
-  glow.className = 'run-glow running';
+function renderRewriteEntry(aid, entry) {
+  var el = document.getElementById('re-' + aid);
+  if (!entry) {
+    if (el) el.remove();
+    return;
+  }
+  if (!el) {
+    var c = document.getElementById('rewrite-entries');
+    el = document.createElement('div');
+    el.className = 'rewrite-entry';
+    el.id = 're-' + aid;
+    el.innerHTML =
+      '<div class="rewrite-entry-head" onclick="this.parentElement.classList.toggle(\'open\')">' +
+      '<span class="rewrite-glow" id="reg-' + aid + '"></span>' +
+      '<span class="rewrite-entry-title" id="ret-' + aid + '"></span>' +
+      '<span class="rewrite-entry-status" id="res-' + aid + '"></span>' +
+      '</div>' +
+      '<pre class="rewrite-entry-logs" id="rel-' + aid + '"></pre>';
+    c.appendChild(el);
+  }
+  document.getElementById('ret-' + aid).textContent = entry.title || '文章 #' + aid;
+  var glow = document.getElementById('reg-' + aid);
+  var stEl = document.getElementById('res-' + aid);
+  var logsEl = document.getElementById('rel-' + aid);
+  if (entry.done && entry.draft_id) {
+    glow.className = 'rewrite-glow done';
+    stEl.textContent = '完成 ✓';
+    logsEl.textContent = (entry.logs || []).join('\n');
+  } else if (entry.done && entry.error) {
+    glow.className = 'rewrite-glow error';
+    stEl.textContent = '失败';
+    logsEl.textContent = (entry.logs || []).join('\n');
+  } else if (entry.running) {
+    glow.className = 'rewrite-glow running';
+    stEl.textContent = '转写中…';
+    var lines = (entry.logs || []);
+    logsEl.textContent = lines.join('\n');
+    // auto-scroll
+    if (el.classList.contains('open')) {
+      logsEl.scrollTop = logsEl.scrollHeight;
+    }
+  } else {
+    el.remove();
+    return;
+  }
 }
 
-function hideRewritePanel() {
-  document.getElementById('rewrite-panel').style.display = 'none';
+function refreshRewritePanel(entries) {
+  var panel = document.getElementById('rewrite-panel');
+  var container = document.getElementById('rewrite-entries');
+  if (!entries || entries.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  var runningCount = 0, doneCount = 0, errorCount = 0;
+  var seen = {};
+  entries.forEach(function (e) {
+    seen[e.article_id] = true;
+    renderRewriteEntry(e.article_id, e);
+    if (e.done && e.draft_id) doneCount++;
+    else if (e.done && e.error) errorCount++;
+    else if (e.running) runningCount++;
+  });
+  // Remove entries that are no longer tracked
+  var existing = container.querySelectorAll('.rewrite-entry');
+  existing.forEach(function (el) {
+    var aid = parseInt(el.id.replace('re-', ''), 10);
+    if (!seen[aid]) el.remove();
+  });
+  var title = document.getElementById('rewrite-title');
+  if (runningCount > 0) {
+    title.textContent = '转写中 (' + runningCount + ' 个任务)';
+  } else if (runningCount === 0 && doneCount > 0 && errorCount === 0) {
+    title.textContent = '全部转写完成 ✓';
+  } else if (errorCount > 0 && doneCount === 0 && runningCount === 0) {
+    title.textContent = '转写失败';
+  } else if (errorCount > 0 && doneCount > 0 && runningCount === 0) {
+    title.textContent = '部分完成 (' + doneCount + ' 成功, ' + errorCount + ' 失败)';
+  }
+  var allGlow = document.getElementById('rewrite-glow');
+  if (runningCount > 0) {
+    allGlow.className = 'run-glow running';
+  } else if (errorCount > 0) {
+    allGlow.className = 'run-glow error';
+  } else {
+    allGlow.className = 'run-glow done';
+  }
+  panel.style.display = 'flex';
+  applyRewriteMin();
 }
 
 function cancelRewritePoll() {
   if (rewritePollTimer) clearTimeout(rewritePollTimer);
   rewritePollTimer = null;
-  rewriteArticleId = null;
-  hideRewritePanel();
+  trackedArticleIds = {};
+  document.getElementById('rewrite-panel').style.display = 'none';
 }
 
-async function pollRewrite() {
-  const id = rewriteArticleId;
-  if (!id) return;
+async function pollAllRewrites() {
   try {
-    const s = await (await fetch('/api/rewrite-status?article_id=' + id)).json();
-    const logs = document.getElementById('rewrite-logs');
-    const atBottom = logs.scrollTop + logs.clientHeight >= logs.scrollHeight - 20;
-    logs.textContent = (s.logs || []).join('\n');
-    if (atBottom) logs.scrollTop = logs.scrollHeight;
-
-    if (s.done) {
-      const glow = document.getElementById('rewrite-glow');
-      if (s.draft_id) {
-        glow.className = 'run-glow done';
-        document.getElementById('rewrite-title').textContent = '转写完成，跳转中…';
-        setTimeout(function () {
-          saveArchiveScroll();
-          cancelRewritePoll();
-          window.location = '/drafts/' + s.draft_id + '/edit?from=archive';
-        }, 800);
-      } else {
-        glow.className = 'run-glow error';
-        document.getElementById('rewrite-title').textContent = '转写失败：' + (s.error || '未知错误');
-        rewritePollTimer = null;
-        rewriteArticleId = null;
-      }
-      return;
-    }
-    if (s.running) {
-      rewritePollTimer = setTimeout(pollRewrite, 1200);
+    var resp = await fetch('/api/rewrite-all-status');
+    var data = await resp.json();
+    refreshRewritePanel(data.entries || []);
+    // Check if any still running
+    var anyRunning = (data.entries || []).some(function (e) { return e.running; });
+    var anyUndone = (data.entries || []).some(function (e) { return !e.done; });
+    if (anyRunning || anyUndone) {
+      rewritePollTimer = setTimeout(pollAllRewrites, 1200);
+    } else {
+      rewritePollTimer = null;
+      trackedArticleIds = {};
     }
   } catch (e) {
-    rewritePollTimer = setTimeout(pollRewrite, 2000);
+    rewritePollTimer = setTimeout(pollAllRewrites, 2000);
   }
 }
 
@@ -242,26 +304,63 @@ async function rewriteArticle(id, isRewrite) {
       cell.innerHTML = '<span class="muted">已有任务在进行</span>';
       return;
     }
-    // The rewrite panel (showRewritePanel below) handles the progress UI
-    rewriteArticleId = id;
-    showRewritePanel(id);
-    pollRewrite();
+    // Start polling all rewrites (don't show panel yet — first poll will)
+    trackedArticleIds[id] = { title: '' };
+    if (!rewritePollTimer) pollAllRewrites();
   } catch (e) {
     cell.innerHTML = '<span class="muted">请求失败</span>';
     alert('转写请求失败');
   }
 }
-</script>
-<script>
-// Auto-resume rewrite tracking after page refresh
+
+// ---- minimize / maximize ----
+var _rewriteMin = localStorage.getItem('rewriteMinimized') === 'true';
+
+function applyRewriteMin() {
+  var panel = document.getElementById('rewrite-panel');
+  var btn = document.getElementById('rewrite-min-btn');
+  if (!panel || !btn) return;
+  if (_rewriteMin) {
+    panel.classList.add('minimized');
+    btn.textContent = '‒';
+    btn.title = '最大化';
+  } else {
+    panel.classList.remove('minimized');
+    btn.textContent = '_';
+    btn.title = '最小化';
+  }
+}
+
+function toggleRewriteMin() {
+  _rewriteMin = !_rewriteMin;
+  localStorage.setItem('rewriteMinimized', _rewriteMin);
+  applyRewriteMin();
+}
+
+// ---- restore on page load ----
+(function checkRunningRewrite() {
+  fetch('/api/rewrite-all-status').then(function (r) { return r.json(); }).then(function (data) {
+    if (data.entries && data.entries.length > 0) {
+      data.entries.forEach(function (e) {
+        if (e.running || !e.done) trackedArticleIds[e.article_id] = { title: e.title || '' };
+      });
+      refreshRewritePanel(data.entries);
+      if (data.entries.some(function (e) { return e.running || !e.done; })) {
+        pollAllRewrites();
+      }
+    }
+  }).catch(function () {});
+})();
+
 window.addEventListener('ops-resume', function (e) {
+  var needPoll = false;
   e.detail.forEach(function (op) {
     if (op.type === 'rewrite' && op.status === 'running') {
-      rewriteArticleId = op.target_id;
-      showRewritePanel(op.target_id);
-      pollRewrite();
+      trackedArticleIds[op.target_id] = { title: '' };
+      needPoll = true;
     }
   });
+  if (needPoll && !rewritePollTimer) pollAllRewrites();
 });
 </script>
 {% endblock %}

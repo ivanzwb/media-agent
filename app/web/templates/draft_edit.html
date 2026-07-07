@@ -16,16 +16,22 @@
 <div id="tab-article" class="tab-pane on">
 
 {% if flagged_claims %}
-<div class="warn">
-  <strong>⚠ 事实校验存疑（请人工核对原文后再发）：</strong>
-  <ul>{% for c in flagged_claims %}<li>{{ c }}</li>{% endfor %}</ul>
+<div class="warn collapse-warn">
+  <div class="collapse-header" onclick="this.parentElement.classList.toggle('open')">
+    <strong>⚠ 事实校验存疑（{{ flagged_claims | length }} 项）</strong>
+    <span class="collapse-arrow">▶</span>
+  </div>
+  <ul class="collapse-body">{% for c in flagged_claims %}<li>{{ c }}</li>{% endfor %}</ul>
 </div>
 {% endif %}
 
 {% if sensitive_hits %}
-<div class="warn">
-  <strong>🛡 已过滤敏感/违禁词（已从正文与标题移除，发布前请检查通顺）：</strong>
-  <p>{{ sensitive_hits | join('、') }}</p>
+<div class="warn collapse-warn">
+  <div class="collapse-header" onclick="this.parentElement.classList.toggle('open')">
+    <strong>🛡 已过滤敏感/违禁词（{{ sensitive_hits | length }} 项）</strong>
+    <span class="collapse-arrow">▶</span>
+  </div>
+  <p class="collapse-body">{{ sensitive_hits | join('、') }}</p>
 </div>
 {% endif %}
 
@@ -1189,13 +1195,14 @@
       const data = await resp.json();
 
       if (data.ok) {
-        // Write result directly into the editor
+        // Update the editor with the body (front-matter stripped server-side)
         const editor = window.easyMDE || document.getElementById('editor');
-        if (editor && typeof editor.value === 'function') editor.value(data.result);
+        const editorContent = data.body_md || data.result || '';
+        if (editor && typeof editor.value === 'function') editor.value(editorContent);
         _isAgentModified = true;
         _showUndoBtn();
         statusEl.innerHTML = '✅ 修改完成，已保存' + (data.saved ? '' : '（请手动保存）');
-        _agentSave({ prompt, status: 'done', original: _agentOriginal, result: data.result });
+        _agentSave({ prompt, status: 'done', original: _agentOriginal, result: editorContent });
       } else {
         statusEl.innerHTML = '❌ ' + (data.error || '处理失败');
         _agentSave({ prompt, status: 'error', error: data.error });

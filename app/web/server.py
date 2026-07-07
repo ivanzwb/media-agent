@@ -60,6 +60,77 @@ def _to_int(value: str, default: int) -> int:
         return default
 
 
+def _clean_agent_output(text: str) -> str:
+    """Sanitize raw agent output into valid front-matter markdown.
+
+    Agents frequently disobey instructions and include:
+    - Thinking/commentary text before the front-matter
+    - Code block fences (```markdown … ```)
+    - Trailing modification notes after the body
+
+    This function strips all of the above so the result is a clean
+    front-matter file parseable by python-frontmatter.
+    """
+    import frontmatter as _fm
+    if not text or not text.strip():
+        return ""
+    cleaned = text.strip()
+
+    # 1. Strip leading garbage before the first front-matter delimiter
+    #    (agents often put thinking text before ---)
+    if not cleaned.startswith("---"):
+        idx = cleaned.find("\n---")
+        if idx != -1:
+            cleaned = cleaned[idx:].strip()
+
+    # 2. Unwrap markdown code fences if present
+    #    ```markdown\n...\n```  or  ```\n...\n```
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z]*\s*\n?", "", cleaned).strip()
+        cleaned = re.sub(r"\n```\s*$", "", cleaned).strip()
+    # After step 1 removed leading text (which may have contained the
+    # opening fence), the closing fence may remain at the end.
+    cleaned = re.sub(r"\n```\s*$", "", cleaned)
+
+    # 3. Parse front-matter so we can clean ONLY the body section
+    #    without confusing front-matter closing --- with body-internal ---.
+    try:
+        post = _fm.loads(cleaned)
+        meta = dict(post.metadata)
+        body = post.content
+    except Exception:
+        # If front-matter parsing fails, treat everything as body
+        meta = {}
+        body = cleaned
+
+    # 4. Strip trailing modification notes from the BODY only.
+    #    The body may contain --- separators (promotion footers etc.).
+    #    Only strip if the tail matches known agent-note keywords —
+    #    do NOT use length heuristics which can strip legitimate content
+    #    (e.g. short promotion footers after a --- separator).
+    body = body.rstrip()
+    if "\n---\n" in body:
+        parts = body.rsplit("\n---\n", 1)
+        if len(parts) == 2 and parts[1].strip():
+            tail = parts[1].strip()
+            if any(kw in tail.lower() for kw in
+                   ["修改说明", "修改总结", "备注", "note:"]):
+                body = parts[0]
+    body = re.sub(
+        r"\n(?:修改说明|修改总结|备注|Note)[：:].*$",
+        "", body, flags=re.IGNORECASE)
+    body = re.sub(r"\n---\s*$", "", body)
+    # Strip orphaned code fence — step 1 may have absorbed the opening
+    # fence as leading garbage; do this AFTER stripping notes so notes
+    # between the fence end and the trailer are already removed.
+    body = re.sub(r"\n```\s*$", "", body)
+    body = body.strip()
+
+    # 5. Reconstruct: front-matter (if any) + body
+    result = _fm.dumps(_fm.Post(body, **meta))
+    return result.strip() + "\n"
+
+
 def create_app(config: Config | None = None,
                feeds_path: str | Path = "feeds.yaml") -> FastAPI:
     config = config or Config.load()
@@ -103,7 +174,7 @@ def create_app(config: Config | None = None,
         provider = get_rewrite_provider(
             run_config.llm_provider, run_config.llm_api_key,
             run_config.llm_model, llm_api_base=run_config.llm_api_base,
-            cli_tool=run_config.cli_tool)
+            cli_tool=run_config.cli_tool, timeout=run_config.cli_timeout)
         image_provider = get_image_provider(
             run_config.image_provider,
             run_config.image_api_key or run_config.llm_api_key,
@@ -348,7 +419,8 @@ def create_app(config: Config | None = None,
                 provider = get_rewrite_provider(
                     run_config.llm_provider, run_config.llm_api_key,
                     run_config.llm_model, llm_api_base=run_config.llm_api_base,
-                    cli_tool=run_config.cli_tool)
+                    cli_tool=run_config.cli_tool,
+                    timeout=run_config.cli_timeout)
                 image_provider = get_image_provider(
                     run_config.image_provider,
                     run_config.image_api_key or run_config.llm_api_key,
@@ -445,6 +517,36 @@ def create_app(config: Config | None = None,
                 "logs": list(st["logs"]),
             }
 
+    @app.get("/api/rewrite-all-status")
+    def api_rewrite_all_status():
+        """Return status for ALL currently-tracked rewrites with article titles."""
+        store = get_store()
+        results = []
+        with rewrite_main_lock:
+            ids = list(rewrite_states.keys())
+        for aid in ids:
+            st = _rewrite_state(aid)
+            with rewrite_locks[aid]:
+                if not st["running"] and not st["done"]:
+                    continue  # skip freshly initialized, no-op entries
+                title = ""
+                try:
+                    row = store.get_article(aid)
+                    if row:
+                        title = row["title"]
+                except Exception:
+                    pass
+                results.append({
+                    "article_id": aid,
+                    "title": title,
+                    "running": st["running"],
+                    "done": st["done"],
+                    "error": st["error"],
+                    "draft_id": st["draft_id"],
+                    "logs": list(st["logs"]),
+                })
+        return {"entries": results}
+
     @app.get("/drafts", response_class=HTMLResponse)
     def drafts_list(request: Request, status: str | None = None):
         from datetime import datetime, timezone, timedelta
@@ -521,32 +623,6 @@ def create_app(config: Config | None = None,
 
     # ── Agent edit (draft → CLI agent) ──────────────────────────────────────
 
-    # Strip trailing notes/commentary that some agents append after the
-    # actual article content despite being told not to.
-    _AGENT_TRAILER_RE = re.compile(
-        r"(?:\n---\s*\n.*|"            # standalone --- separator + text
-        r"\n(?:修改说明|修改总结|备注|总结|Note|注意|说明)[：:].*|"
-        r"\n---\s*$)",                  # trailing --- line
-        re.DOTALL | re.IGNORECASE,
-    )
-
-    def _strip_agent_trailer(text: str) -> str:
-        """Remove trailing modification notes from an agent's output."""
-        stripped = text.rstrip()
-        # Try front-matter aware stripping: if the text has front-matter,
-        # only strip trailing content after the body.
-        if "\n---\n" in stripped:
-            parts = stripped.rsplit("\n---\n", 1)
-            if len(parts) == 2 and parts[1].strip():
-                tail = parts[1].strip()
-                if (len(tail) < 300
-                    or any(kw in tail.lower() for kw in
-                           ["修改说明", "修改总结", "备注", "总结", "note:", "注意", "说明"])):
-                    stripped = parts[0]
-        # Generic trailing pattern cleanup
-        stripped = re.sub(r"\n(修改说明|修改总结|备注|总结|Note|注意|说明)[：:].*$", "", stripped, flags=re.IGNORECASE)
-        return stripped
-
     @app.post("/api/draft/{draft_id}/agent-edit")
     def draft_agent_edit(draft_id: int, prompt: str = Form(...)):
         """Send a user prompt + current draft content to the configured CLI agent."""
@@ -595,7 +671,7 @@ def create_app(config: Config | None = None,
         # compatible), not to the CLI agent.  Passing it would override
         # the CLIProvider's built-in _DEFAULT_MODELS fallback (which
         # already pins a known-working model for opencode).
-        provider = cli_provider.CLIProvider(active_tool, timeout=180)
+        provider = cli_provider.CLIProvider(active_tool, timeout=config.cli_timeout)
         messages = [
             Message(role="system", content=(
                 "你是一个文章编辑助手。用户会给你一篇完整草稿文件（包含 front-matter 元信息和正文 markdown）"
@@ -617,12 +693,17 @@ def create_app(config: Config | None = None,
         except RuntimeError as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
-        # Post-process: strip trailing modification notes / commentary that
-        # sometimes leaks past the front-matter boundary or markdown end.
-        result = _strip_agent_trailer(result)
+        # Post-process: clean agent output — strip thinking text, code fences,
+        # trailing notes, and anything else that would corrupt the draft file.
+        result = _clean_agent_output(result)
+
+        # Parse the cleaned output for DB sync and frontend display.
+        # This always succeeds because _clean_agent_output guarantees valid
+        # front-matter output.
+        import frontmatter as _fm
+        _parsed = _fm.loads(result)
 
         # Backup the current draft file before overwriting
-        bak_path = None
         if row and row["draft_path"]:
             src = config.data_dir / row["draft_path"]
             if src.exists():
@@ -635,14 +716,32 @@ def create_app(config: Config | None = None,
             abs_path = config.data_dir / row["draft_path"]
             abs_path.parent.mkdir(parents=True, exist_ok=True)
             abs_path.write_text(result, encoding="utf-8")
-        # Update DB record
-        store.conn.execute(
-            "UPDATE drafts SET status=?, updated_at=? WHERE id=?",
-            ("drafted", datetime.now(timezone.utc).isoformat(), draft_id))
-        store.conn.commit()
+
+        # Sync DB metadata so read_draft_body() returns correct data
+        _parsed_titles = _parsed.metadata.get("title_candidates", []) or []
+        _parsed_body = _parsed.content
+        preserved_cn = (
+            body.get("title_cn")
+            if not _parsed.metadata.get("title_cn")
+            else _parsed.metadata.get("title_cn")
+        )
+        store.update_draft_body(
+            draft_id,
+            title_candidates=_parsed_titles,
+            body_md=_parsed_body,
+            status="drafted",
+            title_cn=preserved_cn,
+        )
         logger.info("agent-edit draft=%d saved OK", draft_id)
 
-        return {"ok": True, "result": result, "saved": True, "backup": True}
+        # Return body_md separately for the editor (not the full file)
+        return {
+            "ok": True,
+            "result": result,
+            "body_md": _parsed_body,
+            "saved": True,
+            "backup": True,
+        }
 
     @app.post("/api/draft/{draft_id}/agent-undo")
     def draft_agent_undo(draft_id: int):
@@ -659,9 +758,19 @@ def create_app(config: Config | None = None,
         src.write_text(bak_path.read_text(encoding="utf-8"), encoding="utf-8")
         bak_path.unlink(missing_ok=True)
         logger.info("agent-undo draft=%d restored from backup", draft_id)
-        # Re-read the restored content
-        meta = store.read_draft_body(draft_id)
-        return {"ok": True, "body_md": meta.get("body_md", "")}
+        # Re-read the restored content and sync DB record
+        import frontmatter as _fm_undo
+        restored = _fm_undo.loads(src.read_text(encoding="utf-8"))
+        restored_titles = restored.metadata.get("title_candidates", []) or []
+        restored_body = restored.content
+        restored_cn = restored.metadata.get("title_cn")
+        store.update_draft_body(
+            draft_id,
+            title_candidates=restored_titles,
+            body_md=restored_body,
+            title_cn=restored_cn,
+        )
+        return {"ok": True, "body_md": restored_body}
 
     @app.post("/api/draft/{draft_id}/agent-cleanup")
     def draft_agent_cleanup(draft_id: int):
@@ -861,7 +970,7 @@ def create_app(config: Config | None = None,
         return get_rewrite_provider(
             rc.llm_provider, rc.llm_api_key,
             rc.llm_model, llm_api_base=rc.llm_api_base,
-            cli_tool=rc.cli_tool)
+            cli_tool=rc.cli_tool, timeout=rc.cli_timeout)
 
     def _build_tts(rc, tts_provider=None, tts_voice=None):
         provider = tts_provider if tts_provider is not None else rc.tts_provider
