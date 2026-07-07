@@ -67,6 +67,33 @@ pip install -r requirements.txt
 
 > 国内网络可用镜像加速：`pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt`
 
+### 打包版（免 Python 环境）
+
+不想装 Python？从 [Releases](https://github.com/ivanzwb/media-agent/releases) 下载对应平台的 zip，解压后直接运行：
+
+```
+Windows:  media-agent\media-agent.exe serve
+macOS:    media-agent/media-agent serve
+```
+
+打包版已内置所有 Python 依赖（含 fish-audio-sdk、playwright 库）。解压后运行 `setup-optional.bat`（Win）或 `setup-optional.sh`（Mac）可自动检测并引导安装可选组件：
+
+| 组件 | 打包版内置？ | 说明 |
+|---|---|---|
+| fish-audio-sdk | ✅ 已内置 | 云端声音克隆 |
+| playwright 库 | ✅ 已内置 | 需额外下载 Chromium（脚本一键完成） |
+| ffmpeg | ❌ 需单独装 | 视频合成必需，[下载](https://ffmpeg.org)后加入 PATH |
+| CosyVoice | ❌ 需单独装 | 需 NVIDIA GPU + Python < 3.13，脚本有详细指引 |
+
+### 本地构建
+
+```bash
+# Windows：双击 build-win.bat → dist\media-agent-win64.zip
+# macOS：   bash build-mac.sh  → dist/media-agent/
+```
+
+CI 自动构建：推送带 `v*` 的 tag 即触发 GitHub Actions，同时输出 Win + Mac 两版到 Release。
+
 ## 配置
 
 ### 来源与主题（`feeds.yaml`）
