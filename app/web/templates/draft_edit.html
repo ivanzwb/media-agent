@@ -327,6 +327,8 @@
         } else {
           narSetDone(true, '生成完成 ✓');
           document.getElementById('nar-status').textContent = '完成 ✓';
+          const _wrap = document.getElementById('scene-editor');
+          if (_wrap) _wrap.dataset.has = '1';
           se_load();
         }
       }
