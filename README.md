@@ -222,6 +222,26 @@ app/
 └─ web/                 # FastAPI 服务 + 模板 + 静态资源
 tests/                  # pytest（160 个测试）
 feeds.yaml  requirements.txt
+build-win.bat build-mac.sh  # 本地打包脚本
+```
+
+### `tools/` — 许可与加固
+
+| 文件 | 用途 |
+|---|---|
+| `tools/licctl.py` | Vendor 端离线许可工具：生成密钥对、签发激活码 |
+| `tools/build_hardened.py` | 许可核心加固（Cython 编译 / PyArmor 混淆），可选 |
+| `tools/license_private_key.b64` | 私钥（**.gitignored**，切不可提交） |
+
+```bash
+# 生成密钥对（仅一次）
+python -m tools.licctl keygen
+# → tools/license_private_key.b64（密不外泄）
+# → app/licensing/public_key.b64（提交到仓库）
+
+# 签发许可（按机器绑定 / 按天数 / 永久浮动）
+python -m tools.licctl issue --key MA-PRO-0001 --days 365
+python -m tools.licctl issue --key MA-PRO-0002 --machine 1A2B-3C4D-5E6F-7A8B
 ```
 
 ## 测试
