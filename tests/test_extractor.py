@@ -780,3 +780,82 @@ def test_extract_no_images_no_placeholder_injection():
     )
     result = extract_from_html(html, url="https://example.com/post")
     assert "[[IMG:" not in result["content_md"]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# extract_from_html  —  readability short-output fallback (step 1c)
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_readability_short_output_triggers_full_html_fallback():
+    """When readability returns only ~200 bytes (e.g. NIMS div#p_N
+    structure with image grids), step 1c should re-extract from the
+    full HTML via trafilatura and keep the richer result."""
+    html = (
+        '<html><body>'
+        '<main id="main-content">'
+        '<h1>NIMS-style Article</h1>'
+        '<div class="article-container">'
+        '<div id="s_1">'
+        '<div class="text-box"><p>First paragraph that readability keeps.</p></div>'
+        '</div>'
+        '<div id="s_2">'
+        '<div class="grid-wrap"><figure><img src="/photo.jpg" /></figure></div>'
+        '</div>'
+        '<div id="s_3">'
+        '<div class="text-box"><p>Second paragraph with important details '
+        'describing the research achievements and their significance in '
+        'the field of materials science and engineering applications.</p></div>'
+        '</div>'
+        '<div id="s_4">'
+        '<p class="text-plain">Third paragraph covering additional findings '
+        'and future directions for the research team at the institution '
+        'that conducted this groundbreaking study and its implications.</p>'
+        '</div>'
+        '</div>'
+        '</main>'
+        '</body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    # Step 1c should have recovered the full content, not just the first paragraph
+    content = result["content_md"]
+    assert "Second paragraph" in content, (
+        "step 1c should recover content readability dropped")
+    assert "Third paragraph" in content, (
+        "step 1c should recover later sections")
+
+
+def test_readability_short_output_keeps_images():
+    """When step 1c triggers, images from the full HTML are kept and
+    filtered properly (SVG icons removed, article images kept)."""
+    html = (
+        '<html><body>'
+        '<main id="main-content">'
+        '<div class="article-container">'
+        '<div id="s_1">'
+        '<p>Short first paragraph that readability keeps.</p>'
+        '</div>'
+        '<div id="s_2">'
+        '<img src="/icon_x.svg" />'
+        '<img src="/footer-logo.svg" />'
+        '<img src="/photo.jpg" />'
+        '</div>'
+        '<div id="s_3">'
+        '<p>Second paragraph with much more content that readability '
+        'would miss due to the icon section breaking its heuristics '
+        'for detecting contiguous article text in this structure.</p>'
+        '</div>'
+        '</div>'
+        '</main>'
+        '</body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    imgs = result["images"]
+    # SVG icons should be filtered out
+    assert all("icon_" not in img for img in imgs), (
+        f"icon SVGs should be filtered, got {imgs}")
+    assert all("logo" not in img for img in imgs), (
+        f"logo SVGs should be filtered, got {imgs}")
+    # Real article image should be kept
+    assert any("photo.jpg" in img for img in imgs), (
+        f"article image should be kept, got {imgs}")

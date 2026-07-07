@@ -410,6 +410,8 @@ _NON_ARTICLE_PATTERNS = [
     re.compile(r'(?:_FillWz|_transform|__Scale|__ResizedImage)', re.I),
     # Site favicons / touch icons (favicon, favicon-32x32, apple-touch-icon, etc.)
     re.compile(r'(?:favicon|touchicon|apple[-.]touch|og_logo)[\w-]*\.(?:png|ico|jpg|svg)', re.I),
+    # UI / nav / social icon SVGs (footer-logo.svg, icon_x.svg, NIMSNOW_logo_2025.svg)
+    re.compile(r'(?:icon|logo)[\w-]*\.svg$', re.I),
 ]
 
 
@@ -552,6 +554,24 @@ def extract_from_html(html: str, url: str) -> dict:
             jsonld_slug = jsonld_img.rsplit("/", 1)[-1].split("?")[0]
             if not any(jsonld_slug in u for u in images):
                 images.insert(0, jsonld_img)
+
+    # ── 1c. readability got very little content — try full HTML trafilatura ──
+    # Some sites (e.g. NIMS) structure article content in ways readability's
+    # heuristics don't recognise (sections in <div id="p_N"> blocks), causing
+    # readability to return only the first paragraph. When readability's output
+    # is suspiciously short, also try trafilatura on the full raw HTML and keep
+    # whichever result is significantly richer.
+    _MIN_READABILITY_CONTENT_CHARS = 500
+    if content_md.strip() and len(content_md.strip()) < _MIN_READABILITY_CONTENT_CHARS:
+        full_pl, full_images = _images_with_placeholders(html, base_url=url)
+        full_pl, full_videos = _videos_with_placeholders(full_pl, base_url=url)
+        full_md = trafilatura.extract(
+            full_pl, output_format="markdown", include_images=True,
+            include_links=True, url=url) or ""
+        if len(full_md) >= len(content_md) * 2:
+            content_md = full_md
+            images = full_images
+            videos = full_videos
 
     # ── 2. trafilatura directly on original HTML (fallback) ──
     if not content_md.strip():
