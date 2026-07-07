@@ -16,6 +16,7 @@ import httpx
 
 from app.wechat.client import WeChatClient, WeChatError
 from app.wechat.html import markdown_to_html, image_srcs, replace_image_srcs
+from app.wechat.formatter import render_styled_html
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,32 @@ def _resolve_to_file(url: str, config) -> tuple[Path | None, bool]:
     return None, False
 
 
+def inline_images_base64(html: str, config) -> str:
+    """Replace local <img> srcs with base64 data URLs so the HTML can be
+    copy-pasted into a platform editor (头条/公众号) with images intact.
+    Remote (http/data) srcs are left as-is; unresolvable locals are dropped.
+    """
+    import base64
+    import mimetypes
+    mapping: dict[str, str] = {}
+    for src in image_srcs(html):
+        if src.startswith(("http://", "https://", "data:")):
+            continue
+        path, is_temp = _resolve_to_file(src, config)
+        if not (path and path.exists()):
+            mapping[src] = ""       # drop broken image
+            continue
+        mime = mimetypes.guess_type(str(path))[0] or "image/png"
+        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        mapping[src] = f"data:{mime};base64,{b64}"
+        if is_temp:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    return replace_image_srcs(html, mapping)
+
+
 def _upload_body_image(client: WeChatClient, path: Path) -> str | None:
     """Upload one body image; returns a WeChat-hosted URL or None."""
     size = path.stat().st_size
@@ -111,10 +138,11 @@ def _upload_body_image(client: WeChatClient, path: Path) -> str | None:
 
 
 def publish_article(client: WeChatClient, config, meta: dict,
-                    mode: str = "draft") -> dict:
+                    mode: str = "draft", theme: str = "default") -> dict:
     """Publish a draft's 图文 to WeChat.
 
     ``mode``: "draft" (push to 草稿箱, default) or "publish" (draft + freepublish).
+    ``theme``: visual theme id (see formatter._WECHAT_THEMES).
     Returns a JSON-able result dict; raises WeChatError on API failure.
     """
     titles = meta.get("title_candidates") or []
@@ -123,7 +151,8 @@ def publish_article(client: WeChatClient, config, meta: dict,
     body_md = meta.get("body_md", "")
     # Relative paths (../../media/…) → absolute for _resolve_to_file
     body_md = _absolutize_body_md(body_md)
-    html = markdown_to_html(body_md)
+    # Themed, inline-styled HTML (spider-media style) for a polished 图文.
+    html = render_styled_html(body_md, platform="wechat", theme=theme)
 
     # 1. Upload every body image, remap srcs.
     temps: list[Path] = []

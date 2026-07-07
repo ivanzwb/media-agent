@@ -32,13 +32,16 @@ def seed(store):
     return art, draft
 
 
-def make_client(tmp_path):
+def make_client(tmp_path, pro: bool = True):
     cfg, store = setup_env(tmp_path)
     feeds = tmp_path / "feeds.yaml"
     feeds.write_text(
         "topics:\n  - name: AI\n    keywords: [GPT]\nsources: []\n",
         encoding="utf-8")
     app = create_app(cfg, feeds_path=feeds)
+    # Default tests to a Pro (dev) license so feature tests aren't gated;
+    # pass pro=False to exercise the free-tier gates.
+    app.state.license._dev = pro
     return TestClient(app), store, feeds
 
 
@@ -138,6 +141,83 @@ def test_video_prepare_unsupported_platform(tmp_path):
                     data={"platform": "zhihu"})
     assert r.status_code == 400
     assert r.json()["ok"] is False
+
+
+def test_styled_html_wechat_theme(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    r = client.post(f"/drafts/{draft.id}/styled-html",
+                    data={"platform": "wechat", "theme": "blue"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["ok"] is True
+    assert j["html"].startswith("<section")
+    assert "#2f6fb3" in j["html"]          # blue theme accent, inlined
+    assert "<style" not in j["html"]       # fully inline-styled
+
+
+def test_styled_html_toutiao(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    r = client.post(f"/drafts/{draft.id}/styled-html",
+                    data={"platform": "toutiao"})
+    assert r.status_code == 200
+    assert r.json()["platform"] == "toutiao"
+
+
+# ── License gating (free tier) ──────────────────────────────────────────────
+
+def test_video_gated_on_free_tier(tmp_path):
+    client, store, _ = make_client(tmp_path, pro=False)
+    _, draft = seed(store)
+    r = client.post(f"/drafts/{draft.id}/video")
+    assert r.status_code == 403
+    body = r.json()
+    assert body["ok"] is False and body.get("upgrade") is True
+
+
+def test_platform_sync_gated_on_free_tier(tmp_path):
+    client, store, _ = make_client(tmp_path, pro=False)
+    _, draft = seed(store)
+    r = client.post(f"/drafts/{draft.id}/styled-html",
+                    data={"platform": "wechat"})
+    assert r.status_code == 403
+    assert r.json().get("upgrade") is True
+
+
+def test_license_status_and_activate(tmp_path, monkeypatch):
+    import base64
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from app.licensing import features as F
+    from app.licensing.verify import canonical, encode_activation
+
+    priv = Ed25519PrivateKey.generate()
+    pub = priv.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    monkeypatch.setattr("app.licensing.verify._public_key_b64",
+                        lambda: base64.urlsafe_b64encode(pub).decode().rstrip("="))
+
+    client, store, _ = make_client(tmp_path, pro=False)
+    _, draft = seed(store)
+
+    # free tier: styled-html gated
+    assert client.post(f"/drafts/{draft.id}/styled-html",
+                       data={"platform": "wechat"}).status_code == 403
+    assert client.get("/api/license/status").json()["active"] is False
+
+    payload = {"key": "MA-T", "edition": "pro", "features": list(F.PRO_FEATURES),
+               "machine_id": None, "issued_at": "2026-01-01T00:00:00Z",
+               "expires_at": None}
+    sig = priv.sign(canonical(payload))
+    blob = encode_activation(payload, base64.b64encode(sig).decode())
+
+    r = client.post("/api/license/activate", data={"key": blob})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert client.get("/api/license/status").json()["active"] is True
+    # now unlocked
+    assert client.post(f"/drafts/{draft.id}/styled-html",
+                       data={"platform": "wechat"}).status_code == 200
 
 
 def test_draft_edit_and_save(tmp_path):

@@ -118,7 +118,8 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
                  max_age_days: int | None = None,
                  max_per_source: int | None = None,
                  download_media: bool = False,
-                 progress=None) -> dict:
+                 progress=None,
+                 rewrite_gate=None) -> dict:
     emit = progress or _noop
     stats = {"fetched": 0, "archived": 0, "classified": 0, "drafted": 0}
     run_id = store.record_run() if record else None
@@ -158,6 +159,11 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
         to_draft = new_articles[:max_drafts]
         emit(f"新归档 {len(new_articles)} 篇，开始改写 {len(to_draft)} 篇…", stats)
         for art in to_draft:
+            # Free-tier rewrite quota: gate() returns False once exhausted.
+            if rewrite_gate is not None and not rewrite_gate():
+                emit("改写额度已用完（免费版每日限额），跳过后续改写。"
+                     "升级 Pro 版可无限改写。", stats)
+                break
             emit(f"改写中：{art.title[:50]}", stats)
             try:
                 draft = rewrite(art, provider)

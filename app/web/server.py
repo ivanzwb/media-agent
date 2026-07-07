@@ -44,6 +44,8 @@ from app.tts.voices import (
     list_voices, add_voice, delete_voice, sample_path as voice_sample_path)
 from app.scheduler import start_if_enabled
 from app.store import Store
+from app.licensing import LicenseManager
+from app.licensing import features as LF, gates as LG
 
 _BASE = Path(__file__).parent
 _TEMPLATES = _BASE / "templates"
@@ -144,15 +146,23 @@ def create_app(config: Config | None = None,
     config._apply_db_overrides(_init_store)
     _init_conn.close()
 
+    # License manager (offline, machine-bound). Unactivated == free tier.
+    license_mgr = LicenseManager(config.data_dir)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.scheduler = start_if_enabled(get_store(), _scheduled_run)
+        # 定时调度 is a Pro feature — only start the scheduler when licensed.
+        if license_mgr.has_feature(LF.SCHEDULE):
+            app.state.scheduler = start_if_enabled(get_store(), _scheduled_run)
+        else:
+            app.state.scheduler = None
         yield
         sched = getattr(app.state, "scheduler", None)
         if sched is not None and sched.running:
             sched.shutdown(wait=False)
 
     app = FastAPI(title="Media Agent", lifespan=lifespan)
+    app.state.license = license_mgr          # same object the routes gate on
     templates = Jinja2Templates(directory=str(_TEMPLATES))
     app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
@@ -180,11 +190,19 @@ def create_app(config: Config | None = None,
             run_config.image_api_key or run_config.llm_api_key,
             model=run_config.image_model,
             base_url=run_config.image_api_base or run_config.llm_api_base)
+        def _rewrite_gate() -> bool:
+            # Pro → unlimited; free → consume one daily-quota slot per rewrite.
+            if not LG.rewrite_allowed(license_mgr, store):
+                return False
+            LG.consume_rewrite(license_mgr, store)
+            return True
+
         return run_pipeline(
             feeds_cfg, store, provider, image_provider=image_provider,
             record=True, max_age_days=run_config.max_age_days,
             max_per_source=run_config.max_per_source,
-            download_media=True, progress=progress)
+            download_media=True, progress=progress,
+            rewrite_gate=_rewrite_gate)
 
     # ---- background run state (for live progress / logs) ----
     run_lock = threading.Lock()
@@ -385,6 +403,8 @@ def create_app(config: Config | None = None,
         row = store.get_article(article_id)
         if not row:
             return {"ok": False, "error": "文章不存在"}
+        if not LG.rewrite_allowed(license_mgr, store):
+            return LG.rewrite_error()
         body = store.read_article_body(article_id)
         content_md = body.get("content_md", "")
         images = body.get("images") or _images_from_html(content_md)
@@ -406,6 +426,7 @@ def create_app(config: Config | None = None,
                         "message": "该文章已有转写任务在进行"}
             st.update(running=True, logs=[], error=None, done=False,
                       draft_id=None)
+            LG.consume_rewrite(license_mgr, store)   # free-tier daily quota
 
         def worker():
             op_key = f"rewrite-{article_id}"
@@ -1309,6 +1330,9 @@ def create_app(config: Config | None = None,
     @app.post("/drafts/{draft_id}/narration")
     def trigger_narration(draft_id: int, tts_provider: str | None = None,
                           tts_voice: str | None = None):
+        err = LG.require(license_mgr, LF.VIDEO)
+        if err:
+            return err
         st = _nar_state(draft_id)
         lk = nar_locks[draft_id]
         with lk:
@@ -1371,6 +1395,9 @@ def create_app(config: Config | None = None,
 
     @app.post("/api/script/{draft_id}/resynth")
     async def api_resynth_script(draft_id: int, request: Request):
+        err = LG.require(license_mgr, LF.VIDEO)
+        if err:
+            return err
         data = await request.json()
         indices = [int(i) for i in (data.get("indices") or [])]
         tts_provider = data.get("tts_provider")
@@ -1664,6 +1691,9 @@ def create_app(config: Config | None = None,
 
     @app.post("/drafts/{draft_id}/video")
     def trigger_video(draft_id: int):
+        err = LG.require(license_mgr, LF.VIDEO)
+        if err:
+            return err
         with vid_lock:
             if vid_state["running"]:
                 return {"started": False, "running": True,
@@ -1717,6 +1747,9 @@ def create_app(config: Config | None = None,
 
     @app.post("/voices")
     async def voices_add(file: UploadFile = File(...), name: str = Form("")):
+        err = LG.require(license_mgr, LF.VOICE_CLONE)
+        if err:
+            return err
         data = await file.read()
         if not data:
             return RedirectResponse(url="/settings?import_error=1", status_code=303)
@@ -1735,6 +1768,9 @@ def create_app(config: Config | None = None,
     @app.post("/api/voices/record")
     async def voices_record(blob: UploadFile = File(...), name: str = Form("")):
         """Receive a browser-recorded blob and save it as a new cloned voice."""
+        err = LG.require(license_mgr, LF.VOICE_CLONE)
+        if err:
+            return err
         data = await blob.read()
         if not data:
             return JSONResponse({"error": "empty recording"}, status_code=400)
@@ -1774,6 +1810,9 @@ def create_app(config: Config | None = None,
 
     @app.post("/drafts/{draft_id}/adapt")
     def draft_adapt(draft_id: int, platform: str = Form(...)):
+        err = LG.require(license_mgr, LF.PLATFORM_SYNC)
+        if err:
+            return err
         store = get_store()
         meta = store.read_draft_body(draft_id)
         if not meta:
@@ -1867,12 +1906,17 @@ def create_app(config: Config | None = None,
 
     @app.post("/drafts/{draft_id}/publish/wechat")
     def draft_publish_wechat(draft_id: int, mode: str = Form("draft"),
-                             kind: str = Form("article")):
+                             kind: str = Form("article"),
+                             theme: str = Form("default")):
         """One-click publish a draft to a WeChat Official Account.
 
         kind=article: 图文 -> mode "draft" (草稿箱) or "publish" (草稿+发布).
         kind=video:   upload the generated mp4 to 素材库.
+        theme: visual formatting theme for the 图文.
         """
+        err = LG.require(license_mgr, LF.PLATFORM_SYNC)
+        if err:
+            return err
         store = get_store()
         meta = store.read_draft_body(draft_id)
         if not meta:
@@ -1890,7 +1934,8 @@ def create_app(config: Config | None = None,
             if kind == "video":
                 result = upload_video(client, run_config, draft_id, meta)
             else:
-                result = publish_article(client, run_config, meta, mode=mode)
+                result = publish_article(client, run_config, meta, mode=mode,
+                                         theme=theme)
         except WeChatError as exc:
             return JSONResponse(
                 {"ok": False,
@@ -1906,6 +1951,33 @@ def create_app(config: Config | None = None,
                 pass
         return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
+    @app.post("/drafts/{draft_id}/styled-html")
+    def draft_styled_html(draft_id: int, platform: str = Form("wechat"),
+                          theme: str = Form("default")):
+        """Return themed, inline-CSS HTML (spider-media style) for a draft,
+        with local images base64-embedded so it can be pasted straight into the
+        平台 editor (used for 头条, and as a manual fallback for 公众号)."""
+        err = LG.require(license_mgr, LF.PLATFORM_SYNC)
+        if err:
+            return err
+        store = get_store()
+        meta = store.read_draft_body(draft_id)
+        if not meta:
+            return JSONResponse({"ok": False, "error": "draft not found"},
+                                status_code=404)
+        run_config = Config.load(store=store)
+        from app.wechat.formatter import render_styled_html, list_themes
+        from app.wechat.publish import (
+            inline_images_base64, _absolutize_body_md)
+        titles = meta.get("title_candidates") or []
+        title = (meta.get("title_cn") or (titles[0] if titles else "")).strip()
+        body_md = _absolutize_body_md(meta.get("body_md", ""))
+        html = render_styled_html(body_md, platform=platform, theme=theme)
+        html = inline_images_base64(html, run_config)
+        return JSONResponse({"ok": True, "title": title, "html": html,
+                             "platform": platform, "theme": theme,
+                             "themes": list_themes(platform)})
+
     @app.post("/drafts/{draft_id}/wechat-channels/prepare")
     def draft_channels_prepare(draft_id: int):
         """Prepare a half-automatic 视频号 (Channels) publish.
@@ -1914,6 +1986,9 @@ def create_app(config: Config | None = None,
         the caption + locate the video file; the UI copies the caption and
         opens 视频号助手 for the user to drag in the file and paste.
         """
+        err = LG.require(license_mgr, LF.PLATFORM_SYNC)
+        if err:
+            return err
         store = get_store()
         meta = store.read_draft_body(draft_id)
         if not meta:
@@ -1945,6 +2020,9 @@ def create_app(config: Config | None = None,
         caption + locates the video; the UI copies the caption, opens the
         creator page, and offers the video file. No account automation.
         """
+        err = LG.require(license_mgr, LF.PLATFORM_SYNC)
+        if err:
+            return err
         store = get_store()
         meta = store.read_draft_body(draft_id)
         if not meta:
@@ -1990,6 +2068,26 @@ def create_app(config: Config | None = None,
         except Exception:                          # noqa: BLE001
             pass
         return voice_id
+
+    @app.get("/api/license/status")
+    def api_license_status():
+        return JSONResponse(license_mgr.status_dict())
+
+    @app.post("/api/license/activate")
+    def api_license_activate(key: str = Form("")):
+        key = (key or "").strip()
+        if not key:
+            return JSONResponse({"ok": False, "error": "请输入激活码"},
+                                status_code=400)
+        ok, msg = license_mgr.activate(key)
+        return JSONResponse({"ok": ok, "message": msg,
+                             "status": license_mgr.status_dict()},
+                            status_code=200 if ok else 400)
+
+    @app.post("/api/license/deactivate")
+    def api_license_deactivate():
+        license_mgr.deactivate()
+        return JSONResponse({"ok": True, "status": license_mgr.status_dict()})
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request, response: Response):
@@ -2093,6 +2191,8 @@ def create_app(config: Config | None = None,
             "wx_secret_masked": wx_secret_masked,
             "schedule_cron": store.get_setting("schedule_cron", ""),
             "schedule_enabled": store.get_setting("schedule_enabled", "0") == "1",
+            "license": license_mgr.status_dict(),
+            "license_labels": LF.LABELS,
             "active": "settings"})
 
     @app.post("/settings")

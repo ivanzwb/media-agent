@@ -18,6 +18,7 @@ curl_cffi>=0.7.0          # TLS fingerprint impersonation (bypasses Cloudflare)
 json5>=0.9.0              # Lenient JSON parser (handles LLM output violations)
 edge-tts>=6.1.0
 yt-dlp>=2024.1.1
+cryptography>=42.0.0      # offline Ed25519 license verify + at-rest encryption
 pytest==8.3.3
 
 # Optional (install manually; some are heavy):

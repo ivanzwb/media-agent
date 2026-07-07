@@ -16,3 +16,7 @@ server*.log
 feeds.yaml
 output.json
 .gstack/
+# License signing private key — NEVER commit
+tools/license_private_key.b64
+license.bin
+.licstate

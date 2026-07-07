@@ -86,11 +86,22 @@
       <button type="button" class="btn small" onclick="adaptToPlatform('{{ p.id }}', {{ draft.id }})">{{ p.label }}</button>
       {% endfor %}
       <span class="tb-sep">|</span>
-      <span class="tb-label">公众号一键发布：</span>
+      <span class="tb-label">公众号：</span>
+      <select id="wx-theme" class="btn small" title="排版主题" style="padding:2px 6px">
+        <option value="default">默认·清爽绿</option>
+        <option value="warm">暖橙·杂志</option>
+        <option value="blue">科技蓝</option>
+      </select>
       <button type="button" class="btn small primary" title="先保存草稿，再推送图文到公众号草稿箱"
               onclick="publishWeChat({{ draft.id }}, 'draft', 'article')">推送草稿箱</button>
       <button type="button" class="btn small" title="创建草稿并直接发布（不可撤回）"
               onclick="publishWeChat({{ draft.id }}, 'publish', 'article')">直接发布</button>
+      <button type="button" class="btn small" title="复制美化后的 HTML，粘贴到公众号编辑器正文"
+              onclick="copyStyledHtml({{ draft.id }}, 'wechat')">复制美化HTML</button>
+      <span class="tb-sep">|</span>
+      <span class="tb-label">头条：</span>
+      <button type="button" class="btn small primary" title="复制美化 HTML 并打开头条图文发布页，正文里 Ctrl+V 粘贴"
+              onclick="copyStyledHtml({{ draft.id }}, 'toutiao', 'https://mp.toutiao.com/profile_v4/graphic/publish')">复制并打开头条</button>
       <a class="btn small" href="javascript:void(0)" onclick="goBackOrList()">返回列表</a>
     </div>
 
@@ -962,6 +973,8 @@
       const fd = new FormData();
       fd.set('mode', mode);
       fd.set('kind', kind);
+      const themeEl = document.getElementById('wx-theme');
+      fd.set('theme', themeEl ? themeEl.value : 'default');
       const resp = await fetch('/drafts/' + draftId + '/publish/wechat', {
         method: 'POST', body: fd
       });
@@ -1083,6 +1096,51 @@
     } catch (e) {
       alert('复制失败：' + e.message);
     }
+  }
+
+  // Copy themed inline-CSS HTML to the clipboard (as rich text/html) so it can
+  // be pasted straight into the 公众号/头条 editor with formatting + images.
+  async function copyStyledHtml(draftId, platform, openUrl) {
+    const btn = event.target;
+    const orig = btn.textContent;
+    const themeEl = document.getElementById('wx-theme');
+    const theme = (platform === 'wechat' && themeEl) ? themeEl.value : 'default';
+    btn.disabled = true; btn.textContent = '⏳ 生成…';
+    let data;
+    try {
+      const fd = new FormData();
+      fd.set('platform', platform);
+      fd.set('theme', theme);
+      const resp = await fetch('/drafts/' + draftId + '/styled-html',
+        { method: 'POST', body: fd });
+      data = await resp.json();
+    } catch (e) {
+      btn.disabled = false; btn.textContent = orig;
+      alert('生成失败：' + e.message);
+      return;
+    }
+    btn.disabled = false; btn.textContent = orig;
+    if (!data || !data.ok) {
+      alert('生成失败：' + ((data && data.error) || '未知错误'));
+      return;
+    }
+    let copied = false;
+    try {
+      if (window.ClipboardItem && navigator.clipboard.write) {
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/html': new Blob([data.html], { type: 'text/html' }),
+          'text/plain': new Blob([data.html], { type: 'text/plain' }),
+        })]);
+        copied = true;
+      }
+    } catch (_) { /* fall through to plain text */ }
+    if (!copied) {
+      try { await navigator.clipboard.writeText(data.html); copied = true; } catch (_) { }
+    }
+    if (openUrl) window.open(openUrl, '_blank', 'noopener');
+    alert((copied ? '✅ 已复制美化 HTML 到剪贴板。' : '⚠️ 复制失败，请手动复制。')
+      + (openUrl ? '\n已打开头条发布页，在正文里 Ctrl+V 粘贴即可。'
+        : '\n粘贴到公众号编辑器正文即可（Ctrl+V）。'));
   }
 
   // ── Agent dialog ──────────────────────────────────────────────────────────

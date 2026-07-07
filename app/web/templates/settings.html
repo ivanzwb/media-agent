@@ -5,6 +5,7 @@
 <p class="muted">配置通过环境变量设置，也可在此覆盖（覆盖值存储在数据库中，优先级高于环境变量）。</p>
 
 <nav class="settings-nav">
+  <a href="#sec-license">License</a>
   <a href="#sec-llm">LLM</a>
   <a href="#sec-image">图片</a>
   <a href="#sec-agent">Agent</a>
@@ -16,6 +17,67 @@
   <a href="#sec-wechat">公众号</a>
   <a href="#sec-export">导出/导入</a>
 </nav>
+
+<fieldset class="settings-section" id="sec-license">
+  <legend>License 授权</legend>
+  {% if license.dev %}
+  <p class="badge ok">开发者模式（MEDIA_AGENT_LICENSE_DEV）— 全功能已解锁</p>
+  {% elif license.active %}
+  <p class="badge ok">✓ 已激活 {{ license.edition|upper }} 版
+    {% if license.expires_at %}· 有效期至 {{ license.expires_at[:10] }}{% else %}· 永久授权{% endif %}</p>
+  {% else %}
+  <p class="badge">未激活 · 免费版（{{ license.reason }}）</p>
+  {% endif %}
+
+  <div class="field">
+    <label>本机机器码 <span class="field-desc" style="margin:0">（购买“机器锁定版”时提供给卖家）</span></label>
+    <code class="key-masked">{{ license.machine_code }}</code>
+  </div>
+
+  {% if license.active and not license.dev %}
+  <div class="field">
+    <span class="field-desc">已解锁：{% for f in license.features %}{{ license_labels.get(f, f) }}{% if not loop.last %}、{% endif %}{% endfor %}</span>
+    <div style="margin-top:8px"><button type="button" class="btn small danger" onclick="deactivateLicense()">注销本机授权</button></div>
+  </div>
+  {% elif not license.dev %}
+  <div class="field">
+    <label for="license_key">激活码</label>
+    <div class="api-key-row">
+      <input type="text" id="license_key" placeholder="粘贴购买后获得的激活码" autocomplete="off" style="min-width:320px"/>
+      <button type="button" class="btn primary" onclick="activateLicense()">激活</button>
+    </div>
+    <span class="field-desc">免费版可用：RSS/网页抓取、去重归档、主题分类、kitten 配音、每日 {{ 1 }} 篇改写。
+      Pro 版解锁：无限改写、讲解视频、平台同步、声音复刻、定时调度。</span>
+  </div>
+  {% endif %}
+  <div id="license-msg" class="field-desc" style="margin-top:6px"></div>
+</fieldset>
+
+<script>
+async function activateLicense() {
+  const el = document.getElementById('license_key');
+  const msg = document.getElementById('license-msg');
+  const key = (el.value || '').trim();
+  if (!key) { msg.textContent = '请输入激活码'; return; }
+  msg.textContent = '⏳ 激活中…';
+  try {
+    const fd = new FormData(); fd.set('key', key);
+    const r = await fetch('/api/license/activate', { method: 'POST', body: fd });
+    const d = await r.json();
+    if (d.ok) {
+      msg.textContent = '✅ ' + (d.message || '激活成功') + '，刷新中…';
+      setTimeout(() => location.reload(), 800);
+    } else {
+      msg.textContent = '❌ ' + (d.error || d.message || '激活失败');
+    }
+  } catch (e) { msg.textContent = '❌ 请求失败：' + e.message; }
+}
+async function deactivateLicense() {
+  if (!confirm('确定注销本机授权？将回到免费版。')) return;
+  await fetch('/api/license/deactivate', { method: 'POST' });
+  location.reload();
+}
+</script>
 
 <form method="post" action="/settings" class="settings-form">
 
