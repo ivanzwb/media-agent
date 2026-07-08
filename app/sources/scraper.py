@@ -262,6 +262,26 @@ def _fetch_html(url: str, render_js: bool = False,
     if render_js:
         html = _render_with_playwright(url, timeout)
         if html:
+            # JS rendering can strip code blocks or alter article text.
+            # Always also fetch the plain HTML and keep whichever yields
+            # more content after extraction.
+            try:
+                resp = httpx.get(url, timeout=timeout, follow_redirects=True,
+                                 headers=_UA)
+                resp.raise_for_status()
+                plain = resp.text
+            except Exception:
+                plain = ""
+            if plain:
+                rendered_data = extract_from_html(html, url=url)
+                plain_data = extract_from_html(plain, url=url)
+                rendered_len = len(rendered_data.get("content_md", "") or "")
+                plain_len = len(plain_data.get("content_md", "") or "")
+                if plain_len > rendered_len * 1.2:
+                    # Plain fetch is meaningfully richer — use it instead.
+                    logger.info("scraper: plain fetch richer for %s "
+                                "(%d vs %d chars)", url, plain_len, rendered_len)
+                    return plain
             return html
 
     last_exc: Exception | None = None
