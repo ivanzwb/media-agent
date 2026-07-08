@@ -1048,3 +1048,149 @@ def test_extract_jsonld_hero_stem_case_insensitive():
     # Different case: Hero != hero → 2 images (prepended hero + body image)
     assert len(result["images"]) == 2, (
         f"different case stems should not dedup: {result['images']}")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# JSON-LD hero positioning: hero at front, placeholders adjusted
+# ═══════════════════════════════════════════════════════════════════
+
+def test_extract_jsonld_hero_at_position_zero_with_duplicate_removed():
+    """Hero replaces body duplicate, then prepended to [0].
+    [[IMG:0]] should appear at content start via orphan injection."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/hero.gif"}'
+        '</script>'
+        '<html><body><article>'
+        '<p>Article text that needs to be long enough for trafilatura.</p>'
+        '<img src="https://cdn.example.com/hero.webp" />'
+        '<img src="https://cdn.example.com/other.jpg" />'
+        '<p>More content to ensure enough text for extraction.</p>'
+        '<p>Additional content to meet the minimum text threshold.</p>'
+        '<p>Still more text to ensure trafilatura has enough to work with.</p>'
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    # hero.gif replaces hero.webp and moves to [0]
+    assert len(result["images"]) == 2, (
+        f"2 images expected (hero + other), got {len(result['images'])}")
+    assert "hero.gif" in result["images"][0], (
+        f"hero should be at index 0, got {result['images']}")
+    # [[IMG:0]] should exist (orphan injection), all indices accounted for
+    import re
+    phs = [int(m.group(1)) for m in
+           re.finditer(r'\[\[IMG:(\d+)\]\]', result["content_md"])]
+    assert 0 in phs, f"[[IMG:0]] missing: {result['content_md'][:200]}"
+    assert set(phs) == set(range(len(result["images"]))), (
+        f"placeholder mismatch: {set(phs)} vs {set(range(len(result['images'])))}")
+
+
+def test_extract_jsonld_hero_at_position_zero_unique():
+    """Unique hero (no body match) prepended at [0].
+    All existing placeholders shift +1, hero gets [[IMG:0]]."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/unique-hero.png"}'
+        '</script>'
+        '<html><body><article>'
+        '<p>Article text that needs to be long enough.</p>'
+        '<img src="https://cdn.example.com/body-1.jpg" />'
+        '<img src="https://cdn.example.com/body-2.jpg" />'
+        '<p>More text to ensure enough content for extraction.</p>'
+        '<p>Additional content to meet the minimum text threshold.</p>'
+        '<p>Still more text to ensure trafilatura has enough to work with.</p>'
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+        # 3 images: unique-hero [0] + body-1 [1] + body-2 [2]
+    assert len(result["images"]) == 3
+    assert "unique-hero.png" in result["images"][0]
+    # [[IMG:0]] should exist in content (orphan injection)
+    assert "[[IMG:0]]" in result["content_md"], (
+        f"[[IMG:0]] missing from content: {result['content_md'][:200]}")
+    # All images accounted for as placeholders
+    import re
+    phs = [int(m.group(1)) for m in
+           re.finditer(r'\[\[IMG:(\d+)\]\]', result["content_md"])]
+    assert set(phs) == set(range(len(result["images"]))), (
+        f"missing placeholder indices: {set(phs)} vs {set(range(len(result['images'])))}")
+
+
+def test_extract_jsonld_hero_placeholder_renumbering_matches():
+    """After hero prepend, [[IMG:N]] in content correctly reference images[N]."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/hero.gif"}'
+        '</script>'
+        '<html><body><article>'
+        '<p>Article text that needs to be long enough.</p>'
+        '<img src="https://cdn.example.com/hero.webp" />'
+        '<img src="https://cdn.example.com/other.jpg" />'
+        '<p>More content to ensure enough text for extraction.</p>'
+        '<p>Additional content to meet the minimum thresholds.</p>'
+        '<p>Still more text for trafilatura.</p>'
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    # Two images: hero.gif [0], other.jpg [1]
+    # Content should have [[IMG:0]] (hero) and [[IMG:1]] (other)
+    assert "[[IMG:0]]" in result["content_md"]
+    assert "[[IMG:1]]" in result["content_md"]
+    # No orphaned placeholders beyond image count
+    import re
+    phs = [int(m.group(1)) for m in
+           re.finditer(r'\[\[IMG:(\d+)\]\]', result["content_md"])]
+    assert all(p < len(result["images"]) for p in phs), (
+        f"placeholder out of bounds: {phs} vs {len(result['images'])} images")
+
+
+def test_extract_jsonld_hero_no_duplicate_placeholder():
+    """The body duplicate's [[IMG:N]] is removed (not left dangling)."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/hero.gif"}'
+        '</script>'
+        '<html><body><article>'
+        '<p>Article text that needs to be long.</p>'
+        '<img src="https://cdn.example.com/a.jpg" />'
+        '<img src="https://cdn.example.com/hero.webp" />'
+        '<img src="https://cdn.example.com/c.jpg" />'
+        '<p>More text to ensure extraction works.</p>'
+        '<p>Additional content to meet minimums.</p>'
+        '<p>Still more text for trafilatura.</p>'
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    # 3 images: hero.gif [0], a.jpg [1], c.jpg [2]
+    assert len(result["images"]) == 3
+    # hero.webp should NOT appear in the images list
+    assert not any("hero.webp" in img for img in result["images"])
+    # All placeholders should be valid indices
+    import re
+    for m in re.finditer(r'\[\[IMG:(\d+)\]\]', result["content_md"]):
+        assert int(m.group(1)) < len(result["images"]), (
+            f"bad placeholder index {m.group(1)}")
+
+
+def test_extract_jsonld_hero_no_duplicate_images():
+    """After hero processing: all images unique, no dupes by stem or URL."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/hero.gif"}'
+        '</script>'
+        '<html><body><article>'
+        '<p>Article text for extraction.</p>'
+        '<img src="https://cdn.example.com/hero.webp" />'
+        '<img src="https://cdn.example.com/other.jpg" />'
+        '<img src="https://cdn.example.com/third.png" />'
+        '<p>More content to ensure trafilatura has enough text.</p>'
+        '<p>Additional text to satisfy minimum content requirements.</p>'
+        '<p>Still more to be well over the threshold.</p>'
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    stems = [img.rsplit("/", 1)[-1].rsplit(".", 1)[0].split("?")[0]
+             for img in result["images"]]
+    assert len(stems) == len(set(stems)), f"duplicate stems: {stems}"
+    assert len(result["images"]) == len(set(result["images"])), (
+        f"duplicate URLs: {result['images']}")
