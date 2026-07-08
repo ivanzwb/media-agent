@@ -54,8 +54,32 @@ class FeedsConfig:
 _feeds_lock = threading.Lock()
 
 
+# Empty starter feeds.yaml written on first run of a fresh / packaged install.
+# User adds topics & sources via the 「来源」page.
+_DEFAULT_FEEDS_YAML = """\
+topics: []
+sources: []
+"""
+
+
+def ensure_feeds_file(path: Path | str) -> Path:
+    """Create a default feeds.yaml at *path* if it doesn't exist. Returns the
+    path. Safe to call on every startup (no-op when the file is present)."""
+    p = Path(path)
+    if not p.exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(_DEFAULT_FEEDS_YAML, encoding="utf-8")
+    return p
+
+
 def load_feeds(path: Path | str) -> FeedsConfig:
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    # A fresh / packaged install has no feeds.yaml yet — don't crash the
+    # pipeline; return an empty config (user adds sources via the UI, which
+    # writes the file).
+    p = Path(path)
+    if not p.exists():
+        return FeedsConfig(topics=[], sources=[])
+    data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     topics = [Topic(name=t["name"], keywords=t.get("keywords", []))
               for t in data.get("topics", [])]
     sources = []

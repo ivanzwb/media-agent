@@ -67,7 +67,7 @@ jobs:
             --hidden-import "apscheduler.triggers.cron" `
             --hidden-import "httpx" `
             --console `
-            app/cli.py
+            packaging/run_app.py
           Remove-Item -Recurse -Force build, media-agent.spec -ErrorAction SilentlyContinue
           Copy-Item setup-optional.bat dist/media-agent/setup-optional.bat
 
@@ -152,7 +152,7 @@ jobs:
             --hidden-import "apscheduler.triggers.cron" \
             --hidden-import "httpx" \
             --console \
-            app/cli.py
+            packaging/run_app.py
           rm -rf build media-agent.spec
 
       - name: Package (zip)

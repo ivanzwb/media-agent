@@ -117,7 +117,12 @@
             }, true);
           }
         });
-        if (localStorage.getItem('lic_guide_dismissed') !== '1') openLicenseGuide();
+        // Don't nag on the settings page — that's where activation happens,
+        // so the guide must not cover the activation form after "去激活".
+        if (localStorage.getItem('lic_guide_dismissed') !== '1'
+            && !location.pathname.startsWith('/settings')) {
+          openLicenseGuide();
+        }
       }
     } catch (e) { /* ignore */ }
   });

@@ -68,9 +68,11 @@ def serve(host: str = typer.Option("127.0.0.1"),
           feeds: str = typer.Option("feeds.yaml", help="Path to feeds.yaml")):
     """Start the local web UI."""
     import uvicorn
+    from app.feeds import ensure_feeds_file
     from app.web.server import create_app
     cfg = Config.load()
     cfg.ensure_dirs()
+    ensure_feeds_file(feeds)
     uvicorn.run(create_app(cfg, feeds_path=feeds), host=host, port=port)
 
 
