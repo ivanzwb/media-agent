@@ -953,3 +953,98 @@ def test_extract_jsonld_no_hero_when_no_jsonld():
     result = extract_from_html(html, url="https://example.com/post")
     assert len(result["images"]) == 1
     assert "body.jpg" in result["images"][0]
+
+
+def test_extract_jsonld_hero_replaces_only_matching_stem():
+    """Hero replaces ONLY the body image with matching stem; others untouched."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/hero.gif"}'
+        '</script>'
+        '<html><body><article>'
+        '<p>Article text that needs to be long enough.</p>'
+        '<img src="https://cdn.example.com/hero.webp" />'
+        '<img src="https://cdn.example.com/other.jpg" />'
+        '<img src="https://cdn.example.com/third.png" />'
+        '<p>More text to ensure enough content for extraction.</p>'
+        '<p>Additional content to meet the minimum text threshold.</p>'
+        '<p>Still more text to ensure trafilatura has enough to work with.</p>'
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    # 3 images expected: hero.gif replaced hero.webp, + other.jpg + third.png
+    assert len(result["images"]) == 3, (
+        f"expected 3 images, got {len(result['images'])}: {result['images']}")
+    # hero.gif should be present (replaced hero.webp at index 0)
+    assert any("hero.gif" in img for img in result["images"]), (
+        f"hero.gif should replace hero.webp: {result['images']}")
+    # hero.webp should NOT be present
+    assert not any("hero.webp" in img for img in result["images"]), (
+        f"hero.webp should be gone: {result['images']}")
+    # other images should be preserved
+    assert any("other.jpg" in img for img in result["images"])
+    assert any("third.png" in img for img in result["images"])
+
+
+def test_extract_jsonld_hero_stem_dedup_ignores_query_params():
+    """Query params on image URLs don't affect stem comparison."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/hero.gif?w=1200"}'
+        '</script>'
+        '<html><body><article>'
+        '<p>Article text that needs to be long enough.</p>'
+        '<img src="https://cdn.example.com/hero.webp?resize=800x600" />'
+        '<p>More text to ensure enough content for extraction.</p>'
+        '<p>Additional text for good measure.</p>'
+        '<p>Fourth paragraph to meet minimum thresholds.</p>'
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    # Should dedup by stem (hero), get 1 image, hero.gif format
+    assert len(result["images"]) == 1
+    assert ".gif" in result["images"][0], (
+        f"hero should be GIF (may have query params): {result['images'][0]}")
+
+
+def test_extract_jsonld_hero_exact_url_already_present():
+    """When JSON-LD hero URL is exactly in images list, skip (no-op)."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/hero.gif"}'
+        '</script>'
+        '<html><body><article>'
+        '<p>Article text that needs to be long enough.</p>'
+        '<img src="https://cdn.example.com/hero.gif" />'
+        '<img src="https://cdn.example.com/other.jpg" />'
+        '<p>More text for extraction threshold.</p>'
+        '<p>Additional content to reach minimum.</p>'
+        '<p>Still more text to satisfy trafilatura.</p>'
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    # Hero already in images list (exact URL match) → skipped by `not in images`
+    assert len(result["images"]) == 2
+    hero_count = sum(1 for img in result["images"] if "hero.gif" in img)
+    assert hero_count == 1, f"hero.gif should appear exactly once: {result['images']}"
+
+
+def test_extract_jsonld_hero_stem_case_insensitive():
+    """Stem comparison should be case-sensitive (URLs are case-sensitive).
+    Different case = different image."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/Hero.gif"}'
+        '</script>'
+        '<html><body><article>'
+        '<p>Article text that needs to be long enough.</p>'
+        '<img src="https://cdn.example.com/hero.webp" />'
+        '<p>More text for extraction.</p>'
+        '<p>Additional text for good measure.</p>'
+        '<p>Fourth paragraph to meet thresholds.</p>'
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    # Different case: Hero != hero → 2 images (prepended hero + body image)
+    assert len(result["images"]) == 2, (
+        f"different case stems should not dedup: {result['images']}")

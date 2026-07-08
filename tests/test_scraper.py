@@ -466,3 +466,47 @@ def test_fetch_html_falls_back_when_playwright_fails(mock_render):
         mock_get.return_value.raise_for_status = lambda: None
         result = _fetch_html("https://example.com", render_js=True, timeout=10)
         assert "plain fallback" in result
+
+
+@patch("app.sources.scraper._render_with_playwright")
+@patch("app.sources.scraper.extract_from_html")
+def test_fetch_html_keeps_rendered_when_plain_fetch_fails(mock_extract, mock_render):
+    """When plain HTTP fetch fails, keep the rendered HTML."""
+    mock_render.return_value = "<html><body>rendered only</body></html>"
+    # Only called for rendered (plain fails before extraction)
+    mock_extract.return_value = {"content_md": "rendered content " + "x" * 100}
+    from app.sources.scraper import _fetch_html
+    with patch("app.sources.scraper.httpx.get",
+               side_effect=Exception("Connection refused")):
+        result = _fetch_html("https://example.com", render_js=True, timeout=10)
+        assert "rendered only" in result
+
+
+@patch("app.sources.scraper._render_with_playwright")
+@patch("app.sources.scraper.extract_from_html")
+def test_fetch_html_keeps_rendered_when_similar_length(mock_extract, mock_render):
+    """When plain and rendered content are similar (< 1.2x), keep rendered."""
+    mock_render.return_value = "<html><body>rendered</body></html>"
+    # 100 vs 110: ratio 1.1 < 1.2 → keep rendered
+    mock_extract.side_effect = [
+        {"content_md": "rendered content " + "x" * 100},
+        {"content_md": "plain content "   + "x" * 110},
+    ]
+    from app.sources.scraper import _fetch_html
+    with patch("app.sources.scraper.httpx.get") as mock_get:
+        mock_get.return_value.text = "<html><body>plain</body></html>"
+        mock_get.return_value.raise_for_status = lambda: None
+        result = _fetch_html("https://example.com", render_js=True, timeout=10)
+        assert "rendered" in result
+
+
+@patch("app.sources.scraper._render_with_playwright")
+def test_fetch_html_no_render_js_returns_plain_directly(mock_render):
+    """When render_js=False, skip Playwright entirely, just httpx."""
+    from app.sources.scraper import _fetch_html
+    with patch("app.sources.scraper.httpx.get") as mock_get:
+        mock_get.return_value.text = "<html><body>plain only</body></html>"
+        mock_get.return_value.raise_for_status = lambda: None
+        result = _fetch_html("https://example.com", render_js=False, timeout=10)
+        mock_render.assert_not_called()
+        assert "plain only" in result
