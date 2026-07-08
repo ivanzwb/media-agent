@@ -8,6 +8,7 @@ from app.pipeline.rewriter import (
     _extract_json, _strip_code_fences, _extract_code_fenced_json,
     _repair_json_control_chars, _media_block, _relativize_media,
     _build_manifest, _apply_placeholders, _interleave_missing_images,
+    _extract_json_field, _extract_json_fallback,
 )
 
 
@@ -731,3 +732,242 @@ def test_rewrite_through_manifest_flow():
     assert b.index("fig1.png") < b.index("深度内容")
     # fig2 was NOT placed by LLM → appended by _media_block as safety net
     assert "fig2.png" in b
+
+
+# ── _extract_json_field ────────────────────────────────────────────────
+
+def test_extract_json_field_simple():
+    text = '{"title_candidates": ["t"], "body_md": "hello world"}'
+    result = _extract_json_field(text, "body_md")
+    assert result == "hello world"
+
+
+def test_extract_json_field_with_escapes():
+    text = '{"body_md": "line1\\n\\nline2\\tindented\\"quoted\\""}'
+    result = _extract_json_field(text, "body_md")
+    assert result == "line1\n\nline2\tindented\"quoted\""
+
+
+def test_extract_json_field_multiple_fields():
+    """Extracts the correct field when JSON has multiple keys."""
+    text = (
+        '{"title_candidates": ["t1", "t2"], '
+        '"body_md": "actual body", '
+        '"score": 80}'
+    )
+    result = _extract_json_field(text, "body_md")
+    assert result == "actual body"
+
+
+def test_extract_json_field_body_has_inner_braces():
+    """body_md value contains { and } characters."""
+    text = '{"body_md": "code: `{key: value}` end"}'
+    result = _extract_json_field(text, "body_md")
+    assert "{key: value}" in result
+
+
+def test_extract_json_field_missing_key_returns_none():
+    assert _extract_json_field('{"title": "x"}', "body_md") is None
+    assert _extract_json_field("", "body_md") is None
+    assert _extract_json_field("not json", "body_md") is None
+
+
+def test_extract_json_field_raw_newlines_in_value():
+    """Malformed JSON — body_md has literal \\n sent as real newlines."""
+    text = (
+        '{\n'
+        '  "title_candidates": ["标题"],\n'
+        '  "body_md": "## 第一章\n'
+        '\n'
+        '段落一。\n'
+        '\n'
+        '## 第二章\n'
+        '\n'
+        '段落二。"\n'
+        '}'
+    )
+    result = _extract_json_field(text, "body_md")
+    assert result is not None
+    assert "## 第一章" in result
+    assert "段落一" in result
+    assert "## 第二章" in result
+    assert "段落二" in result
+
+
+# ── _extract_json_fallback ─────────────────────────────────────────────
+
+def test_extract_json_fallback_clean():
+    """Normal JSON that _extract_json would handle — fallback works too."""
+    text = '{"title_candidates": ["标题1", "标题2"], "body_md": "正文内容"}'
+    result = _extract_json_fallback(text)
+    assert result is not None
+    assert result["title_candidates"] == ["标题1", "标题2"]
+    assert result["body_md"] == "正文内容"
+
+
+def test_extract_json_fallback_raw_newlines():
+    """The exact bug scenario: malformed JSON with raw newlines in body_md."""
+    text = (
+        '```json\n'
+        '{\n'
+        '  "title_candidates": [\n'
+        '    "《The Blood of Dawnwalker》独家解读：时间就是货币",\n'
+        '    "30 天倒计时，8 个时段"\n'
+        '  ],\n'
+        '  "body_md": "## 一、鲜血弥撒前的 8 小时\n'
+        '\n'
+        '拉斯莱亚村很小。\n'
+        '\n'
+        '但对科恩一家来说，这个世界最近变得更小了。\n'
+        '\n'
+        '## 二、选择，就是推动时间的唯一方式\n'
+        '\n'
+        '游戏从这里开始。\n'
+        '\n'
+        '## 写在最后\n'
+        '\n'
+        '这是一个关于有限选择的寓言。\n'
+        '\n'
+        '游戏将于 2026 年 9 月 3 日登陆 PlayStation 5。"\n'
+        '}\n'
+        '```'
+    )
+    result = _extract_json_fallback(text)
+    assert result is not None
+    assert len(result["title_candidates"]) == 2
+    assert "黎明行者" not in result["body_md"]  # from title, not body
+    assert "鲜血弥撒" in result["body_md"]
+    assert "写在最后" in result["body_md"]
+    assert "PlayStation 5" in result["body_md"]
+
+
+def test_extract_json_fallback_single_title():
+    text = (
+        '{\n'
+        '  "title_candidates": ["唯一标题"],\n'
+        '  "body_md": "正文"\n'
+        '}'
+    )
+    result = _extract_json_fallback(text)
+    assert result["title_candidates"] == ["唯一标题"]
+
+
+def test_extract_json_fallback_no_title_candidates():
+    text = '{"body_md": "正文但没有标题"}'
+    assert _extract_json_fallback(text) is None
+
+
+def test_extract_json_fallback_no_body_md():
+    text = '{"title_candidates": ["有标题无正文"]}'
+    assert _extract_json_fallback(text) is None
+
+
+def test_extract_json_fallback_meta_commentary():
+    """LLM outputs meta-text saying 'done' — fallback should handle it
+    IF the JSON is embedded, or return None if no JSON exists."""
+    # This is the exact bug scenario for drafts 1915/1916/1917:
+    # the LLM output "完成。文件已写入 output.json" with NO JSON body_md
+    text = (
+        "完成。文件已写入 `output.json`。\n\n"
+        "**输出摘要：**\n\n"
+        "| 项目 | 内容 |\n| 标题候选 | 3 个 |\n"
+    )
+    assert _extract_json_fallback(text) is None
+
+
+def test_extract_json_fallback_escaped_newlines_in_title():
+    """title_candidates may contain \\n (properly escaped in JSON string)."""
+    text = (
+        '{\n'
+        '  "title_candidates": ["line1\\nline2", "simple"],\n'
+        '  "body_md": "body"\n'
+        '}'
+    )
+    result = _extract_json_fallback(text)
+    assert result is not None
+    assert "line1" in result["title_candidates"][0]
+    assert "line2" in result["title_candidates"][0]
+
+
+# ── rewrite() retry on failed JSON ─────────────────────────────────────
+
+def test_rewrite_retry_on_invalid_json():
+    """First response has no valid JSON; second retry succeeds."""
+    invalid_resp = "已完成，文件已写入 output.json。完全不包含 JSON。"
+    retry_resp = json.dumps({
+        "title_candidates": ["重试成功标题"],
+        "body_md": "## 重试后的正文\n\n内容来了。",
+    })
+    check_resp = json.dumps({"flagged_claims": []})
+    provider = MockProvider(responses=[invalid_resp, retry_resp, check_resp])
+    draft = rewrite(sample_article(), provider)
+    assert draft.title_candidates[0] == "重试成功标题"
+    assert "内容来了" in draft.body_md
+
+
+def test_rewrite_retry_on_malformed_json():
+    """First response has JSON with raw newlines (fail parse → fallback fails
+    because it's meta-text without real body_md).  Second retry works."""
+    # Simulate the draft-1910 bug: JSON with raw newlines + meta prefix
+    invalid = (
+        "既然用户要求转写为深度中文报道，直接执行即可。\n\n"
+        "```json\n"
+        '{"title_candidates": ["标题"], '
+        '"body_md": "## 一、开头\\n\\n内容\\n\\n## 写在最后\\n\\n结束。"}\n'
+        "```"
+    )
+    # _extract_json should FAIL (body_md has raw \n in value)
+    # _extract_json_fallback should at least extract body_md
+    # Actually this specific case HAS proper escaping, so it should parse OK.
+    # Let's make a case that truly fails: raw newlines inside body_md value
+    invalid2 = (
+        '```json\n'
+        '{\n'
+        '  "title_candidates": ["标题"],\n'
+        '  "body_md": "## 一、开头\n'
+        '\n'
+        '第一段。\n'
+        '\n'
+        '## 写在最后\n'
+        '\n'
+        '结束。"\n'
+        '}\n'
+        '```'
+    )
+    retry_resp = json.dumps({
+        "title_candidates": ["正确标题"],
+        "body_md": "## 正确正文\\n\\n内容。",
+    })
+    check_resp = json.dumps({"flagged_claims": []})
+    provider = MockProvider(responses=[invalid2, retry_resp, check_resp])
+    draft = rewrite(sample_article(), provider)
+    # fallback should have extracted body_md from invalid2,
+    # so retry is NOT triggered — check fallback output
+    assert draft.title_candidates[0] == "标题"  # from fallback extraction
+    assert "第一段" in draft.body_md
+
+
+def test_rewrite_no_retry_when_fallback_works():
+    """JSON has raw newlines but _extract_json_fallback recovers it;
+    no retry is triggered."""
+    text = (
+        '```json\n'
+        '{\n'
+        '  "title_candidates": ["直接用回退提取的标题"],\n'
+        '  "body_md": "## 回退正文\n'
+        '\n'
+        '这是通过正则提取的内容。\n'
+        '\n'
+        '## 写在最后\n'
+        '\n'
+        '结尾。"\n'
+        '}\n'
+        '```'
+    )
+    check_resp = json.dumps({"flagged_claims": []})
+    # Only 2 responses total — no retry response expected
+    provider = MockProvider(responses=[text, check_resp])
+    draft = rewrite(sample_article(), provider)
+    assert draft.title_candidates[0] == "直接用回退提取的标题"
+    assert "回退正文" in draft.body_md
+    assert "正则提取" in draft.body_md
