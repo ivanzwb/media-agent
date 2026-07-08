@@ -2,41 +2,40 @@
 set -e
 
 echo "============================================"
-echo " Media Agent - 可选依赖安装"
+echo " Media Agent - Optional Component Setup"
 echo "============================================"
 echo ""
-echo "本脚本自动检测并安装缺失的可选组件。"
+echo "This script auto-detects and installs missing optional components."
 echo ""
-echo "  [1] Playwright + Chromium（用于 JS 渲染抓取）"
-echo "  [2] fish-audio-sdk（云端声音克隆 TTS）"
-echo "  [3] ffmpeg（视频合成 — 必须自己装）"
-echo "  [4] CosyVoice（本地声音复刻 — 需 GPU）"
+echo "  [1] Playwright + Chromium (for JS-rendered page scraping)"
+echo "  [2] fish-audio-sdk (cloud voice-cloning TTS)"
+echo "  [3] ffmpeg (video compositing — install manually)"
+echo "  [4] CosyVoice (local voice cloning via embedded Python)"
 echo ""
 echo "============================================"
 echo ""
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUNDLE_DIR="$SCRIPT_DIR"
-# If called from inside media-agent dir, use that; otherwise find it
 if [ ! -f "$BUNDLE_DIR/media-agent" ]; then
     BUNDLE_DIR="$SCRIPT_DIR/media-agent"
 fi
 MEDIA_AGENT="${BUNDLE_DIR}/media-agent"
 INTERNAL_DIR="${BUNDLE_DIR}/_internal"
+COSYVOICE_DIR="${BUNDLE_DIR}/_cosyvoice-python"
 
 # ── 1. Playwright + Chromium ─────────────────────
 echo "[1/4] Playwright + Chromium ..."
 
 if [ -d "$INTERNAL_DIR/playwright" ]; then
-    echo "  [√] Playwright 库已打包"
+    echo "  [OK] Playwright library is bundled"
 else
-    echo "  [×] Playwright 未打包，请解压完整压缩包（含 _internal 目录）"
+    echo "  [SKIP] Playwright not found — re-extract full archive"
     echo ""
     skip_to_end=true
 fi
 
 if [ "$skip_to_end" != true ]; then
-    # Check if Chromium browser is already installed
     PW_CACHE="$HOME/Library/Caches/ms-playwright"
     CHROMIUM_INSTALLED=false
     if [ -d "$PW_CACHE" ]; then
@@ -46,61 +45,116 @@ if [ "$skip_to_end" != true ]; then
     fi
 
     if [ "$CHROMIUM_INSTALLED" = true ]; then
-        echo "  [√] Chromium 已安装"
+        echo "  [OK] Chromium already installed"
     elif [ -x "$MEDIA_AGENT" ]; then
-        echo "  正在下载 Chromium 浏览器（约 300MB，首次只需一次）..."
+        echo "  Downloading Chromium browser (~300 MB, first time only)..."
         if "$MEDIA_AGENT" --run-module playwright install chromium 2>/dev/null; then
-            echo "  [√] Chromium 安装完成"
+            echo "  [OK] Chromium installed"
         else
-            echo "  [×] Chromium 自动安装失败"
+            echo "  [FAIL] Chromium auto-install failed"
             echo ""
-            echo "  手动安装方式："
-            echo "    1. 确保已安装 Python 3.11+"
+            echo "  Manual install:"
+            echo "    1. Make sure Python 3.11+ is installed"
             echo "    2. pip install playwright"
             echo "    3. python -m playwright install chromium"
         fi
     else
-        echo "  [×] 找不到 $MEDIA_AGENT"
+        echo "  [SKIP] $MEDIA_AGENT not found"
     fi
 fi
 echo ""
 
 # ── 2. fish-audio-sdk ──────────────────────────
 echo "[2/4] fish-audio-sdk ..."
-echo "  [√] fish-audio-sdk 已打包进主程序，无需额外安装"
+echo "  [OK] fish-audio-sdk is bundled in the package"
 echo ""
 
 # ── 3. ffmpeg ──────────────────────────────────
 echo "[3/4] ffmpeg ..."
 if command -v ffmpeg >/dev/null 2>&1; then
-    echo "  [√] ffmpeg 已安装: $(which ffmpeg)"
+    echo "  [OK] ffmpeg found: $(which ffmpeg)"
 else
-    echo "  [×] ffmpeg 未找到"
+    echo "  [SKIP] ffmpeg not found"
     echo ""
-    echo "  macOS 推荐安装方式:"
-    echo "    brew install ffmpeg"
-    echo ""
-    echo "  或手动下载: https://ffmpeg.org/download.html"
+    echo "  macOS: brew install ffmpeg"
+    echo "  Or download: https://ffmpeg.org/download.html"
 fi
 echo ""
 
-# ── 4. CosyVoice ───────────────────────────────
-echo "[4/4] CosyVoice（本地声音复刻，可选）..."
+# ── 4. CosyVoice (embedded Python sidecar) ────
+echo "[4/4] CosyVoice (local voice cloning)..."
+
+# Skip if already set up
+if [ -f "$COSYVOICE_DIR/bin/python3" ]; then
+    echo "  [OK] Embedded Python already set up"
+    PYTHON="$COSYVOICE_DIR/bin/python3"
+else
+    # Find the embeddable Python archive in _internal/packaging/
+    EMBED_ARC="$INTERNAL_DIR/packaging/python-embed-macos.tar.gz"
+    GET_PIP="$INTERNAL_DIR/packaging/get-pip.py"
+
+    if [ ! -f "$EMBED_ARC" ]; then
+        echo "  [FAIL] Embeddable Python archive not found at:"
+        echo "         $EMBED_ARC"
+        echo ""
+        return 2>/dev/null || exit 1
+    fi
+
+    # Extract embeddable Python
+    echo "  Extracting embedded Python..."
+    mkdir -p "$COSYVOICE_DIR"
+    tar xzf "$EMBED_ARC" -C "$COSYVOICE_DIR" --strip-components=1 2>/dev/null || \
+        tar xzf "$EMBED_ARC" -C "$COSYVOICE_DIR"
+
+    # Find python binary
+    PYTHON=""
+    for candidate in "$COSYVOICE_DIR/bin/python3" "$COSYVOICE_DIR/python3" "$COSYVOICE_DIR/bin/python"; do
+        if [ -x "$candidate" ]; then
+            PYTHON="$candidate"
+            break
+        fi
+    done
+
+    if [ -z "$PYTHON" ]; then
+        echo "  [FAIL] Failed to extract embeddable Python"
+        return 2>/dev/null || exit 1
+    fi
+    echo "  [OK] Python extracted: $PYTHON"
+
+    # Install pip
+    echo "  Installing pip..."
+    "$PYTHON" "$GET_PIP" --quiet
+    echo "  [OK] pip installed"
+
+    # Install PyTorch (CPU) + CosyVoice
+    echo "  Installing PyTorch (CPU) + CosyVoice (may take a few minutes)..."
+    "$PYTHON" -m pip install torch torchvision torchaudio \
+        --index-url https://download.pytorch.org/whl/cpu --quiet
+    echo "  [OK] PyTorch installed"
+
+    "$PYTHON" -m pip install cosyvoice --quiet
+    echo "  [OK] CosyVoice installed"
+fi
+
+# Download model
+echo "  Checking CosyVoice model..."
+MODEL_DIR="$BUNDLE_DIR/pretrained_models/CosyVoice2-0.5B"
+if [ -f "$MODEL_DIR/model.pt" ]; then
+    echo "  [OK] Model already downloaded"
+else
+    echo "  Downloading CosyVoice2-0.5B model (~1.5 GB, first time only)..."
+    mkdir -p "$MODEL_DIR"
+    "$PYTHON" -m pip install "huggingface_hub[cli]" --quiet
+    "$PYTHON" -m huggingface_hub.cli download \
+        FunAudioLLM/CosyVoice2-0.5B --local-dir "$MODEL_DIR"
+    echo "  [OK] Model downloaded"
+fi
+
 echo ""
-echo "  CosyVoice 需要 Python < 3.13 + NVIDIA GPU + 显存 4GB+"
-echo "  无法打包（torch 2.8GB），需独立 Python 环境："
+echo "  [OK] CosyVoice is ready to use!"
+echo "  Start Media Agent, then set TTS Provider to 'cosyvoice' in Settings."
 echo ""
-echo "  1. 创建 Python 3.11 环境:"
-echo "     conda create -n cosyvoice python=3.11"
-echo "     conda activate cosyvoice"
-echo ""
-echo "  2. 安装 torch + cosyvoice + 下载模型:"
-echo "     pip install torch torchvision torchaudio"
-echo "     pip install cosyvoice"
-echo "     huggingface-cli download FunAudioLLM/CosyVoice2-0.5B --local-dir pretrained_models/CosyVoice2-0.5B"
-echo ""
-echo "  3. 启动 Media Agent，在“设置”页把 TTS Provider 切换为 cosyvoice"
 echo "============================================"
-echo "  安装完成！"
-echo "  如有问题请提交 Issue: https://github.com/ivanzwb/media-agent/issues"
-echo "     pip install torch torchvision torchaudio"
+echo "  Setup complete!"
+echo "  Report issues: https://github.com/ivanzwb/media-agent/issues"
+echo "============================================"

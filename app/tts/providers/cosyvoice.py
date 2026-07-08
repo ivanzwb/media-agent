@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -29,6 +30,37 @@ _WHISPER_LOCK = threading.Lock()
 _INFERENCE_LOCK = threading.Lock()
 _PROMPT_LOCK = threading.Lock()  # serialize _prompt_text init across threads
 _DEFAULT_MODEL = "FunAudioLLM/CosyVoice2-0.5B"
+
+
+# ------------------------------------------------------------------
+# Sidecar embedded Python discovery
+# When CosyVoice is installed via setup-optional.bat/sh, PyTorch and
+# cosyvoice live inside _cosyvoice-python/ (an embedded/portable Python).
+# We add its site-packages to sys.path so imports work transparently.
+# ------------------------------------------------------------------
+def _discover_sidecar_python():
+    """Add the sidecar Python's site-packages to sys.path if present."""
+    # Determine bundle root: PyInstaller frozen → _MEIPASS/..  else CWD
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        bundle_root = os.path.dirname(sys._MEIPASS)
+    else:
+        bundle_root = os.getcwd()
+
+    sidecar_site = os.path.join(
+        bundle_root, '_cosyvoice-python', 'Lib', 'site-packages')
+    if os.path.isdir(sidecar_site) and sidecar_site not in sys.path:
+        sys.path.insert(0, sidecar_site)
+        # Also check for python<version>/site-packages (macOS layout)
+        sidecar_site2 = os.path.join(
+            bundle_root, '_cosyvoice-python', 'lib',
+            f'python{sys.version_info.major}.{sys.version_info.minor}',
+            'site-packages')
+        if os.path.isdir(sidecar_site2) and sidecar_site2 not in sys.path:
+            sys.path.insert(0, sidecar_site2)
+        logger.info("Sidecar Python site-packages added: %s", sidecar_site)
+
+
+_discover_sidecar_python()
 
 
 # ------------------------------------------------------------------

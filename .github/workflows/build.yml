@@ -20,6 +20,17 @@ jobs:
           pip install -r requirements.txt
           pip install "click<8.2" pyinstaller fish-audio-sdk playwright
 
+      # Download embeddable Python for CosyVoice sidecar env
+      - name: Download embeddable Python
+        shell: pwsh
+        run: |
+          $url = "https://www.python.org/ftp/python/3.11.11/python-3.11.11-embed-amd64.zip"
+          $out = "packaging/python-embed-win64.zip"
+          if (-not (Test-Path $out)) {
+            Invoke-WebRequest -Uri $url -OutFile $out
+          }
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "packaging/get-pip.py"
+
       - name: Build
         shell: pwsh
         run: |
@@ -29,9 +40,12 @@ jobs:
             --add-data "app/web/templates;app/web/templates" `
             --add-data "app/web/static;app/web/static" `
             --add-data "app/licensing/public_key.b64;app/licensing" `
+            --add-data "packaging/python-embed-win64.zip;packaging" `
+            --add-data "packaging/get-pip.py;packaging" `
             --exclude-module "torch" `
             --exclude-module "torchvision" `
             --exclude-module "torchaudio" `
+            --exclude-module "soundfile" `
             --exclude-module "transformers" `
             --exclude-module "scipy" `
             --exclude-module "matplotlib" `
@@ -40,7 +54,6 @@ jobs:
             --exclude-module "scikit-learn" `
             --exclude-module "librosa" `
             --exclude-module "numba" `
-            --exclude-module "soundfile" `
             --exclude-module "onnxruntime" `
             --exclude-module "tensorflow" `
             --exclude-module "pyarrow" `
@@ -119,6 +132,13 @@ jobs:
           pip install -r requirements.txt
           pip install "click<8.2" pyinstaller fish-audio-sdk playwright
 
+      # Download embeddable Python for CosyVoice sidecar env
+      - name: Download embeddable Python
+        run: |
+          curl -sL "https://www.python.org/ftp/python/3.11.11/python-3.11.11-embed-macosx10.9-x86_64.tar.gz" \
+            -o packaging/python-embed-macos.tar.gz
+          curl -sL "https://bootstrap.pypa.io/get-pip.py" -o packaging/get-pip.py
+
       - name: Build
         run: |
           pyinstaller --onedir \
@@ -127,9 +147,12 @@ jobs:
             --add-data "app/web/templates:app/web/templates" \
             --add-data "app/web/static:app/web/static" \
             --add-data "app/licensing/public_key.b64:app/licensing" \
+            --add-data "packaging/python-embed-macos.tar.gz:packaging" \
+            --add-data "packaging/get-pip.py:packaging" \
             --exclude-module "torch" \
             --exclude-module "torchvision" \
             --exclude-module "torchaudio" \
+            --exclude-module "soundfile" \
             --exclude-module "transformers" \
             --exclude-module "scipy" \
             --exclude-module "matplotlib" \
@@ -138,7 +161,6 @@ jobs:
             --exclude-module "scikit-learn" \
             --exclude-module "librosa" \
             --exclude-module "numba" \
-            --exclude-module "soundfile" \
             --exclude-module "onnxruntime" \
             --exclude-module "tensorflow" \
             --exclude-module "pyarrow" \

@@ -1,24 +1,26 @@
 @echo off
-title Media Agent - ¿ÉÑ¡ÒÀÀµ°²×°
+title Media Agent - Optional Component Setup
+
+setlocal enabledelayedexpansion
+cd /d "%~dp0"
 
 echo ============================================
-echo  Media Agent - ¿ÉÑ¡ÒÀÀµ°²×°
+echo  Media Agent - Optional Component Setup
 echo ============================================
 echo.
-echo ±¾½Å±¾×Ô¶¯¼ì²â²¢°²×°È±Ê§µÄ¿ÉÑ¡×é¼ş¡£
+echo  This script auto-detects and installs missing optional components.
 echo.
-echo   [1] Playwright + Chromium£¨ÓÃÓÚ JS äÖÈ¾×¥È¡£©
-echo   [2] fish-audio-sdk£¨ÔÆ¶ËÉùÒô¿ËÂ¡ TTS£©
-echo   [3] ffmpeg£¨ÊÓÆµºÏ³É ¡ª ±ØĞë×Ô¼º×°£©
-echo   [4] CosyVoice£¨±¾µØÉùÒô¸´¿Ì ¡ª Ğè GPU£©
+echo  [1] Playwright + Chromium (for JS-rendered page scraping)
+echo  [2] fish-audio-sdk (cloud voice-cloning TTS)
+echo  [3] ffmpeg (video compositing â€” install manually)
+echo  [4] CosyVoice (local voice cloning via embedded Python)
 echo.
 echo ============================================
 echo.
 
-:: ===== Detect script dir ============================================
-set "SCRIPT_DIR=%~dp0"
-set "BUNDLE_DIR=%SCRIPT_DIR%"
+set "BUNDLE_DIR=%~dp0"
 set "INTERNAL_DIR=%BUNDLE_DIR%_internal\"
+set "COSYVOICE_DIR=%BUNDLE_DIR%_cosyvoice-python\"
 
 :: ===== 1. Playwright + Chromium =====================================
 :playwright
@@ -26,9 +28,9 @@ echo [1/4] Playwright + Chromium ...
 
 :: --- Check if playwright library is bundled (in _internal/) ----------
 if exist "%INTERNAL_DIR%playwright\" (
-    echo   [¡Ì] Playwright ÒÑ´ò°ü
+    echo   [OK] Playwright library is bundled
 ) else (
-    echo   [¡Á] Playwright Î´´ò°ü£¬Çë½âÑ¹ÍêÕûÑ¹Ëõ°ü£¨º¬ _internal Ä¿Â¼£©
+    echo   [SKIP] Playwright library not found â€” re-extract the full archive
     goto :chromium_skip
 )
 
@@ -40,16 +42,16 @@ if exist "%USERPROFILE%\AppData\Local\ms-playwright\" (
     )
 )
 if defined PW_CHROMIUM_DIR (
-    echo   [¡Ì] Chromium ÒÑ°²×°
+    echo   [OK] Chromium already installed
     goto :fish
 )
 
-:: --- Attempt Chromium install via bundled exe (v0.2.3+ only) ---------
-echo   ÕıÔÚÏÂÔØ Chromium ä¯ÀÀÆ÷£¨Ô¼ 300MB£¬½öÊ×´ÎĞèÒª£©...
+:: --- Attempt Chromium install via bundled exe ------------------------
+echo   Downloading Chromium browser (~300 MB, first time only)...
 if exist "%BUNDLE_DIR%media-agent.exe" (
     "%BUNDLE_DIR%media-agent.exe" --run-module playwright install chromium
 ) else (
-    echo   [¡Á] Î´ÕÒµ½ media-agent.exe
+    echo   [SKIP] media-agent.exe not found
     goto :chromium_manual
 )
 
@@ -61,13 +63,13 @@ if exist "%USERPROFILE%\AppData\Local\ms-playwright\" (
     )
 )
 if defined PW_CHROMIUM_DIR (
-    echo   [¡Ì] Chromium °²×°Íê³É
+    echo   [OK] Chromium installed
 ) else (
 :chromium_manual
-    echo   [¡Á] Chromium ×Ô¶¯°²×°Ê§°Ü
+    echo   [FAIL] Chromium auto-install failed
     echo.
-    echo   ¿ÉÊÖ¶¯°²×°£º
-    echo     1. È·±£ÒÑ°²×° Python 3.11+
+    echo   Manual install:
+    echo     1. Make sure Python 3.11+ is installed
     echo     2. pip install playwright
     echo     3. python -m playwright install chromium
     echo.
@@ -76,10 +78,10 @@ if defined PW_CHROMIUM_DIR (
 echo.
 goto :fish
 
-:: ===== 2. Fish Audio SDK£¨ÒÑÄÚÖÃ£©===================================
+:: ===== 2. Fish Audio SDK (bundled, nothing to do) ===================
 :fish
 echo [2/4] fish-audio-sdk ...
-echo   [¡Ì] fish-audio-sdk ÒÑ´ò°ü½øÖ÷³ÌĞò£¬ÎŞĞè¶îÍâ°²×°
+echo   [OK] fish-audio-sdk is bundled in the package
 echo.
 goto :ffmpeg
 
@@ -89,417 +91,120 @@ echo [3/4] ffmpeg ...
 where ffmpeg >nul 2>nul
 if %errorlevel% equ 0 (
     for /f "delims=" %%i in ('where ffmpeg') do set "FFPATH=%%i"
-    echo   [¡Ì] ffmpeg ÒÑ°²×°: %FFPATH%
+    echo   [OK] ffmpeg found: %FFPATH%
 ) else (
-    echo   [¡Á] ffmpeg Î´ÕÒµ½
+    echo   [SKIP] ffmpeg not found
     echo.
-    echo   Çë·ÃÎÊ https://ffmpeg.org/download.html ÏÂÔØ£¬
-    echo   ½« bin\ffmpeg.exe ËùÔÚÄ¿Â¼Ìí¼Óµ½ÏµÍ³ PATH¡£
+    echo   Download from https://ffmpeg.org/download.html
+    echo   Add bin\ffmpeg.exe to your system PATH, or
+    echo   place ffmpeg.exe next to _internal\.
     echo.
-    echo   »òÖ±½ÓÏÂÔØ±ãĞ¯°æµ½±¾Ä¿Â¼£º
-    echo     curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
-    echo     ½âÑ¹ºó°Ñ ffmpeg.exe ·Åµ½ _internal\ Í¬Ä¿Â¼
 )
 echo.
 goto :cosyvoice
 
-:: ===== 4. CosyVoice£¨±¾µØÉùÒô¸´¿Ì£©==================================
+:: ===== 4. CosyVoice (embedded Python sidecar) =======================
 :cosyvoice
-echo [4/4] CosyVoice£¨±¾µØÉùÒô¸´¿Ì£¬¿ÉÑ¡£©...
-echo.
-echo   CosyVoice ĞèÒª Python ^< 3.13 + NVIDIA GPU + ÏÔ´æ 4GB+
-echo   ÎŞ·¨´ò°ü£¨torch 2.8GB£©£¬Ğèµ¥Á¢ Python »·¾³
-echo.
-echo   1. ´´½¨ Python 3.11 »·¾³:
-echo      conda create -n cosyvoice python=3.11
-echo      conda activate cosyvoice
-echo.
-echo   2. °²×° torch + cosyvoice + ÏÂÔØÄ£ĞÍ:
-echo      pip install torch torchvision torchaudio
-echo      pip install cosyvoice
-echo      huggingface-cli download FunAudioLLM/CosyVoice2-0.5B --local-dir pretrained_models/CosyVoice2-0.5B
-echo.
-echo   3. Æô¶¯ Media Agent£¬ÔÚ¡°ÉèÖÃ¡±Ò³°Ñ TTS Provider ÇĞ»»Îª cosyvoice
-echo ============================================
-echo  °²×°Íê³É£¡
-echo  ÈçÓĞÎÊÌâÇëÌá½» Issue: https://github.com/ivanzwb/media-agent/issues
-echo ============================================
-echo      pip install torch torchvision torchaudio
- Agent - ¿ÉÑ¡ÒÀÀµ°²×°
+echo [4/4] CosyVoice (local voice cloning)...
 
-echo ============================================
-echo  Media Agent - ¿ÉÑ¡ÒÀÀµ°²×°
-echo ============================================
-echo.
-echo ±¾½Å±¾×Ô¶¯¼ì²â²¢°²×°È±Ê§µÄ¿ÉÑ¡×é¼ş¡£
-echo.
-echo   [1] Playwright + Chromium£¨ÓÃÓÚ JS äÖÈ¾×¥È¡£©
-echo   [2] fish-audio-sdk£¨ÔÆ¶ËÉùÒô¿ËÂ¡ TTS£©
-echo   [3] ffmpeg£¨ÊÓÆµºÏ³É ¡ª ±ØĞë×Ô¼º×°£©
-echo   [4] CosyVoice£¨±¾µØÉùÒô¸´¿Ì ¡ª Ğè GPU£©
-echo.
-echo ============================================
-echo.
-
-:: ===== Detect script dir ============================================
-set "SCRIPT_DIR=%~dp0"
-set "BUNDLE_DIR=%SCRIPT_DIR%"
-set "INTERNAL_DIR=%BUNDLE_DIR%_internal\"
-
-:: ===== 1. Playwright + Chromium =====================================
-:playwright
-echo [1/4] Playwright + Chromium ...
-
-:: --- Check if playwright library is bundled (in _internal/) ----------
-if exist "%INTERNAL_DIR%playwright\" (
-    echo   [¡Ì] Playwright ÒÑ´ò°ü
-) else (
-    echo   [¡Á] Playwright Î´´ò°ü£¬Çë½âÑ¹ÍêÕûÑ¹Ëõ°ü£¨º¬ _internal Ä¿Â¼£©
-    goto :chromium_skip
+:: --- Skip if already set up -----------------------------------------
+if exist "%COSYVOICE_DIR%python.exe" (
+    echo   [OK] Embedded Python already set up
+    goto :cosyvoice_model
 )
 
-:: --- Check if Chromium browser is already installed ------------------
-set "PW_CHROMIUM_DIR="
-if exist "%USERPROFILE%\AppData\Local\ms-playwright\" (
-    for /d %%d in ("%USERPROFILE%\AppData\Local\ms-playwright\chromium-*") do (
-        if exist "%%d\chrome.exe" set "PW_CHROMIUM_DIR=%%d"
-    )
-)
-if defined PW_CHROMIUM_DIR (
-    echo   [¡Ì] Chromium ÒÑ°²×°
-    goto :fish
-)
+:: --- Find the embeddable Python zip bundled in _internal\packaging\ --
+set "EMBED_ZIP=%INTERNAL_DIR%packaging\python-embed-win64.zip"
+set "GET_PIP=%INTERNAL_DIR%packaging\get-pip.py"
 
-:: --- Attempt Chromium install via bundled exe (v0.2.3+ only) ---------
-echo   ÕıÔÚÏÂÔØ Chromium ä¯ÀÀÆ÷£¨Ô¼ 300MB£¬½öÊ×´ÎĞèÒª£©...
-if exist "%BUNDLE_DIR%media-agent.exe" (
-    "%BUNDLE_DIR%media-agent.exe" --run-module playwright install chromium
-) else (
-    echo   [¡Á] Î´ÕÒµ½ media-agent.exe
-    goto :chromium_manual
-)
-
-:: Verify install succeeded
-set "PW_CHROMIUM_DIR="
-if exist "%USERPROFILE%\AppData\Local\ms-playwright\" (
-    for /d %%d in ("%USERPROFILE%\AppData\Local\ms-playwright\chromium-*") do (
-        if exist "%%d\chrome.exe" set "PW_CHROMIUM_DIR=%%d"
-    )
-)
-if defined PW_CHROMIUM_DIR (
-    echo   [¡Ì] Chromium °²×°Íê³É
-) else (
-:chromium_manual
-    echo   [¡Á] Chromium ×Ô¶¯°²×°Ê§°Ü
+if not exist "%EMBED_ZIP%" (
+    echo   [FAIL] Embeddable Python zip not found at:
+    echo          %EMBED_ZIP%
+    echo   CosyVoice setup cannot continue.
     echo.
-    echo   ¿ÉÊÖ¶¯°²×°£º
-    echo     1. È·±£ÒÑ°²×° Python 3.11+
-    echo     2. pip install playwright
-    echo     3. python -m playwright install chromium
+    goto :cosyvoice_end
+)
+
+:: --- Extract embeddable Python --------------------------------------
+echo   Extracting embedded Python...
+if not exist "%COSYVOICE_DIR%" mkdir "%COSYVOICE_DIR%"
+powershell -Command "Expand-Archive -Path '%EMBED_ZIP%' -DestinationPath '%COSYVOICE_DIR%' -Force"
+if not exist "%COSYVOICE_DIR%python.exe" (
+    echo   [FAIL] Failed to extract embeddable Python
+    goto :cosyvoice_end
+)
+echo   [OK] Python extracted
+
+:: --- Remove python._pth to enable site-packages + pip ----------------
+if exist "%COSYVOICE_DIR%python._pth" (
+    del "%COSYVOICE_DIR%python._pth"
+    echo   [OK] python._pth removed (enables pip)
+)
+
+:: --- Install pip ----------------------------------------------------
+echo   Installing pip...
+"%COSYVOICE_DIR%python.exe" "%GET_PIP%" --quiet
+if %errorlevel% neq 0 (
+    echo   [FAIL] pip install failed
+    goto :cosyvoice_end
+)
+echo   [OK] pip installed
+
+:: --- Install PyTorch (CPU) + CosyVoice ------------------------------
+echo   Installing PyTorch (CPU) + CosyVoice (this may take a few minutes)...
+"%COSYVOICE_DIR%python.exe" -m pip install torch torchvision torchaudio ^
+    --index-url https://download.pytorch.org/whl/cpu --quiet
+if %errorlevel% neq 0 (
+    echo   [FAIL] PyTorch install failed
+    goto :cosyvoice_end
+)
+echo   [OK] PyTorch installed
+
+"%COSYVOICE_DIR%python.exe" -m pip install cosyvoice --quiet
+if %errorlevel% neq 0 (
+    echo   [FAIL] CosyVoice install failed
+    goto :cosyvoice_end
+)
+echo   [OK] CosyVoice installed
+
+:: --- Download model -------------------------------------------------
+:cosyvoice_model
+echo   Checking CosyVoice model...
+set "MODEL_DIR=%BUNDLE_DIR%pretrained_models\CosyVoice2-0.5B"
+if exist "%MODEL_DIR%\model.pt" (
+    echo   [OK] Model already downloaded
+    goto :cosyvoice_done
+)
+
+echo   Downloading CosyVoice2-0.5B model (~1.5 GB, first time only)...
+echo   This may take a while depending on your internet speed...
+if not exist "%MODEL_DIR%" mkdir "%MODEL_DIR%"
+
+:: Try using huggingface-cli first, fall back to direct download
+"%COSYVOICE_DIR%python.exe" -m pip install "huggingface_hub[cli]" --quiet
+"%COSYVOICE_DIR%python.exe" -m huggingface_hub.cli download ^
+    FunAudioLLM/CosyVoice2-0.5B --local-dir "%MODEL_DIR%"
+if %errorlevel% neq 0 (
+    echo   [FAIL] Model download failed
     echo.
+    echo   You can download manually:
+    echo   huggingface-cli download FunAudioLLM/CosyVoice2-0.5B
+    echo   --local-dir pretrained_models/CosyVoice2-0.5B
+    goto :cosyvoice_end
 )
-:chromium_skip
-echo.
-goto :fish
+echo   [OK] Model downloaded
 
-:: ===== 2. Fish Audio SDK£¨ÒÑÄÚÖÃ£©===================================
-:fish
-echo [2/4] fish-audio-sdk ...
-echo   [¡Ì] fish-audio-sdk ÒÑ´ò°ü½øÖ÷³ÌĞò£¬ÎŞĞè¶îÍâ°²×°
+:cosyvoice_done
 echo.
-goto :ffmpeg
+echo   [OK] CosyVoice is ready to use!
+echo   Start Media Agent, then set TTS Provider to "cosyvoice" in Settings.
+echo.
+goto :cosyvoice_end
 
-:: ===== 3. ffmpeg ====================================================
-:ffmpeg
-echo [3/4] ffmpeg ...
-where ffmpeg >nul 2>nul
-if %errorlevel% equ 0 (
-    for /f "delims=" %%i in ('where ffmpeg') do set "FFPATH=%%i"
-    echo   [¡Ì] ffmpeg ÒÑ°²×°: %FFPATH%
-) else (
-    echo   [¡Á] ffmpeg Î´ÕÒµ½
-    echo.
-    echo   Çë·ÃÎÊ https://ffmpeg.org/download.html ÏÂÔØ£¬
-    echo   ½« bin\ffmpeg.exe ËùÔÚÄ¿Â¼Ìí¼Óµ½ÏµÍ³ PATH¡£
-    echo.
-    echo   »òÖ±½ÓÏÂÔØ±ãĞ¯°æµ½±¾Ä¿Â¼£º
-    echo     curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
-    echo     ½âÑ¹ºó°Ñ ffmpeg.exe ·Åµ½ _internal\ Í¬Ä¿Â¼
-)
-echo.
-goto :cosyvoice
-
-:: ===== 4. CosyVoice£¨±¾µØÉùÒô¸´¿Ì£©==================================
-:cosyvoice
-echo [4/4] CosyVoice£¨±¾µØÉùÒô¸´¿Ì£¬¿ÉÑ¡£©...
-echo.
-echo   CosyVoice ĞèÒª Python ^< 3.13 + NVIDIA GPU + ÏÔ´æ 4GB+
-echo   ÎŞ·¨´ò°ü£¨torch 2.8GB£©£¬Ğèµ¥Á¢ Python »·¾³
-echo.
-echo   1. ´´½¨ Python 3.11 »·¾³:
-echo      conda create -n cosyvoice python=3.11
-echo      conda activate cosyvoice
-echo.
-echo   2. °²×° torch + cosyvoice + ÏÂÔØÄ£ĞÍ:
-echo      pip install torch torchvision torchaudio
-echo      pip install cosyvoice
-echo      huggingface-cli download FunAudioLLM/CosyVoice2-0.5B --local-dir pretrained_models/CosyVoice2-0.5B
-echo.
-echo   3. Æô¶¯ Media Agent£¬ÔÚ¡°ÉèÖÃ¡±Ò³°Ñ TTS Provider ÇĞ»»Îª cosyvoice
-echo ============================================
-echo  °²×°Íê³É£¡
-echo  ÈçÓĞÎÊÌâÇëÌá½» Issue: https://github.com/ivanzwb/media-agent/issues
-echo ============================================
-echo      pip install torch torchvision torchaudio
- Agent - ¿ÉÑ¡ÒÀÀµ°²×°
-
-echo ============================================
-echo  Media Agent - ¿ÉÑ¡ÒÀÀµ°²×°
-echo ============================================
-echo.
-echo ±¾½Å±¾×Ô¶¯¼ì²â²¢°²×°È±Ê§µÄ¿ÉÑ¡×é¼ş¡£
-echo.
-echo   [1] Playwright + Chromium£¨ÓÃÓÚ JS äÖÈ¾×¥È¡£©
-echo   [2] fish-audio-sdk£¨ÔÆ¶ËÉùÒô¿ËÂ¡ TTS£©
-echo   [3] ffmpeg£¨ÊÓÆµºÏ³É ¡ª ±ØĞë×Ô¼º×°£©
-echo   [4] CosyVoice£¨±¾µØÉùÒô¸´¿Ì ¡ª Ğè GPU£©
-echo.
-echo ============================================
-echo.
-
-:: ===== Detect script dir ============================================
-set "SCRIPT_DIR=%~dp0"
-set "BUNDLE_DIR=%SCRIPT_DIR%"
-set "INTERNAL_DIR=%BUNDLE_DIR%_internal\"
-
-:: ===== 1. Playwright + Chromium =====================================
-:playwright
-echo [1/4] Playwright + Chromium ...
-
-:: --- Check if playwright library is bundled (in _internal/) ----------
-if exist "%INTERNAL_DIR%playwright\" (
-    echo   [¡Ì] Playwright ÒÑ´ò°ü
-) else (
-    echo   [¡Á] Playwright Î´´ò°ü£¬Çë½âÑ¹ÍêÕûÑ¹Ëõ°ü£¨º¬ _internal Ä¿Â¼£©
-    goto :chromium_skip
-)
-
-:: --- Check if Chromium browser is already installed ------------------
-set "PW_CHROMIUM_DIR="
-if exist "%USERPROFILE%\AppData\Local\ms-playwright\" (
-    for /d %%d in ("%USERPROFILE%\AppData\Local\ms-playwright\chromium-*") do (
-        if exist "%%d\chrome.exe" set "PW_CHROMIUM_DIR=%%d"
-    )
-)
-if defined PW_CHROMIUM_DIR (
-    echo   [¡Ì] Chromium ÒÑ°²×°
-    goto :fish
-)
-
-:: --- Attempt Chromium install via bundled exe (v0.2.3+ only) ---------
-echo   ÕıÔÚÏÂÔØ Chromium ä¯ÀÀÆ÷£¨Ô¼ 300MB£¬½öÊ×´ÎĞèÒª£©...
-if exist "%BUNDLE_DIR%media-agent.exe" (
-    "%BUNDLE_DIR%media-agent.exe" --run-module playwright install chromium
-) else (
-    echo   [¡Á] Î´ÕÒµ½ media-agent.exe
-    goto :chromium_manual
-)
-
-:: Verify install succeeded
-set "PW_CHROMIUM_DIR="
-if exist "%USERPROFILE%\AppData\Local\ms-playwright\" (
-    for /d %%d in ("%USERPROFILE%\AppData\Local\ms-playwright\chromium-*") do (
-        if exist "%%d\chrome.exe" set "PW_CHROMIUM_DIR=%%d"
-    )
-)
-if defined PW_CHROMIUM_DIR (
-    echo   [¡Ì] Chromium °²×°Íê³É
-) else (
-:chromium_manual
-    echo   [¡Á] Chromium ×Ô¶¯°²×°Ê§°Ü
-    echo.
-    echo   ¿ÉÊÖ¶¯°²×°£º
-    echo     1. È·±£ÒÑ°²×° Python 3.11+
-    echo     2. pip install playwright
-    echo     3. python -m playwright install chromium
-    echo.
-)
-:chromium_skip
-echo.
-goto :fish
-
-:: ===== 2. Fish Audio SDK£¨ÒÑÄÚÖÃ£©===================================
-:fish
-echo [2/4] fish-audio-sdk ...
-echo   [¡Ì] fish-audio-sdk ÒÑ´ò°ü½øÖ÷³ÌĞò£¬ÎŞĞè¶îÍâ°²×°
-echo.
-goto :ffmpeg
-
-:: ===== 3. ffmpeg ====================================================
-:ffmpeg
-echo [3/4] ffmpeg ...
-where ffmpeg >nul 2>nul
-if %errorlevel% equ 0 (
-    for /f "delims=" %%i in ('where ffmpeg') do set "FFPATH=%%i"
-    echo   [¡Ì] ffmpeg ÒÑ°²×°: %FFPATH%
-) else (
-    echo   [¡Á] ffmpeg Î´ÕÒµ½
-    echo.
-    echo   Çë·ÃÎÊ https://ffmpeg.org/download.html ÏÂÔØ£¬
-    echo   ½« bin\ffmpeg.exe ËùÔÚÄ¿Â¼Ìí¼Óµ½ÏµÍ³ PATH¡£
-    echo.
-    echo   »òÖ±½ÓÏÂÔØ±ãĞ¯°æµ½±¾Ä¿Â¼£º
-    echo     curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
-    echo     ½âÑ¹ºó°Ñ ffmpeg.exe ·Åµ½ _internal\ Í¬Ä¿Â¼
-)
-echo.
-goto :cosyvoice
-
-:: ===== 4. CosyVoice£¨±¾µØÉùÒô¸´¿Ì£©==================================
-:cosyvoice
-echo [4/4] CosyVoice£¨±¾µØÉùÒô¸´¿Ì£¬¿ÉÑ¡£©...
-echo.
-echo   CosyVoice ĞèÒª Python ^< 3.13 + NVIDIA GPU + ÏÔ´æ 4GB+
-echo   ÎŞ·¨´ò°ü£¨torch 2.8GB£©£¬Ğèµ¥Á¢ Python »·¾³
-echo.
-echo   1. ´´½¨ Python 3.11 »·¾³:
-echo      conda create -n cosyvoice python=3.11
-echo      conda activate cosyvoice
-echo.
-echo   2. °²×° torch + cosyvoice + ÏÂÔØÄ£ĞÍ:
-echo      pip install torch torchvision torchaudio
-echo      pip install cosyvoice
-echo      huggingface-cli download FunAudioLLM/CosyVoice2-0.5B --local-dir pretrained_models/CosyVoice2-0.5B
-echo.
-echo   3. Æô¶¯ Media Agent£¬ÔÚ¡°ÉèÖÃ¡±Ò³°Ñ TTS Provider ÇĞ»»Îª cosyvoice
-echo ============================================
-echo  °²×°Íê³É£¡
-echo  ÈçÓĞÎÊÌâÇëÌá½» Issue: https://github.com/ivanzwb/media-agent/issues
-echo ============================================
-echo      pip install torch torchvision torchaudio
- Agent - ¿ÉÑ¡ÒÀÀµ°²×°
-
-echo ============================================
-echo  Media Agent - ¿ÉÑ¡ÒÀÀµ°²×°
-echo ============================================
-echo.
-echo ±¾½Å±¾×Ô¶¯¼ì²â²¢°²×°È±Ê§µÄ¿ÉÑ¡×é¼ş¡£
-echo.
-echo   [1] Playwright + Chromium£¨ÓÃÓÚ JS äÖÈ¾×¥È¡£©
-echo   [2] fish-audio-sdk£¨ÔÆ¶ËÉùÒô¿ËÂ¡ TTS£©
-echo   [3] ffmpeg£¨ÊÓÆµºÏ³É ¡ª ±ØĞë×Ô¼º×°£©
-echo   [4] CosyVoice£¨±¾µØÉùÒô¸´¿Ì ¡ª Ğè GPU£©
+:cosyvoice_end
 echo.
 echo ============================================
-echo.
-
-:: ===== Detect script dir ============================================
-set "SCRIPT_DIR=%~dp0"
-set "BUNDLE_DIR=%SCRIPT_DIR%"
-set "INTERNAL_DIR=%BUNDLE_DIR%_internal\"
-
-:: ===== 1. Playwright + Chromium =====================================
-:playwright
-echo [1/4] Playwright + Chromium ...
-
-:: --- Check if playwright library is bundled (in _internal/) ----------
-if exist "%INTERNAL_DIR%playwright\" (
-    echo   [¡Ì] Playwright ÒÑ´ò°ü
-) else (
-    echo   [¡Á] Playwright Î´´ò°ü£¬Çë½âÑ¹ÍêÕûÑ¹Ëõ°ü£¨º¬ _internal Ä¿Â¼£©
-    goto :chromium_skip
-)
-
-:: --- Check if Chromium browser is already installed ------------------
-set "PW_CHROMIUM_DIR="
-if exist "%USERPROFILE%\AppData\Local\ms-playwright\" (
-    for /d %%d in ("%USERPROFILE%\AppData\Local\ms-playwright\chromium-*") do (
-        if exist "%%d\chrome.exe" set "PW_CHROMIUM_DIR=%%d"
-    )
-)
-if defined PW_CHROMIUM_DIR (
-    echo   [¡Ì] Chromium ÒÑ°²×°
-    goto :fish
-)
-
-:: --- Attempt Chromium install via bundled exe (v0.2.3+ only) ---------
-echo   ÕıÔÚÏÂÔØ Chromium ä¯ÀÀÆ÷£¨Ô¼ 300MB£¬½öÊ×´ÎĞèÒª£©...
-if exist "%BUNDLE_DIR%media-agent.exe" (
-    "%BUNDLE_DIR%media-agent.exe" --run-module playwright install chromium
-) else (
-    echo   [¡Á] Î´ÕÒµ½ media-agent.exe
-    goto :chromium_manual
-)
-
-:: Verify install succeeded
-set "PW_CHROMIUM_DIR="
-if exist "%USERPROFILE%\AppData\Local\ms-playwright\" (
-    for /d %%d in ("%USERPROFILE%\AppData\Local\ms-playwright\chromium-*") do (
-        if exist "%%d\chrome.exe" set "PW_CHROMIUM_DIR=%%d"
-    )
-)
-if defined PW_CHROMIUM_DIR (
-    echo   [¡Ì] Chromium °²×°Íê³É
-) else (
-:chromium_manual
-    echo   [¡Á] Chromium ×Ô¶¯°²×°Ê§°Ü
-    echo.
-    echo   ¿ÉÊÖ¶¯°²×°£º
-    echo     1. È·±£ÒÑ°²×° Python 3.11+
-    echo     2. pip install playwright
-    echo     3. python -m playwright install chromium
-    echo.
-)
-:chromium_skip
-echo.
-goto :fish
-
-:: ===== 2. Fish Audio SDK£¨ÒÑÄÚÖÃ£©===================================
-:fish
-echo [2/4] fish-audio-sdk ...
-echo   [¡Ì] fish-audio-sdk ÒÑ´ò°ü½øÖ÷³ÌĞò£¬ÎŞĞè¶îÍâ°²×°
-echo.
-goto :ffmpeg
-
-:: ===== 3. ffmpeg ====================================================
-:ffmpeg
-echo [3/4] ffmpeg ...
-where ffmpeg >nul 2>nul
-if %errorlevel% equ 0 (
-    for /f "delims=" %%i in ('where ffmpeg') do set "FFPATH=%%i"
-    echo   [¡Ì] ffmpeg ÒÑ°²×°: %FFPATH%
-) else (
-    echo   [¡Á] ffmpeg Î´ÕÒµ½
-    echo.
-    echo   Çë·ÃÎÊ https://ffmpeg.org/download.html ÏÂÔØ£¬
-    echo   ½« bin\ffmpeg.exe ËùÔÚÄ¿Â¼Ìí¼Óµ½ÏµÍ³ PATH¡£
-    echo.
-    echo   »òÖ±½ÓÏÂÔØ±ãĞ¯°æµ½±¾Ä¿Â¼£º
-    echo     curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
-    echo     ½âÑ¹ºó°Ñ ffmpeg.exe ·Åµ½ _internal\ Í¬Ä¿Â¼
-)
-echo.
-goto :cosyvoice
-
-:: ===== 4. CosyVoice£¨±¾µØÉùÒô¸´¿Ì£©==================================
-:cosyvoice
-echo [4/4] CosyVoice£¨±¾µØÉùÒô¸´¿Ì£¬¿ÉÑ¡£©...
-echo.
-echo   CosyVoice ĞèÒª Python ^< 3.13 + NVIDIA GPU + ÏÔ´æ 4GB+
-echo   ÎŞ·¨´ò°ü£¨torch 2.8GB£©£¬Ğèµ¥Á¢ Python »·¾³
-echo.
-echo   1. ´´½¨ Python 3.11 »·¾³:
-echo      conda create -n cosyvoice python=3.11
-echo      conda activate cosyvoice
-echo.
-echo   2. °²×° torch + cosyvoice + ÏÂÔØÄ£ĞÍ:
-echo      pip install torch torchvision torchaudio
-echo      pip install cosyvoice
-echo      huggingface-cli download FunAudioLLM/CosyVoice2-0.5B --local-dir pretrained_models/CosyVoice2-0.5B
-echo.
-echo   3. Æô¶¯ Media Agent£¬ÔÚ¡°ÉèÖÃ¡±Ò³°Ñ TTS Provider ÇĞ»»Îª cosyvoice
-echo ============================================
-echo  °²×°Íê³É£¡
-echo  ÈçÓĞÎÊÌâÇëÌá½» Issue: https://github.com/ivanzwb/media-agent/issues
+echo  Setup complete!
+echo  Report issues: https://github.com/ivanzwb/media-agent/issues
 echo ============================================
 pause
