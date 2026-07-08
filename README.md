@@ -83,7 +83,7 @@ macOS:    media-agent/media-agent serve
 | fish-audio-sdk | ✅ 已内置 | 云端声音克隆 |
 | playwright 库 | ✅ 已内置 | 需额外下载 Chromium（脚本一键完成） |
 | ffmpeg | ❌ 需单独装 | 视频合成必需，[下载](https://ffmpeg.org)后加入 PATH |
-| CosyVoice | ❌ 需单独装 | 需 NVIDIA GPU + Python < 3.13，脚本有详细指引 |
+| CosyVoice | ✅ 已内置 | 仅需安装 PyTorch + 下载模型，脚本一键完成 |
 
 ### 本地构建
 

@@ -172,6 +172,21 @@ class CosyVoiceTTS:
             try:
                 # CosyVoice2 is the latest model supporting zero-shot cloning
                 from cosyvoice.cli.cosyvoice import CosyVoice2
+
+                if self._model_dir is None:
+                    self._model_dir = self._resolve_model_path(self.model_name)
+
+                import torch
+                fp16 = torch.cuda.is_available()
+                logger.info(
+                    "加载 CosyVoice2 模型 %s (fp16=%s) …",
+                    self._model_dir, fp16)
+                _MODEL = CosyVoice2(
+                    self._model_dir,
+                    load_jit=False,
+                    load_trt=False,
+                    fp16=fp16,
+                )
             except ImportError as e:
                 raise RuntimeError(
                     "未安装 CosyVoice：请 `pip install cosyvoice`，"
@@ -180,20 +195,6 @@ class CosyVoiceTTS:
                     "--local-dir pretrained_models/CosyVoice2-0.5B\n\n"
                     "注意：CosyVoice2 需要 Python < 3.13 且建议有 NVIDIA GPU。"
                 ) from e
-
-            if self._model_dir is None:
-                self._model_dir = self._resolve_model_path(self.model_name)
-
-            import torch
-            fp16 = torch.cuda.is_available()
-            logger.info(
-                "加载 CosyVoice2 模型 %s (fp16=%s) …", self._model_dir, fp16)
-            _MODEL = CosyVoice2(
-                self._model_dir,
-                load_jit=False,
-                load_trt=False,
-                fp16=fp16,
-            )
             logger.info("CosyVoice2 模型加载完成")
         return _MODEL
 
