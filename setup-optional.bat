@@ -117,12 +117,7 @@ echo.
 echo   2. 安装依赖：
 echo      pip install "setuptools<70" cosyvoice
 echo.
-echo   3. 启动 Media Agent 并切换 TTS：
-echo      set MEDIA_AGENT_TTS_PROVIDER=cosyvoice
-echo      media-agent.exe serve
-echo.
-echo   4. （可选）在 Web 设置页确认：
-echo      TTS Provider: cosyvoice
+echo   3. 启动 Media Agent ，在“设置”页把 TTS Provider 切换为 cosyvoice
 echo.
 echo ============================================
 echo  安装完成！
