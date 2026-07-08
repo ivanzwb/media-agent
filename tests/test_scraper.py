@@ -410,3 +410,59 @@ def test_is_non_article_html_extension_stripping():
     assert _is_non_article("https://x.com/legal/terms.html")
     assert _is_non_article("https://x.com/cookie-policy.aspx")
     assert _is_non_article("https://x.com/privacy/index.html")
+
+
+# ── _fetch_html: plain vs rendered comparison ────────────────────────────
+
+from unittest.mock import patch
+
+@patch("app.sources.scraper._render_with_playwright")
+@patch("app.sources.scraper.extract_from_html")
+def test_fetch_html_chooses_plain_when_richer(mock_extract, mock_render):
+    """When plain HTML yields significantly more content, use it."""
+    mock_render.return_value = "<html><body>rendered</body></html>"
+    # First call: rendered content (short)
+    # Second call: plain content (long)
+    mock_extract.side_effect = [
+        {"content_md": "short content"},
+        {"content_md": "much longer content " + "x" * 100},
+    ]
+    from app.sources.scraper import _fetch_html
+    # Monkey-patch httpx.get to return plain HTML
+    with patch("app.sources.scraper.httpx.get") as mock_get:
+        mock_get.return_value.text = "<html><body>plain html</body></html>"
+        mock_get.return_value.raise_for_status = lambda: None
+        result = _fetch_html("https://example.com", render_js=True, timeout=10)
+        # Longer content should win → plain HTML returned
+        assert "plain html" in result
+
+
+@patch("app.sources.scraper._render_with_playwright")
+@patch("app.sources.scraper.extract_from_html")
+def test_fetch_html_keeps_rendered_when_richer(mock_extract, mock_render):
+    """When rendered HTML is richer (or similar), keep it."""
+    mock_render.return_value = "<html><body>rendered</body></html>"
+    # Both are similar — rendered should be kept
+    mock_extract.side_effect = [
+        {"content_md": "long rendered content " + "x" * 100},
+        {"content_md": "short plain"},
+    ]
+    from app.sources.scraper import _fetch_html
+    with patch("app.sources.scraper.httpx.get") as mock_get:
+        mock_get.return_value.text = "<html><body>plain html</body></html>"
+        mock_get.return_value.raise_for_status = lambda: None
+        result = _fetch_html("https://example.com", render_js=True, timeout=10)
+        # Rendered should win → rendered HTML returned
+        assert "rendered" in result
+
+
+@patch("app.sources.scraper._render_with_playwright")
+def test_fetch_html_falls_back_when_playwright_fails(mock_render):
+    """When Playwright returns None, fall back to plain httpx."""
+    mock_render.return_value = None
+    from app.sources.scraper import _fetch_html
+    with patch("app.sources.scraper.httpx.get") as mock_get:
+        mock_get.return_value.text = "<html><body>plain fallback</body></html>"
+        mock_get.return_value.raise_for_status = lambda: None
+        result = _fetch_html("https://example.com", render_js=True, timeout=10)
+        assert "plain fallback" in result

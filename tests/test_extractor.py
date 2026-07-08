@@ -859,3 +859,94 @@ def test_readability_short_output_keeps_images():
     # Real article image should be kept
     assert any("photo.jpg" in img for img in imgs), (
         f"article image should be kept, got {imgs}")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# JSON-LD hero image dedup by filename stem (same image, different fmt)
+# ═══════════════════════════════════════════════════════════════════
+
+def test_extract_jsonld_hero_deduped_by_stem_when_webp_in_body():
+    """JSON-LD hero image (GIF) is NOT prepended when the SAME image
+    already exists in the body as WebP (e.g. WordPress CDN serves
+    image1-1.webp inline and image1-1.gif as og:image)."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/image1-1.gif"}'
+        '</script>'
+        '<html><body><article>'
+        '<p>Article text that needs to be long enough for trafilatura.</p>'
+        '<img src="https://cdn.example.com/image1-1.webp" />'
+        '<p>More content to ensure enough text for extraction.</p>'
+        '<p>Even more text to push past the minimum content threshold.</p>'
+        '<p>Repeating text to make sure trafilatura has enough to work with.</p>'
+        '<p>Additional paragraph for good measure and content length.</p>'
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    # Hero should NOT be added — it's a duplicate by stem
+    stems = [img.rsplit("/", 1)[-1].rsplit(".", 1)[0] for img in result["images"]]
+    assert len(stems) == len(set(stems)), (
+        f"duplicate stems found: {stems}")
+    assert len(result["images"]) == 1, (
+        f"expected 1 image (hero deduped), got {len(result['images'])}")
+
+
+def test_extract_jsonld_hero_prepended_when_unique():
+    """JSON-LD hero image IS prepended when it doesn't match any body image."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/hero.gif"}'
+        '</script>'
+        '<html><body><article>'
+        '<p>Article text that needs to be long enough for trafilatura.</p>'
+        '<img src="https://cdn.example.com/body-image.webp" />'
+        '<p>More content to ensure enough text for extraction.</p>'
+        '<p>Repeating text to push past the minimum content threshold.</p>'
+        '<p>Additional paragraph for good measure and content length.</p>'
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    # Hero should be FIRST (prepended)
+    assert len(result["images"]) >= 2, (
+        f"expected at least 2 images, got {len(result['images'])}")
+    assert "hero.gif" in result["images"][0], (
+        f"hero should be first, got {result['images']}")
+
+
+def test_extract_jsonld_hero_prepended_when_body_has_images():
+    """JSON-LD hero image IS prepended even when readability found body images.
+    (This was previously gated behind 'not images' — now always attempted.)"""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/unique-hero.png"}'
+        '</script>'
+        '<html><body><article>'
+        '<p>Article text that needs to be long enough.</p>'
+        '<img src="https://cdn.example.com/body-1.jpg" />'
+        '<img src="https://cdn.example.com/body-2.jpg" />'
+        '<p>More text to ensure trafilatura extracts content properly.</p>'
+        '<p>Additional content to meet the minimum text threshold.</p>'
+        '<p>Still more text to ensure readability produces valid content.</p>'
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    assert any("unique-hero.png" in img for img in result["images"]), (
+        f"hero image should be in images list: {result['images']}")
+    # Hero should be first
+    assert "unique-hero.png" in result["images"][0]
+
+
+def test_extract_jsonld_no_hero_when_no_jsonld():
+    """No JSON-LD present → no hero added (existing behavior unchanged)."""
+    html = (
+        '<html><body><article>'
+        '<p>Article text that needs to be long enough.</p>'
+        '<img src="https://cdn.example.com/body.jpg" />'
+        '<p>More text to ensure enough content for extraction.</p>'
+        '<p>Additional text for good measure.</p>'
+        '<p>Fourth paragraph to meet minimum thresholds.</p>'
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    assert len(result["images"]) == 1
+    assert "body.jpg" in result["images"][0]
