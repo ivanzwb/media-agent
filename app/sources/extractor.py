@@ -548,18 +548,24 @@ def extract_from_html(html: str, url: str) -> dict:
     # ── 1b-2. JSON-LD hero image — always try, even when body images exist ──
     # Sites like NVIDIA Developer Blog store the featured/hero image in
     # Schema.org JSON-LD, but readability strips it because it sits outside
-    # the article body.  Prepend the hero image when it adds new content.
+    # the article body.
     if content_md.strip():
         jsonld_img = _jsonld_image(html, base_url=url)
         if jsonld_img and jsonld_img not in images:
-            # Compare by filename stem to catch WebP/GIF duplicates of the
+            # Compare by filename stem to catch WebP/GIF variants of the
             # same image (e.g. image1-1.webp in body vs image1-1.gif hero).
+            # When the stem matches, replace the body variant in-place with
+            # the JSON-LD version (original format).  Otherwise prepend.
             jsonld_stem = (jsonld_img.rsplit("/", 1)[-1]
                            .rsplit(".", 1)[0].split("?")[0])
-            if not any(
-                u.rsplit("/", 1)[-1].rsplit(".", 1)[0].split("?")[0] == jsonld_stem
-                for u in images
-            ):
+            replaced = False
+            for idx, u in enumerate(images):
+                u_stem = u.rsplit("/", 1)[-1].rsplit(".", 1)[0].split("?")[0]
+                if u_stem == jsonld_stem:
+                    images[idx] = jsonld_img  # replace in-place
+                    replaced = True
+                    break
+            if not replaced:
                 images.insert(0, jsonld_img)
 
     # ── 1c. readability got very little content — try full HTML trafilatura ──

@@ -866,9 +866,10 @@ def test_readability_short_output_keeps_images():
 # ═══════════════════════════════════════════════════════════════════
 
 def test_extract_jsonld_hero_deduped_by_stem_when_webp_in_body():
-    """JSON-LD hero image (GIF) is NOT prepended when the SAME image
-    already exists in the body as WebP (e.g. WordPress CDN serves
-    image1-1.webp inline and image1-1.gif as og:image)."""
+    """JSON-LD hero (GIF) REPLACES body WebP of same image by stem.
+    e.g. WordPress CDN serves image1-1.webp in body and image1-1.gif
+    as og:image — the GIF version replaces the WebP in-place.
+    Only 1 image total (no duplicate), but now in original GIF format."""
     html = (
         '<script type="application/ld+json">'
         '{"@type":"NewsArticle","image":"https://cdn.example.com/image1-1.gif"}'
@@ -883,12 +884,14 @@ def test_extract_jsonld_hero_deduped_by_stem_when_webp_in_body():
         '</article></body></html>'
     )
     result = extract_from_html(html, url="https://example.com/post")
-    # Hero should NOT be added — it's a duplicate by stem
+    # Hero GIF should have REPLACED the body WebP (same stem)
+    assert len(result["images"]) == 1, (
+        f"expected 1 image, got {len(result['images'])}")
+    assert result["images"][0].endswith(".gif"), (
+        f"hero GIF should replace body WebP, got {result['images'][0]}")
     stems = [img.rsplit("/", 1)[-1].rsplit(".", 1)[0] for img in result["images"]]
     assert len(stems) == len(set(stems)), (
         f"duplicate stems found: {stems}")
-    assert len(result["images"]) == 1, (
-        f"expected 1 image (hero deduped), got {len(result['images'])}")
 
 
 def test_extract_jsonld_hero_prepended_when_unique():
