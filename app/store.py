@@ -36,7 +36,14 @@ def _first_body_image(body_md: str, images_dir: Path) -> str | None:
     # Resolve to a local file
     src_path: Path | None = None
     is_temp = False
-    if src.startswith("/media/"):
+    if "../" in src and "/media/" in src:
+        # Relative path: ../../media/<hash>/img-N.jpg → data_dir/media/...
+        # The draft is at data/drafts/<topic>/<file>.md
+        # Going up 2 levels from there reaches data/
+        src_path = Path("data") / "media" / src.split("/media/", 1)[1]
+        if not src_path.exists():
+            src_path = None
+    elif src.startswith("/media/"):
         # /media/<hash>/img-N.jpg → data_dir/media/<hash>/img-N.jpg
         src_path = Path("data") / "media" / src[len("/media/"):].lstrip("/")
         if not src_path.exists():
@@ -81,6 +88,43 @@ def _first_body_image(body_md: str, images_dir: Path) -> str | None:
         except OSError:
             pass
     return name
+
+
+def _web_image_for_title(title: str, images_dir: Path) -> str | None:
+    """Search the web for a relevant cover image when the article has none.
+    Uses DuckDuckGo Images (via ddgs).  Returns the filename on success
+    or None if no suitable image could be found."""
+    try:
+        from ddgs import DDGS
+        query = f"{title} technology"
+        with DDGS() as ddgs:
+            results = list(ddgs.images(query, max_results=5))
+    except Exception:
+        return None
+    if not results:
+        return None
+    # Try each result until one downloads successfully
+    for r in results:
+        img_url = r.get("image") or r.get("thumbnail")
+        if not img_url:
+            continue
+        try:
+            resp = httpx.get(img_url, timeout=15, follow_redirects=True,
+                             headers={"User-Agent": "media-agent/0.1"})
+            resp.raise_for_status()
+            data = resp.content
+            if len(data) < 2000:  # skip tiny/error images
+                continue
+            ext = Path(urlparse(img_url).path).suffix or ".jpg"
+            import uuid
+            name = f"cover-web-{uuid.uuid4().hex[:8]}{ext}"
+            dest = images_dir / name
+            images_dir.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+            return name
+        except Exception:
+            continue
+    return None
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -182,11 +226,17 @@ class Store:
             meta["score"] = draft.score
 
         # -- auto-cover: if no cover (or tiny mock placeholder < 10KB),
-        #    use the first body image --
+        #    use the first body image, then fall back to web search --
         if not draft.cover_image or _cover_is_tiny(
             draft.cover_image, self.config.images_dir):
             auto_cover = _first_body_image(
                 draft.body_md, self.config.images_dir)
+            if not auto_cover:
+                # No body images → try web image search
+                title = (draft.title_candidates[0]
+                         if draft.title_candidates else "")
+                auto_cover = _web_image_for_title(
+                    title, self.config.images_dir)
             if auto_cover:
                 draft.cover_image = auto_cover
             meta["cover_image"] = draft.cover_image
