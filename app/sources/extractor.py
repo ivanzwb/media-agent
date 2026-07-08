@@ -548,25 +548,50 @@ def extract_from_html(html: str, url: str) -> dict:
     # ── 1b-2. JSON-LD hero image — always try, even when body images exist ──
     # Sites like NVIDIA Developer Blog store the featured/hero image in
     # Schema.org JSON-LD, but readability strips it because it sits outside
-    # the article body.
+    # the article body.  Remove any body duplicate, prepend the hero, and
+    # adjust [[IMG:N]] placeholder indices accordingly.
     if content_md.strip():
         jsonld_img = _jsonld_image(html, base_url=url)
         if jsonld_img and jsonld_img not in images:
-            # Compare by filename stem to catch WebP/GIF variants of the
-            # same image (e.g. image1-1.webp in body vs image1-1.gif hero).
-            # When the stem matches, replace the body variant in-place with
-            # the JSON-LD version (original format).  Otherwise prepend.
             jsonld_stem = (jsonld_img.rsplit("/", 1)[-1]
                            .rsplit(".", 1)[0].split("?")[0])
-            replaced = False
+            dup_idx = -1
             for idx, u in enumerate(images):
                 u_stem = u.rsplit("/", 1)[-1].rsplit(".", 1)[0].split("?")[0]
                 if u_stem == jsonld_stem:
-                    images[idx] = jsonld_img  # replace in-place
-                    replaced = True
+                    dup_idx = idx
                     break
-            if not replaced:
-                images.insert(0, jsonld_img)
+            # Build [[IMG:N]] → new index mapping BEFORE mutating images
+            old_to_new: dict[int, int] = {}
+            removed: set[int] = set()
+            if dup_idx >= 0:
+                images.pop(dup_idx)    # remove body duplicate
+                removed.add(dup_idx)
+            images.insert(0, jsonld_img)  # prepend hero
+            # Compute mapping: images before dup shift +1 (hero pushed down);
+            # images after dup are unchanged (pop shifted up, prepend shifted down).
+            for old_n in range(dup_idx if dup_idx >= 0 else len(images) - 1):
+                if old_n in removed:
+                    continue
+                if old_n < dup_idx:
+                    old_to_new[old_n] = old_n + 1
+                elif dup_idx >= 0:
+                    old_to_new[old_n] = old_n   # after pop+prepend, net unchanged
+            # Apply mapping to content_md
+            if old_to_new or removed:
+                import re as _re2
+                def _hero_renumber(md: str) -> str:
+                    def _hr(m: _re2.Match) -> str:
+                        n = int(m.group(1))
+                        if n in removed:
+                            return ""  # duplicate removed
+                        if n in old_to_new:
+                            return f"[[IMG:{old_to_new[n]}]]"
+                        return m.group(0)
+                    return _IMG_TOKEN_RE.sub(_hr, md)
+                content_md = _hero_renumber(content_md)
+            # Step 4b (orphans) will inject [[IMG:0]] at the top because
+            # the hero image at index 0 has no placeholder in the body yet.
 
     # ── 1c. readability got very little content — try full HTML trafilatura ──
     # Some sites (e.g. NIMS) structure article content in ways readability's
