@@ -189,24 +189,20 @@ jobs:
         with:
           path: _artifacts
 
-      - name: Checkout release repo
-        uses: actions/checkout@v4
-        with:
-          repository: ivanzwb/release
-          token: ${{ secrets.RELEASE_TOKEN }}
-          path: release-repo
-
-      - name: Copy packages and push
+      - name: Publish as a GitHub Release on the release repo
         env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           VERSION: ${{ github.ref_name }}
         run: |
-          dest="release-repo/media-agent/release"
-          mkdir -p "$dest"
-          find _artifacts -name 'media-agent-*.zip' -exec cp -f {} "$dest/" \;
-          echo "Packaged files:"; ls -la "$dest"
-          cd release-repo
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add media-agent/release
-          git commit -m "media-agent $VERSION" || { echo "no changes"; exit 0; }
-          git push
+          set -e
+          # Release assets allow up to 2GB/file — git push is capped at 100MB,
+          # and our packages are ~120MB, so we MUST use Releases, not commits.
+          files=$(find _artifacts -name 'media-agent-*.zip')
+          echo "Uploading: $files"
+          if gh release view "$VERSION" --repo ivanzwb/release >/dev/null 2>&1; then
+            gh release upload "$VERSION" $files --repo ivanzwb/release --clobber
+          else
+            gh release create "$VERSION" $files --repo ivanzwb/release \
+              --title "media-agent $VERSION" \
+              --notes "media-agent $VERSION 自动构建包（Windows / macOS）"
+          fi
