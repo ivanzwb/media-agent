@@ -22,37 +22,60 @@ if [ ! -f "$BUNDLE_DIR/media-agent" ]; then
     BUNDLE_DIR="$SCRIPT_DIR/media-agent"
 fi
 MEDIA_AGENT="${BUNDLE_DIR}/media-agent"
+INTERNAL_DIR="${BUNDLE_DIR}/_internal"
 
-# ── 1. playwright + chromium ───────────────────
+# ── 1. Playwright + Chromium ─────────────────────
 echo "[1/4] Playwright + Chromium ..."
-if [ -x "$MEDIA_AGENT" ]; then
-    if "$MEDIA_AGENT" -c "import playwright" 2>/dev/null; then
-        echo "  [✓] Playwright 库已打包"
-    else
-        echo "  [✗] Playwright 库缺失，需重建打包"
-    fi
-    echo "  正在下载 Chromium 浏览器（约 300MB，首次只需一次）..."
-    if "$MEDIA_AGENT" -m playwright install chromium 2>/dev/null; then
-        echo "  [✓] Chromium 安装完成"
-    else
-        echo "  [✗] Chromium 安装失败"
-    fi
+
+if [ -d "$INTERNAL_DIR/playwright" ]; then
+    echo "  [√] Playwright 库已打包"
 else
-    echo "  [✗] 找不到 $MEDIA_AGENT"
+    echo "  [×] Playwright 未打包，请解压完整压缩包（含 _internal 目录）"
+    echo ""
+    skip_to_end=true
+fi
+
+if [ "$skip_to_end" != true ]; then
+    # Check if Chromium browser is already installed
+    PW_CACHE="$HOME/Library/Caches/ms-playwright"
+    CHROMIUM_INSTALLED=false
+    if [ -d "$PW_CACHE" ]; then
+        for d in "$PW_CACHE"/chromium-*/chrome; do
+            [ -x "$d" ] && CHROMIUM_INSTALLED=true && break
+        done
+    fi
+
+    if [ "$CHROMIUM_INSTALLED" = true ]; then
+        echo "  [√] Chromium 已安装"
+    elif [ -x "$MEDIA_AGENT" ]; then
+        echo "  正在下载 Chromium 浏览器（约 300MB，首次只需一次）..."
+        if "$MEDIA_AGENT" --run-module playwright install chromium 2>/dev/null; then
+            echo "  [√] Chromium 安装完成"
+        else
+            echo "  [×] Chromium 自动安装失败"
+            echo ""
+            echo "  手动安装方式："
+            echo "    1. 确保已安装 Python 3.11+"
+            echo "    2. pip install playwright"
+            echo "    3. python -m playwright install chromium"
+        fi
+    else
+        echo "  [×] 找不到 $MEDIA_AGENT"
+    fi
 fi
 echo ""
 
 # ── 2. fish-audio-sdk ──────────────────────────
 echo "[2/4] fish-audio-sdk ..."
-echo "  [✓] fish-audio-sdk 已打包进主程序，无需额外安装"
+echo "  [√] fish-audio-sdk 已打包进主程序，无需额外安装"
 echo ""
 
 # ── 3. ffmpeg ──────────────────────────────────
 echo "[3/4] ffmpeg ..."
 if command -v ffmpeg >/dev/null 2>&1; then
-    echo "  [✓] ffmpeg 已安装: $(which ffmpeg)"
+    echo "  [√] ffmpeg 已安装: $(which ffmpeg)"
 else
-    echo "  [✗] ffmpeg 未找到"
+    echo "  [×] ffmpeg 未找到"
     echo ""
     echo "  macOS 推荐安装方式:"
     echo "    brew install ffmpeg"

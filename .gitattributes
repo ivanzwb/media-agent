@@ -1,0 +1,13 @@
+# Shell scripts must always use LF line endings (even on Windows)
+*.sh text eol=lf
+
+# Batch files should use CRLF
+*.bat text eol=crlf
+
+# Python, YAML, Markdown, etc. - autodetect
+*.py text
+*.yml text
+*.yaml text
+*.md text
+*.json text
+*.txt text
