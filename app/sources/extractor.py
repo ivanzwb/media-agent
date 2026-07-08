@@ -552,8 +552,14 @@ def extract_from_html(html: str, url: str) -> dict:
     if content_md.strip():
         jsonld_img = _jsonld_image(html, base_url=url)
         if jsonld_img and jsonld_img not in images:
-            jsonld_slug = jsonld_img.rsplit("/", 1)[-1].split("?")[0]
-            if not any(jsonld_slug in u for u in images):
+            # Compare by filename stem to catch WebP/GIF duplicates of the
+            # same image (e.g. image1-1.webp in body vs image1-1.gif hero).
+            jsonld_stem = (jsonld_img.rsplit("/", 1)[-1]
+                           .rsplit(".", 1)[0].split("?")[0])
+            if not any(
+                u.rsplit("/", 1)[-1].rsplit(".", 1)[0].split("?")[0] == jsonld_stem
+                for u in images
+            ):
                 images.insert(0, jsonld_img)
 
     # ── 1c. readability got very little content — try full HTML trafilatura ──
