@@ -67,6 +67,17 @@ jobs:
             --hidden-import "apscheduler" `
             --hidden-import "apscheduler.triggers.cron" `
             --hidden-import "httpx" `
+            --hidden-import "playwright" `
+            --hidden-import "readability" `
+            --hidden-import "readability-lxml" `
+            --hidden-import "feedparser" `
+            --hidden-import "dateparser" `
+            --hidden-import "ddgs" `
+            --hidden-import "json5" `
+            --hidden-import "lxml" `
+            --hidden-import "trafilatura" `
+            --hidden-import "curl_cffi" `
+            --collect-all "playwright" `
             --console `
             packaging/run_app.py
           Remove-Item -Recurse -Force build, media-agent.spec -ErrorAction SilentlyContinue
@@ -153,6 +164,17 @@ jobs:
             --hidden-import "apscheduler" \
             --hidden-import "apscheduler.triggers.cron" \
             --hidden-import "httpx" \
+            --hidden-import "playwright" \
+            --hidden-import "readability" \
+            --hidden-import "readability-lxml" \
+            --hidden-import "feedparser" \
+            --hidden-import "dateparser" \
+            --hidden-import "ddgs" \
+            --hidden-import "json5" \
+            --hidden-import "lxml" \
+            --hidden-import "trafilatura" \
+            --hidden-import "curl_cffi" \
+            --collect-all "playwright" \
             --console \
             packaging/run_app.py
           rm -rf build media-agent.spec
