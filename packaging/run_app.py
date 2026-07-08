@@ -1,7 +1,11 @@
 """Frozen-app entry point (used by the PyInstaller build).
 
-Starts the local web UI and opens the browser. Data lives next to the exe
-unless MEDIA_AGENT_DATA_DIR is set.
+Supports special CLI flags for the setup script (see setup-optional.bat):
+
+  --check-module NAME     Import NAME and exit 0 on success, 1 on failure.
+  --run-module  NAME ...  Run python -m NAME with remaining args.
+
+Without flags, starts the local web UI and opens the browser.
 """
 from __future__ import annotations
 
@@ -19,7 +23,56 @@ def _default_data_dir() -> str:
     return os.environ.get("MEDIA_AGENT_DATA_DIR", "data")
 
 
+def _find_internal_dir() -> Path | None:
+    """Return the _internal dir next to the frozen executable, if any."""
+    if not getattr(sys, "frozen", False):
+        return None
+    internal = Path(sys.executable).resolve().parent / "_internal"
+    return internal if internal.is_dir() else None
+
+
+def _check_module(name: str) -> int:
+    """Try importing *name*; return 0 on success, 1 on failure."""
+    try:
+        import importlib
+
+        importlib.import_module(name)
+        return 0
+    except ImportError:
+        return 1
+
+
+def _run_module() -> int:
+    """Run a module (python -m equivalent) inside the frozen environment.
+
+    Usage: --run-module <module> [args...]
+    """
+    if len(sys.argv) < 3:
+        print("Usage: --run-module <module> [args...]", file=sys.stderr)
+        return 1
+    module = sys.argv[2]
+    sys.argv = sys.argv[2:]  # replace argv so the module sees its own args
+    import runpy
+
+    try:
+        runpy.run_module(module, run_name="__main__", alter_sys=True)
+    except SystemExit as e:
+        return e.code if isinstance(e.code, int) else 1
+    except Exception as e:
+        print(f"Error running module '{module}': {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main() -> None:
+    # Handle special CLI flags used by setup-optional.bat -----------------
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--check-module" and len(sys.argv) > 2:
+            sys.exit(_check_module(sys.argv[2]))
+        if sys.argv[1] == "--run-module":
+            sys.exit(_run_module())
+
+    # Normal startup ------------------------------------------------------
     os.environ.setdefault("MEDIA_AGENT_DATA_DIR", _default_data_dir())
     import uvicorn
     from app.config import Config

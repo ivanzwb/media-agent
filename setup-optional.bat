@@ -15,42 +15,75 @@ echo.
 echo ============================================
 echo.
 
-:: ── Detect script dir ──────────────────────────
+:: ===== Detect script dir ============================================
 set "SCRIPT_DIR=%~dp0"
 set "BUNDLE_DIR=%SCRIPT_DIR%"
+set "INTERNAL_DIR=%BUNDLE_DIR%_internal\"
 
-:: ── 1. playwright + chromium ───────────────────
+:: ===== 1. Playwright + Chromium =====================================
 :playwright
 echo [1/4] Playwright + Chromium ...
-if not exist "%BUNDLE_DIR%media-agent.exe" (
-    echo [WARN] 没找到 media-agent.exe，请把本脚本放在 media-agent.exe 同级目录下运行。
-    goto :eof
-)
-"%BUNDLE_DIR%\media-agent.exe" -c "import playwright; print('ok')" 2>nul
-if %errorlevel% equ 0 (
-    echo   [√] Playwright 库已打包
+
+:: --- Check if playwright library is bundled (in _internal/) ----------
+if exist "%INTERNAL_DIR%playwright\" (
+    echo   [√] Playwright 已打包
 ) else (
-    echo   [×] Playwright 库缺失，需重建打包
+    echo   [×] Playwright 未打包，请解压完整压缩包（含 _internal 目录）
+    goto :chromium_skip
 )
-echo   正在下载 Chromium 浏览器（约 300MB，首次只需一次）...
-"%BUNDLE_DIR%\media-agent.exe" -c "from playwright.sync_api import sync_playwright; sync_playwright().start(); print('Chromium installed')" 2>nul
-if %errorlevel% equ 0 (
+
+:: --- Check if Chromium browser is already installed ------------------
+set "PW_CHROMIUM_DIR="
+if exist "%USERPROFILE%\AppData\Local\ms-playwright\" (
+    for /d %%d in ("%USERPROFILE%\AppData\Local\ms-playwright\chromium-*") do (
+        if exist "%%d\chrome.exe" set "PW_CHROMIUM_DIR=%%d"
+    )
+)
+if defined PW_CHROMIUM_DIR (
+    echo   [√] Chromium 已安装
+    goto :fish
+)
+
+:: --- Attempt Chromium install via bundled exe (v0.2.3+ only) ---------
+echo   正在下载 Chromium 浏览器（约 300MB，仅首次需要）...
+if exist "%BUNDLE_DIR%media-agent.exe" (
+    "%BUNDLE_DIR%media-agent.exe" --run-module playwright install chromium
+) else (
+    echo   [×] 未找到 media-agent.exe
+    goto :chromium_manual
+)
+
+:: Verify install succeeded
+set "PW_CHROMIUM_DIR="
+if exist "%USERPROFILE%\AppData\Local\ms-playwright\" (
+    for /d %%d in ("%USERPROFILE%\AppData\Local\ms-playwright\chromium-*") do (
+        if exist "%%d\chrome.exe" set "PW_CHROMIUM_DIR=%%d"
+    )
+)
+if defined PW_CHROMIUM_DIR (
     echo   [√] Chromium 安装完成
 ) else (
-    echo   [×] Chromium 安装失败，尝试用 playwright CLI 安装...
-    "%BUNDLE_DIR%\media-agent.exe" -m playwright install chromium 2>nul
+:chromium_manual
+    echo   [×] Chromium 自动安装失败
+    echo.
+    echo   可手动安装：
+    echo     1. 确保已安装 Python 3.11+
+    echo     2. pip install playwright
+    echo     3. python -m playwright install chromium
+    echo.
 )
+:chromium_skip
 echo.
 goto :fish
 
-:: ── 2. fish-audio-sdk ──────────────────────────
+:: ===== 2. Fish Audio SDK（已内置）===================================
 :fish
 echo [2/4] fish-audio-sdk ...
 echo   [√] fish-audio-sdk 已打包进主程序，无需额外安装
 echo.
 goto :ffmpeg
 
-:: ── 3. ffmpeg ──────────────────────────────────
+:: ===== 3. ffmpeg ====================================================
 :ffmpeg
 echo [3/4] ffmpeg ...
 where ffmpeg >nul 2>nul
@@ -60,17 +93,17 @@ if %errorlevel% equ 0 (
 ) else (
     echo   [×] ffmpeg 未找到
     echo.
-    echo   请从 https://ffmpeg.org/download.html 下载，
-    echo   解压后把 bin\ffmpeg.exe 所在目录加到系统 PATH。
+    echo   请访问 https://ffmpeg.org/download.html 下载，
+    echo   将 bin\ffmpeg.exe 所在目录添加到系统 PATH。
     echo.
-    echo   或直接下载便携版放在本目录：
+    echo   或直接下载便携版到本目录：
     echo     curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
-    echo     解压后把 ffmpeg.exe 放在 media-agent\_internal\ 同目录
+    echo     解压后把 ffmpeg.exe 放到 _internal\ 同目录
 )
 echo.
 goto :cosyvoice
 
-:: ── 4. CosyVoice ───────────────────────────────
+:: ===== 4. CosyVoice（本地声音复刻）==================================
 :cosyvoice
 echo [4/4] CosyVoice（本地声音复刻，可选）...
 echo.
