@@ -5,6 +5,8 @@ from time import mktime
 
 import feedparser
 import httpx
+import trafilatura
+from readability import Document
 
 from urllib.parse import urljoin
 
@@ -89,7 +91,6 @@ def _fetch_full_article(url: str, timeout: float = 15.0) -> str | None:
 
     # 1) trafilatura — best for article extraction
     try:
-        import trafilatura
         extracted = trafilatura.extract(html, include_images=True,
                                         output_format="html",
                                         url=url)
@@ -100,7 +101,6 @@ def _fetch_full_article(url: str, timeout: float = 15.0) -> str | None:
 
     # 2) readability-lxml fallback
     try:
-        from readability import Document
         doc = Document(html)
         content = doc.summary()
         if content and len(content.strip()) > 200:
