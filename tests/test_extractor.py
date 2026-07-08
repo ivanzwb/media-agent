@@ -884,14 +884,13 @@ def test_extract_jsonld_hero_deduped_by_stem_when_webp_in_body():
         '</article></body></html>'
     )
     result = extract_from_html(html, url="https://example.com/post")
-    # Hero GIF should have REPLACED the body WebP (same stem)
-    assert len(result["images"]) == 1, (
-        f"expected 1 image, got {len(result['images'])}")
+    # 2 images: hero.gif [0] + body .webp [1] — same stem, diff formats → both kept
+    assert len(result["images"]) == 2, (
+        f"2 images (hero + body, different formats): {len(result['images'])}")
     assert result["images"][0].endswith(".gif"), (
-        f"hero GIF should replace body WebP, got {result['images'][0]}")
-    stems = [img.rsplit("/", 1)[-1].rsplit(".", 1)[0] for img in result["images"]]
-    assert len(stems) == len(set(stems)), (
-        f"duplicate stems found: {stems}")
+        f"hero GIF should be at [0]: {result['images'][0]}")
+    assert any("image1-1.webp" in img for img in result["images"]), (
+        f"body WebP should be kept: {result['images']}")
 
 
 def test_extract_jsonld_hero_prepended_when_unique():
@@ -972,15 +971,15 @@ def test_extract_jsonld_hero_replaces_only_matching_stem():
         '</article></body></html>'
     )
     result = extract_from_html(html, url="https://example.com/post")
-    # 3 images expected: hero.gif replaced hero.webp, + other.jpg + third.png
-    assert len(result["images"]) == 3, (
-        f"expected 3 images, got {len(result['images'])}: {result['images']}")
-    # hero.gif should be present (replaced hero.webp at index 0)
-    assert any("hero.gif" in img for img in result["images"]), (
-        f"hero.gif should replace hero.webp: {result['images']}")
-    # hero.webp should NOT be present
-    assert not any("hero.webp" in img for img in result["images"]), (
-        f"hero.webp should be gone: {result['images']}")
+    # 4 images: hero.gif [0] + hero.webp [1] (different formats, both kept)
+    #            + other.jpg [2] + third.png [3]
+    assert len(result["images"]) == 4, (
+        f"expected 4 images, got {len(result['images'])}: {result['images']}")
+    # hero.gif at [0] (prepended)
+    assert result["images"][0].endswith(".gif")
+    # hero.webp should be PRESENT (different format, kept)
+    assert any("hero.webp" in img for img in result["images"]), (
+        f"hero.webp should be kept (different format): {result['images']}")
     # other images should be preserved
     assert any("other.jpg" in img for img in result["images"])
     assert any("third.png" in img for img in result["images"])
@@ -1001,10 +1000,10 @@ def test_extract_jsonld_hero_stem_dedup_ignores_query_params():
         '</article></body></html>'
     )
     result = extract_from_html(html, url="https://example.com/post")
-    # Should dedup by stem (hero), get 1 image, hero.gif format
-    assert len(result["images"]) == 1
-    assert ".gif" in result["images"][0], (
-        f"hero should be GIF (may have query params): {result['images'][0]}")
+    # 2 images: hero.gif [0] + hero.webp [1] (different formats, both kept)
+    assert len(result["images"]) == 2, (
+        f"2 images expected (diff formats), got {len(result['images'])}")
+    assert ".gif" in result["images"][0]
 
 
 def test_extract_jsonld_hero_exact_url_already_present():
@@ -1071,9 +1070,9 @@ def test_extract_jsonld_hero_at_position_zero_with_duplicate_removed():
         '</article></body></html>'
     )
     result = extract_from_html(html, url="https://example.com/post")
-    # hero.gif replaces hero.webp and moves to [0]
-    assert len(result["images"]) == 2, (
-        f"2 images expected (hero + other), got {len(result['images'])}")
+    # 3 images: hero.gif [0] + hero.webp [1] (diff formats, both kept) + other.jpg [2]
+    assert len(result["images"]) == 3, (
+        f"3 images expected, got {len(result['images'])}")
     assert "hero.gif" in result["images"][0], (
         f"hero should be at index 0, got {result['images']}")
     # [[IMG:0]] should exist (orphan injection), all indices accounted for
@@ -1161,10 +1160,10 @@ def test_extract_jsonld_hero_no_duplicate_placeholder():
         '</article></body></html>'
     )
     result = extract_from_html(html, url="https://example.com/post")
-    # 3 images: hero.gif [0], a.jpg [1], c.jpg [2]
-    assert len(result["images"]) == 3
-    # hero.webp should NOT appear in the images list
-    assert not any("hero.webp" in img for img in result["images"])
+    # 4 images: hero.gif, a.jpg, hero.webp (diff format kept), c.jpg
+    assert len(result["images"]) == 4
+    # hero.webp should be PRESENT (different format, kept)
+    assert any("hero.webp" in img for img in result["images"])
     # All placeholders should be valid indices
     import re
     for m in re.finditer(r'\[\[IMG:(\d+)\]\]', result["content_md"]):
@@ -1191,6 +1190,52 @@ def test_extract_jsonld_hero_no_duplicate_images():
     result = extract_from_html(html, url="https://example.com/post")
     stems = [img.rsplit("/", 1)[-1].rsplit(".", 1)[0].split("?")[0]
              for img in result["images"]]
-    assert len(stems) == len(set(stems)), f"duplicate stems: {stems}"
+    # hero stem may appear twice (GIF + WebP) — that's expected
+    # But no exact URL duplicates
     assert len(result["images"]) == len(set(result["images"])), (
         f"duplicate URLs: {result['images']}")
+
+
+def test_extract_jsonld_hero_same_stem_same_ext_removes_duplicate():
+    """Same stem AND same extension → body duplicate is removed."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/hero.jpg"}'
+        '</script>'
+        '<html><body><article>'
+        '<p>Article text for extraction.</p>'
+        '<img src="https://cdn.example.com/hero.jpg" />'
+        '<img src="https://cdn.example.com/other.png" />'
+        '<p>More content to ensure trafilatura works.</p>'
+        '<p>Additional text to meet minimum thresholds.</p>'
+        '<p>Still more text for good measure.</p>'
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    # hero.jpg appears twice (JSON-LD + body, same ext) → dedup to 2 images
+    assert len(result["images"]) == 2, (
+        f"2 images expected (dedup of same URL), got {len(result['images'])}")
+    # hero should be at [0]
+    assert "hero.jpg" in result["images"][0]
+    assert any("other.png" in img for img in result["images"])
+
+
+def test_extract_jsonld_hero_diff_ext_both_kept():
+    """Same stem, different extensions → both kept (GIF + WebP)."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"NewsArticle","image":"https://cdn.example.com/img.gif"}'
+        '</script>'
+        '<html><body><article>'
+        '<p>Article text for extraction.</p>'
+        '<img src="https://cdn.example.com/img.webp" />'
+        '<p>More content for trafilatura.</p>'
+        '<p>Additional text for thresholds.</p>'
+        '<p>Final paragraph for good measure.</p>'
+        '</article></body></html>'
+    )
+    result = extract_from_html(html, url="https://example.com/post")
+    # 2 images: img.gif [0] + img.webp [1] (different formats)
+    assert len(result["images"]) == 2
+    assert result["images"][0].endswith(".gif")
+    assert any(".webp" in img for img in result["images"])
