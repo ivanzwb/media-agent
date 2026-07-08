@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from app.config import Config
 from app.db import connect, init_db
 from app.models import Article, Draft
-from app.store import Store
+from app.store import Store, _first_body_image, _cover_is_tiny, _web_image_for_title
 
 
 def make_store(tmp_path):
@@ -68,3 +68,277 @@ def test_exists_by_title_source(tmp_path):
     content = (tmp_path / saved.draft_path).read_text(encoding="utf-8")
     assert "title_candidates" in content
     assert "## Hook" in content
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _first_body_image — image URL extraction
+# ═══════════════════════════════════════════════════════════════════
+
+def test_first_body_image_relative_media_path(tmp_path):
+    """../../media/<hash>/img-N.ext path is resolved relative to data/."""
+    # _first_body_image uses Path("data") hardcoded — create media there
+    from pathlib import Path
+    (Path("data") / "media" / "abc123").mkdir(parents=True, exist_ok=True)
+    img = Path("data") / "media" / "abc123" / "img-0.gif"
+    img.parent.mkdir(parents=True, exist_ok=True)
+    img.write_bytes(b"GIF89a" + b"x" * 10000)
+
+    body = "![](../../media/abc123/img-0.gif)\n\ntext"
+    result = _first_body_image(body, tmp_path / "images")
+    assert result is not None
+    assert (tmp_path / "images" / result).exists()
+
+
+def test_first_body_image_absolute_media_path(tmp_path):
+    """Absolute /media/<hash>/img-N.ext path resolved."""
+    from pathlib import Path
+    (Path("data") / "media" / "abc123").mkdir(parents=True, exist_ok=True)
+    img = Path("data") / "media" / "abc123" / "img-0.jpg"
+    img.write_bytes(b"\xff\xd8\xff" + b"x" * 10000)
+
+    body = "![](/media/abc123/img-0.jpg)\n\ntext"
+    result = _first_body_image(body, tmp_path / "images")
+    assert result is not None
+    assert (tmp_path / "images" / result).exists()
+
+
+def test_first_body_image_http_url(tmp_path):
+    """HTTP URL is downloaded and saved as cover."""
+    body = "![](https://example.com/cover.jpg)\n\ntext"
+    from unittest.mock import patch, MagicMock
+    with patch("app.store.httpx.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.content = b"\xff\xd8\xff" + b"x" * 10000
+        mock_resp.raise_for_status = lambda: None
+        mock_get.return_value = mock_resp
+        result = _first_body_image(body, tmp_path / "images")
+        assert result is not None
+        assert result.startswith("cover-auto-")
+        assert (tmp_path / "images" / result).exists()
+
+
+def test_first_body_image_no_images(tmp_path):
+    """No images in body returns None."""
+    body = "## Just text\n\nNo images here at all."
+    assert _first_body_image(body, tmp_path / "images") is None
+
+
+def test_first_body_image_skips_video_paths(tmp_path):
+    """Paths starting with /videos/ are excluded."""
+    body = "![](/videos/draft-1/video.mp4)\n\ntext"
+    assert _first_body_image(body, tmp_path / "images") is None
+
+
+def test_first_body_image_finds_html_img(tmp_path):
+    """HTML <img> tags are found alongside markdown images."""
+    from pathlib import Path
+    (Path("data") / "media" / "abc123").mkdir(parents=True, exist_ok=True)
+    img = Path("data") / "media" / "abc123" / "img-1.png"
+    img.write_bytes(b"\x89PNG" + b"x" * 10000)
+
+    body = '<img src="/media/abc123/img-1.png">\n\ntext'
+    result = _first_body_image(body, tmp_path / "images")
+    assert result is not None
+
+
+def test_first_body_image_missing_file(tmp_path):
+    """File referenced in body doesn't exist on disk."""
+    body = "![](/media/missing/img-0.jpg)\n\ntext"
+    assert _first_body_image(body, tmp_path / "images") is None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _cover_is_tiny
+# ═══════════════════════════════════════════════════════════════════
+
+def test_cover_is_tiny_small_file(tmp_path):
+    p = tmp_path / "images" / "cover-tiny.png"
+    p.parent.mkdir(exist_ok=True)
+    p.write_bytes(b"x" * 5000)  # 5KB → tiny
+    assert _cover_is_tiny("cover-tiny.png", tmp_path / "images")
+
+
+def test_cover_is_tiny_large_file(tmp_path):
+    p = tmp_path / "images" / "cover-large.jpg"
+    p.parent.mkdir(exist_ok=True)
+    p.write_bytes(b"x" * 50000)  # 50KB → not tiny
+    assert not _cover_is_tiny("cover-large.jpg", tmp_path / "images")
+
+
+def test_cover_is_tiny_missing_file(tmp_path):
+    assert not _cover_is_tiny("nonexistent.png", tmp_path / "images")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _web_image_for_title
+# ═══════════════════════════════════════════════════════════════════
+
+def test_web_image_for_title_success(tmp_path):
+    """Finds and downloads first suitable web image."""
+    from unittest.mock import patch, MagicMock
+    ddgs_ctx = MagicMock()
+    ddgs_ctx.images.return_value = iter([
+        {"image": "https://example.com/thumb.jpg",
+         "thumbnail": "https://example.com/thumb_s.jpg"},
+    ])
+    ddgs_mock = MagicMock()
+    ddgs_mock.__enter__.return_value = ddgs_ctx
+
+    with patch("ddgs.DDGS", return_value=ddgs_mock):
+        import httpx
+        with patch("app.store.httpx.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.content = b"\xff\xd8\xff" + b"x" * 5000
+            mock_resp.raise_for_status = lambda: None
+            mock_get.return_value = mock_resp
+            result = _web_image_for_title(
+                "AI Robots", tmp_path / "images")
+            assert result is not None
+            assert result.startswith("cover-web-")
+            assert (tmp_path / "images" / result).exists()
+
+
+def test_web_image_for_title_no_results(tmp_path):
+    """No search results returns None."""
+    from unittest.mock import patch, MagicMock
+    ddgs_ctx = MagicMock()
+    ddgs_ctx.images.return_value = iter([])
+    ddgs_mock = MagicMock()
+    ddgs_mock.__enter__.return_value = ddgs_ctx
+    with patch("ddgs.DDGS", return_value=ddgs_mock):
+        assert _web_image_for_title("xyzzy", tmp_path / "images") is None
+
+
+def test_web_image_for_title_ddgs_error(tmp_path):
+    """DDGS raises exception → None."""
+    from unittest.mock import patch
+    with patch("ddgs.DDGS", side_effect=ImportError("no ddgs")):
+        assert _web_image_for_title("AI", tmp_path / "images") is None
+
+
+def test_web_image_for_title_too_small(tmp_path):
+    """Tiny images (< 2KB) are skipped, next one tried."""
+    from unittest.mock import patch, MagicMock
+    ddgs_ctx = MagicMock()
+    ddgs_ctx.images.return_value = iter([
+        {"image": "https://example.com/tiny.gif"},
+        {"image": "https://example.com/good.jpg"},
+    ])
+    ddgs_mock = MagicMock()
+    ddgs_mock.__enter__.return_value = ddgs_ctx
+    with patch("ddgs.DDGS", return_value=ddgs_mock):
+        import httpx
+        with patch("app.store.httpx.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.content = b"\xff\xd8\xff" + b"x" * 5000
+            mock_resp.raise_for_status = lambda: None
+            mock_get.return_value = mock_resp
+            result = _web_image_for_title(
+                "AI", tmp_path / "images")
+            assert result is not None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# attach_cover guard
+# ═══════════════════════════════════════════════════════════════════
+
+def test_attach_cover_skips_when_valid_cover_exists(tmp_path):
+    """Don't overwrite an existing valid cover with mock."""
+    from app.pipeline.images import attach_cover
+    from app.images.providers.mock import MockImageProvider
+    from app.models import Draft
+
+    # Create a valid cover file
+    (tmp_path / "images").mkdir(parents=True)
+    valid = tmp_path / "images" / "existing-cover.jpg"
+    valid.write_bytes(b"x" * 20000)  # 20KB
+
+    draft = Draft(article_id=1, title_candidates=["Test Title"],
+                  body_md="text", topic="AI", source_url="x",
+                  source_name="x")
+    draft.cover_image = "existing-cover.jpg"
+
+    provider = MockImageProvider()
+    result = attach_cover(draft, provider, tmp_path / "images")
+    # Should keep existing cover, not overwrite with mock blue
+    assert result.cover_image == "existing-cover.jpg"
+
+
+def test_attach_cover_generates_when_no_cover(tmp_path):
+    """When no cover exists, generate one."""
+    from app.pipeline.images import attach_cover
+    from app.images.providers.mock import MockImageProvider
+    from app.models import Draft
+
+    (tmp_path / "images").mkdir(parents=True)
+    draft = Draft(article_id=1, title_candidates=["Test Title"],
+                  body_md="text", topic="AI", source_url="x",
+                  source_name="x")
+    draft.cover_image = None
+
+    provider = MockImageProvider()
+    result = attach_cover(draft, provider, tmp_path / "images")
+    assert result.cover_image is not None
+    assert (tmp_path / "images" / result.cover_image).exists()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# save_draft auto-cover flow
+# ═══════════════════════════════════════════════════════════════════
+
+def test_save_draft_auto_cover_from_body_image(tmp_path):
+    """save_draft uses first body image as cover when no cover set."""
+    from pathlib import Path
+    store = make_store(tmp_path)
+    (Path("data") / "media" / "hash1").mkdir(parents=True, exist_ok=True)
+    img = Path("data") / "media" / "hash1" / "img-0.jpg"
+    img.write_bytes(b"\xff\xd8\xff" + b"x" * 10000)
+
+    art = store.save_article(sample_article(url="https://x.com/abc"))
+    draft = Draft(article_id=art.id,
+                  title_candidates=["AI Breakthrough"],
+                  body_md="![](../../media/hash1/img-0.jpg)\n\nArticle text.",
+                  topic="AI", source_url=art.url,
+                  source_name=art.source_name)
+    draft.cover_image = None
+    saved = store.save_draft(draft)
+    assert saved.cover_image is not None
+    assert saved.cover_image.startswith("cover-auto-")
+    assert (tmp_path / "images" / saved.cover_image).exists()
+
+
+def test_save_draft_keeps_valid_cover(tmp_path):
+    """When a valid cover is already set, don't replace it."""
+    store = make_store(tmp_path)
+    (tmp_path / "images").mkdir(parents=True, exist_ok=True)
+    valid = tmp_path / "images" / "good-cover.jpg"
+    valid.write_bytes(b"x" * 20000)
+
+    art = store.save_article(sample_article(url="https://x.com/def1"))
+    draft = Draft(article_id=art.id,
+                  title_candidates=["Title"],
+                  body_md="text", topic="AI", source_url="x",
+                  source_name="x")
+    draft.cover_image = "good-cover.jpg"
+    saved = store.save_draft(draft)
+    assert saved.cover_image == "good-cover.jpg"
+
+
+def test_save_draft_no_cover_keeps_none(tmp_path):
+    """When no body images and no web results, cover stays None."""
+    from unittest.mock import patch, MagicMock
+    ddgs_ctx = MagicMock()
+    ddgs_ctx.images.return_value = iter([])
+    ddgs_mock = MagicMock()
+    ddgs_mock.__enter__.return_value = ddgs_ctx
+    with patch("ddgs.DDGS", return_value=ddgs_mock):
+        store = make_store(tmp_path)
+        art = store.save_article(sample_article(url="https://x.com/ghi"))
+        draft = Draft(article_id=art.id,
+                      title_candidates=["Title"],
+                      body_md="# No images\n\nJust plain text.",
+                      topic="AI", source_url="x",
+                      source_name="x")
+        draft.cover_image = None
+        saved = store.save_draft(draft)
+        assert saved.cover_image is None or saved.cover_image == "" or not saved.cover_image
