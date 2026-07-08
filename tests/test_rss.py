@@ -29,14 +29,69 @@ def test_fetch_full_article_trafilatura_success(mock_get):
 
     with patch("app.sources.rss.trafilatura") as mock_traf:
         mock_traf.extract.return_value = (
-            "<p>This is a long and detailed article body "
-            "with enough content to pass the threshold check.</p>"
+            "<p>Article body with image:</p>"
+            + '<graphic src="https://example.com/img1.webp" alt="diagram"/>'
+            + "<p>More text after image.</p>"
             + "x" * 200  # ensure > 200 chars
         )
         result = _fetch_full_article("https://example.com/article")
         assert result is not None
-        assert "long and detailed" in result
-        assert "trafilatura" not in result  # clean HTML
+        assert "img1.webp" in result
+        # graphic tag should be converted to img
+        assert "<graphic" not in result
+        assert '<img src="https://example.com/img1.webp"' in result
+        assert 'alt="diagram"' in result
+
+
+@patch("app.sources.rss.httpx.get")
+def test_fetch_full_article_graphic_no_alt(mock_get):
+    """graphic tag without alt attribute still converts to img."""
+    mock_get.return_value.text = "<html></html>"
+    mock_get.return_value.raise_for_status = lambda: None
+    with patch("app.sources.rss.trafilatura") as mock_traf:
+        mock_traf.extract.return_value = (
+            '<graphic src="https://example.com/pic.png"/>'
+            + "x" * 200
+        )
+        result = _fetch_full_article("https://example.com/article")
+        assert "<graphic" not in result
+        assert '<img src="https://example.com/pic.png"' in result
+
+
+@patch("app.sources.rss.httpx.get")
+def test_fetch_full_article_multiple_graphics(mock_get):
+    """Multiple graphic tags all converted."""
+    mock_get.return_value.text = "<html></html>"
+    mock_get.return_value.raise_for_status = lambda: None
+    with patch("app.sources.rss.trafilatura") as mock_traf:
+        mock_traf.extract.return_value = (
+            '<graphic src="https://example.com/a.webp"/>'
+            '<graphic src="https://example.com/b.gif" alt="screenshot"/>'
+            + "x" * 200
+        )
+        result = _fetch_full_article("https://example.com/article")
+        assert result.count("<img") == 2
+        assert "<graphic" not in result
+        assert "a.webp" in result
+        assert "b.gif" in result
+
+
+@patch("app.sources.rss.httpx.get")
+def test_fetch_full_article_preserves_code_blocks(mock_get):
+    """Pre blocks from trafilatura output are preserved."""
+    mock_get.return_value.text = "<html></html>"
+    mock_get.return_value.raise_for_status = lambda: None
+    with patch("app.sources.rss.trafilatura") as mock_traf:
+        mock_traf.extract.return_value = (
+            "<p>Here is some code:</p>"
+            "<pre>import os\nprint('hello')</pre>"
+            "<p>End.</p>"
+            + "x" * 200
+        )
+        result = _fetch_full_article("https://example.com/article")
+        assert "<pre>" in result
+        assert "import os" in result
+        assert "print('hello')" in result
 
 
 @patch("app.sources.rss.httpx.get")
