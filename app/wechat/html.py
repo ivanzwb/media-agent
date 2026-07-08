@@ -71,14 +71,65 @@ def markdown_to_html(md: str) -> str:
             out.append(f"</{list_type}>")
             list_type = None
 
-    for raw in lines:
+    i = 0
+    TABLE_ROW_RE = re.compile(r'^\|(.+)\|\s*$')
+    TABLE_SEP_RE = re.compile(r'^\|[-\s:|]+\|$')
+
+    while i < len(lines):
+        raw = lines[i]
         line = raw.rstrip()
         stripped = line.strip()
+        i += 1
 
         if not stripped:
             flush_para()
             flush_list()
             continue
+
+        # ── markdown table ──
+        if TABLE_ROW_RE.match(stripped):
+            hdr_cells = [c.strip() for c in stripped.strip("|").split("|")]
+            if i < len(lines) and TABLE_SEP_RE.match(lines[i].rstrip().strip()):
+                sep_raw = lines[i].rstrip().strip().strip("|")
+                sep_cells = [c.strip() for c in sep_raw.split("|")]
+                col_count = len(hdr_cells)
+                aligns: list[str] = []
+                for c in (sep_cells + ["---"] * col_count)[:col_count]:
+                    if c.startswith(":") and c.endswith(":"):
+                        aligns.append("center")
+                    elif c.endswith(":"):
+                        aligns.append("right")
+                    else:
+                        aligns.append("left")
+                i += 1  # skip separator
+                data_rows: list[list[str]] = []
+                while i < len(lines):
+                    r = lines[i].rstrip().strip()
+                    if not TABLE_ROW_RE.match(r):
+                        break
+                    cells = [c.strip() for c in r.strip("|").split("|")]
+                    while len(cells) < col_count:
+                        cells.append("")
+                    data_rows.append(cells[:col_count])
+                    i += 1
+                flush_para()
+                flush_list()
+                parts = ['<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;margin:16px 0;font-size:15px;">']
+                parts.append("<thead><tr>")
+                for ci, cell in enumerate(hdr_cells):
+                    al = aligns[ci] if ci < len(aligns) else "left"
+                    parts.append(f'<th style="background:#07C160;color:#fff;padding:10px;text-align:{al};border:1px solid #e0e0e0;">{_html.escape(cell) or "&nbsp;"}</th>')
+                parts.append("</tr></thead><tbody>")
+                for ri, row in enumerate(data_rows):
+                    bg = ' style="background:#f9fafb;"' if ri % 2 == 1 else ""
+                    parts.append(f"<tr{bg}>")
+                    for ci, cell in enumerate(row):
+                        al = aligns[ci] if ci < len(aligns) else "left"
+                        parts.append(f'<td style="padding:8px;border:1px solid #e0e0e0;text-align:{al};">{_inline(cell)}</td>')
+                    parts.append("</tr>")
+                parts.append("</tbody></table>")
+                out.append("\n".join(parts))
+                continue
 
         # skip leftover video embeds
         if stripped.startswith("<iframe") or stripped.startswith("[▶"):

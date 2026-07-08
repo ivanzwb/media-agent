@@ -105,6 +105,14 @@ def _build_styles(t: dict) -> dict:
         "img": "max-width:100%;display:block;margin:14px auto;border-radius:6px;",
         "a": f"color:{accent};text-decoration:none;border-bottom:1px solid {accent};",
         "hr": "border:none;border-top:1px solid #e0e0e0;margin:24px 0;",
+        # table styles
+        "table": ("border-collapse:collapse;width:100%;margin:16px 0;"
+                  "font-size:15px;overflow-x:auto;"),
+        "th": (f"background:{accent};color:#fff;padding:10px 12px;"
+               "text-align:left;font-weight:bold;border:1px solid #e0e0e0;"),
+        "td": ("padding:8px 12px;border:1px solid #e0e0e0;"
+               "text-align:left;line-height:1.7;"),
+        "tr_even": "background:#f9fafb;",
     }
 
 
@@ -146,6 +154,119 @@ def _glue_cjk_punctuation(html_str: str) -> str:
     return re.sub(r'\s+([' + _CJK + r'])', r'\1', html_str)
 
 
+# ── markdown table parsing ────────────────────────────────────────────────────
+
+_TABLE_ROW_RE = re.compile(r'^\|(.+)\|\s*$')
+_TABLE_SEP_RE = re.compile(r'^\|[-\s:|]+\|$')
+
+
+def _is_table_separator(line: str) -> bool:
+    """A line like |---|---| or | :--- | ---: |."""
+    return bool(re.match(r'^\|[-\s:|]+\|$', line.strip()))
+
+
+def _parse_table_cells(line: str) -> list[str]:
+    """Split a table row `| a | b | c |` into cells, trimming whitespace."""
+    stripped = line.strip().strip("|")
+    return [c.strip() for c in stripped.split("|")]
+
+
+def _render_table(lines: list[str], start: int, st: dict) -> tuple[str, int]:
+    """Try to parse a markdown table starting at *start*.
+
+    Returns (html_fragment, next_index) on success, or ("", start) if the
+    lines don't form a valid table.
+    """
+    n = len(lines)
+    if start >= n:
+        return "", start
+    # First line must be a header row with at least 2 cells
+    hdr = lines[start].strip()
+    if not _TABLE_ROW_RE.match(hdr):
+        return "", start
+    header_cells = _parse_table_cells(hdr)
+    if len(header_cells) < 2:
+        return "", start
+    # Second line must be a separator row
+    if start + 1 >= n or not _is_table_separator(lines[start + 1].strip()):
+        return "", start
+    sep_cells = _parse_table_cells(lines[start + 1].strip())
+    col_count = len(header_cells)
+    if len(sep_cells) != col_count:
+        return "", start
+    # Parse alignment hints from separator
+    aligns: list[str] = []
+    for c in sep_cells:
+        c = c.strip().strip(":")
+        if c.startswith("-") and c.endswith("-"):
+            left = sep_cells[sep_cells.index(c)] if sep_cells.index(c) < len(sep_cells) else ""
+            left_stripped = left.strip()
+            if left_stripped.startswith(":") and left_stripped.endswith(":"):
+                aligns.append("center")
+            elif left_stripped.endswith(":"):
+                aligns.append("right")
+            else:
+                aligns.append("left")
+    # Actually, let me parse aligns properly
+    aligns = []
+    raw_sep = [c.strip() for c in lines[start + 1].strip().strip("|").split("|")]
+    # Re-do proper parsing
+    raw = lines[start + 1].strip()
+    raw = raw.strip("|")
+    raw_cells = [c.strip() for c in raw.split("|")]
+    for c in raw_cells:
+        if c.startswith(":") and c.endswith(":"):
+            aligns.append("center")
+        elif c.endswith(":"):
+            aligns.append("right")
+        else:
+            aligns.append("left")
+    while len(aligns) < col_count:
+        aligns.append("left")
+    aligns = aligns[:col_count]
+
+    # Collect data rows
+    i = start + 2
+    data_rows: list[list[str]] = []
+    while i < n:
+        row = lines[i].strip()
+        if not _TABLE_ROW_RE.match(row):
+            break
+        cells = _parse_table_cells(row)
+        # Pad or truncate to match header
+        while len(cells) < col_count:
+            cells.append("")
+        cells = cells[:col_count]
+        data_rows.append(cells)
+        i += 1
+
+    # Render HTML table
+    parts: list[str] = [f'<table style="{st["table"]}">']
+    # Header
+    parts.append("<thead>")
+    parts.append("<tr>")
+    for idx, cell in enumerate(header_cells):
+        al = aligns[idx] if idx < len(aligns) else "left"
+        parts.append(f'<th style="{st["th"]};text-align:{al}">{_html.escape(cell) or "&nbsp;"}</th>')
+    parts.append("</tr>")
+    parts.append("</thead>")
+    # Body
+    parts.append("<tbody>")
+    for ri, row in enumerate(data_rows):
+        tr_style = st["tr_even"] if ri % 2 == 1 else ""
+        parts.append(f'<tr style="{tr_style}">' if tr_style else "<tr>")
+        for idx, cell in enumerate(row):
+            al = aligns[idx] if idx < len(aligns) else "left"
+            parts.append(
+                f'<td style="{st["td"]};text-align:{al}">'
+                f'{_inline(cell, st) or "&nbsp;"}</td>')
+        parts.append("</tr>")
+    parts.append("</tbody>")
+    parts.append("</table>")
+
+    return "\n".join(parts), i
+
+
 def render_styled_html(md: str, platform: str = "wechat",
                        theme: str = "default", tweaks: dict | None = None) -> str:
     """Render Markdown to themed, inline-styled HTML for the platform editor."""
@@ -184,6 +305,20 @@ def render_styled_html(md: str, platform: str = "wechat",
         raw = lines[i]
         stripped = raw.strip()
         i += 1
+
+        if not stripped:
+            flush_para()
+            flush_list()
+            continue
+
+        # ── markdown table ──
+        table_html, next_i = _render_table(lines, i - 1, st)
+        if next_i > i - 1:
+            flush_para()
+            flush_list()
+            out.append(table_html)
+            i = next_i
+            continue
 
         # fenced code block
         m = re.match(r'^```+\s*([\w+-]*)\s*$', stripped)
