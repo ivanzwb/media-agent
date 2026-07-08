@@ -31,6 +31,14 @@ def download_original_images(urls, dest_dir, fetch=None) -> list[str]:
 
 def attach_cover(draft: Draft, provider: ImageProvider, images_dir) -> Draft:
     images_dir = Path(images_dir)
+    # Don't overwrite a valid cover (e.g. one already set from body image)
+    if draft.cover_image and (images_dir / draft.cover_image).exists():
+        # Check it's not a mock placeholder
+        try:
+            if (images_dir / draft.cover_image).stat().st_size > 10_000:
+                return draft  # valid cover already present
+        except OSError:
+            pass
     title = draft.title_candidates[0] if draft.title_candidates else "cover"
     name = f"cover-{slugify(title)[:40] or 'cover'}.png"
     out = images_dir / name
