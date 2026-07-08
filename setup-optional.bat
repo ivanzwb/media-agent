@@ -1,99 +1,98 @@
 @echo off
-chcp 65001 >nul
-title Media Agent - å¯é€‰ä¾èµ–å®‰è£…
+title Media Agent - ¿ÉÑ¡ÒÀÀµ°²×°
 
 echo ============================================
-echo  Media Agent - å¯é€‰ä¾èµ–å®‰è£…
+echo  Media Agent - ¿ÉÑ¡ÒÀÀµ°²×°
 echo ============================================
 echo.
-echo æœ¬è„šæœ¬è‡ªåŠ¨æ£€æµ‹å¹¶å®‰è£…ç¼ºå¤±çš„å¯é€‰ç»„ä»¶ã€‚
+echo ±¾½Å±¾×Ô¶¯¼ì²â²¢°²×°È±Ê§µÄ¿ÉÑ¡×é¼ş¡£
 echo.
-echo   [1] Playwright + Chromiumï¼ˆç”¨äº JS æ¸²æŸ“æŠ“å–ï¼‰
-echo   [2] fish-audio-sdkï¼ˆäº‘ç«¯å£°éŸ³å…‹éš† TTSï¼‰
-echo   [3] ffmpegï¼ˆè§†é¢‘åˆæˆ â€” å¿…é¡»è‡ªå·±è£…ï¼‰
-echo   [4] CosyVoiceï¼ˆæœ¬åœ°å£°éŸ³å¤åˆ» â€” éœ€ GPUï¼‰
+echo   [1] Playwright + Chromium£¨ÓÃÓÚ JS äÖÈ¾×¥È¡£©
+echo   [2] fish-audio-sdk£¨ÔÆ¶ËÉùÒô¿ËÂ¡ TTS£©
+echo   [3] ffmpeg£¨ÊÓÆµºÏ³É ¡ª ±ØĞë×Ô¼º×°£©
+echo   [4] CosyVoice£¨±¾µØÉùÒô¸´¿Ì ¡ª Ğè GPU£©
 echo.
 echo ============================================
 echo.
 
-:: â”€â”€ Detect script dir â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+:: ©¤©¤ Detect script dir ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 set "SCRIPT_DIR=%~dp0"
-set "BUNDLE_DIR=%SCRIPT_DIR%media-agent"
+set "BUNDLE_DIR=%SCRIPT_DIR%"
 
-:: â”€â”€ 1. playwright + chromium â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+:: ©¤©¤ 1. playwright + chromium ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 :playwright
 echo [1/4] Playwright + Chromium ...
-if not exist "%BUNDLE_DIR%" (
-    echo [WARN] æ²¡æ‰¾åˆ° media-agent ç›®å½•ï¼Œè¯·æŠŠæœ¬è„šæœ¬æ”¾ dist/ ä¸‹è¿è¡Œã€‚
+if not exist "%BUNDLE_DIR%media-agent.exe" (
+    echo [WARN] Ã»ÕÒµ½ media-agent.exe£¬Çë°Ñ±¾½Å±¾·ÅÔÚ media-agent.exe Í¬¼¶Ä¿Â¼ÏÂÔËĞĞ¡£
     goto :eof
 )
 "%BUNDLE_DIR%\media-agent.exe" -c "import playwright; print('ok')" 2>nul
 if %errorlevel% equ 0 (
-    echo   [âœ“] Playwright åº“å·²æ‰“åŒ…
+    echo   [¡Ì] Playwright ¿âÒÑ´ò°ü
 ) else (
-    echo   [âœ—] Playwright åº“ç¼ºå¤±ï¼Œéœ€é‡å»ºæ‰“åŒ…
+    echo   [¡Á] Playwright ¿âÈ±Ê§£¬ĞèÖØ½¨´ò°ü
 )
-echo   æ­£åœ¨ä¸‹è½½ Chromium æµè§ˆå™¨ï¼ˆçº¦ 300MBï¼Œé¦–æ¬¡åªéœ€ä¸€æ¬¡ï¼‰...
+echo   ÕıÔÚÏÂÔØ Chromium ä¯ÀÀÆ÷£¨Ô¼ 300MB£¬Ê×´ÎÖ»ĞèÒ»´Î£©...
 "%BUNDLE_DIR%\media-agent.exe" -c "from playwright.sync_api import sync_playwright; sync_playwright().start(); print('Chromium installed')" 2>nul
 if %errorlevel% equ 0 (
-    echo   [âœ“] Chromium å®‰è£…å®Œæˆ
+    echo   [¡Ì] Chromium °²×°Íê³É
 ) else (
-    echo   [âœ—] Chromium å®‰è£…å¤±è´¥ï¼Œå°è¯•ç”¨ playwright CLI å®‰è£…...
+    echo   [¡Á] Chromium °²×°Ê§°Ü£¬³¢ÊÔÓÃ playwright CLI °²×°...
     "%BUNDLE_DIR%\media-agent.exe" -m playwright install chromium 2>nul
 )
 echo.
 goto :fish
 
-:: â”€â”€ 2. fish-audio-sdk â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+:: ©¤©¤ 2. fish-audio-sdk ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 :fish
 echo [2/4] fish-audio-sdk ...
-echo   [âœ“] fish-audio-sdk å·²æ‰“åŒ…è¿›ä¸»ç¨‹åºï¼Œæ— éœ€é¢å¤–å®‰è£…
+echo   [¡Ì] fish-audio-sdk ÒÑ´ò°ü½øÖ÷³ÌĞò£¬ÎŞĞè¶îÍâ°²×°
 echo.
 goto :ffmpeg
 
-:: â”€â”€ 3. ffmpeg â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+:: ©¤©¤ 3. ffmpeg ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 :ffmpeg
 echo [3/4] ffmpeg ...
 where ffmpeg >nul 2>nul
 if %errorlevel% equ 0 (
     for /f "delims=" %%i in ('where ffmpeg') do set "FFPATH=%%i"
-    echo   [âœ“] ffmpeg å·²å®‰è£…: %FFPATH%
+    echo   [¡Ì] ffmpeg ÒÑ°²×°: %FFPATH%
 ) else (
-    echo   [âœ—] ffmpeg æœªæ‰¾åˆ°
+    echo   [¡Á] ffmpeg Î´ÕÒµ½
     echo.
-    echo   è¯·ä» https://ffmpeg.org/download.html ä¸‹è½½ï¼Œ
-    echo   è§£å‹åæŠŠ bin\ffmpeg.exe æ‰€åœ¨ç›®å½•åŠ åˆ°ç³»ç»Ÿ PATHã€‚
+    echo   Çë´Ó https://ffmpeg.org/download.html ÏÂÔØ£¬
+    echo   ½âÑ¹ºó°Ñ bin\ffmpeg.exe ËùÔÚÄ¿Â¼¼Óµ½ÏµÍ³ PATH¡£
     echo.
-    echo   æˆ–ç›´æ¥ä¸‹è½½ä¾¿æºç‰ˆæ”¾åœ¨æœ¬ç›®å½•ï¼š
+    echo   »òÖ±½ÓÏÂÔØ±ãĞ¯°æ·ÅÔÚ±¾Ä¿Â¼£º
     echo     curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
-    echo     è§£å‹åæŠŠ ffmpeg.exe æ”¾åœ¨ media-agent\_internal\ åŒç›®å½•
+    echo     ½âÑ¹ºó°Ñ ffmpeg.exe ·ÅÔÚ media-agent\_internal\ Í¬Ä¿Â¼
 )
 echo.
 goto :cosyvoice
 
-:: â”€â”€ 4. CosyVoice â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+:: ©¤©¤ 4. CosyVoice ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 :cosyvoice
-echo [4/4] CosyVoiceï¼ˆæœ¬åœ°å£°éŸ³å¤åˆ»ï¼Œå¯é€‰ï¼‰...
+echo [4/4] CosyVoice£¨±¾µØÉùÒô¸´¿Ì£¬¿ÉÑ¡£©...
 echo.
-echo   CosyVoice éœ€è¦ Python ^< 3.13 + NVIDIA GPU + æ˜¾å­˜ 4GB+
-echo   æ— æ³•æ‰“åŒ…è¿›å•æ–‡ä»¶ï¼Œéœ€å¦å¤–å®‰è£…ï¼š
+echo   CosyVoice ĞèÒª Python ^< 3.13 + NVIDIA GPU + ÏÔ´æ 4GB+
+echo   ÎŞ·¨´ò°ü½øµ¥ÎÄ¼ş£¬ĞèÁíÍâ°²×°£º
 echo.
-echo   1. åˆ›å»ºç‹¬ç«‹ Python ç¯å¢ƒï¼ˆPython 3.11ï¼‰ï¼š
+echo   1. ´´½¨¶ÀÁ¢ Python »·¾³£¨Python 3.11£©£º
 echo      conda create -n cosyvoice python=3.11
 echo      conda activate cosyvoice
 echo.
-echo   2. å®‰è£…ä¾èµ–ï¼š
+echo   2. °²×°ÒÀÀµ£º
 echo      pip install "setuptools<70" cosyvoice
 echo.
-echo   3. å¯åŠ¨ CosyVoice HTTP æœåŠ¡ï¼š
+echo   3. Æô¶¯ CosyVoice HTTP ·şÎñ£º
 echo      python -m app.tts.providers.cosyvoice_http --port 8888
 echo.
-echo   4. åœ¨ Media Agent è®¾ç½®é¡µé…ç½®ï¼š
+echo   4. ÔÚ Media Agent ÉèÖÃÒ³ÅäÖÃ£º
 echo      TTS Provider: cosyvoice
 echo      API Base: http://127.0.0.1:8888
 echo.
 echo ============================================
-echo  å®‰è£…å®Œæˆï¼
-echo  å¦‚æœ‰é—®é¢˜è¯·æäº¤ Issue: https://github.com/ivanzwb/media-agent/issues
+echo  °²×°Íê³É£¡
+echo  ÈçÓĞÎÊÌâÇëÌá½» Issue: https://github.com/ivanzwb/media-agent/issues
 echo ============================================
 pause
