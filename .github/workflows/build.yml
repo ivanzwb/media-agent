@@ -73,17 +73,18 @@ jobs:
 
       - name: Package (zip)
         shell: bash
+        env:
+          VERSION: ${{ github.ref_name }}
         run: |
           python -c "
-          import zipfile
-          name = f'media-agent-\${{ github.ref_name }}-win64.zip'
-          with zipfile.ZipFile(f'dist/{name}', 'w', zipfile.ZIP_DEFLATED) as z:
-              import os
+          import os, zipfile
+          name = 'media-agent-' + os.environ['VERSION'] + '-win64.zip'
+          with zipfile.ZipFile(os.path.join('dist', name), 'w', zipfile.ZIP_DEFLATED) as z:
               for dp, _, files in os.walk('dist/media-agent'):
                   for f in files:
                       fp = os.path.join(dp, f)
                       z.write(fp, os.path.relpath(fp, 'dist'))
-          print(f'Created dist/{name}')
+          print('Created dist/' + name)
           "
 
       - uses: actions/upload-artifact@v4
@@ -155,21 +156,57 @@ jobs:
           rm -rf build media-agent.spec
 
       - name: Package (zip)
+        env:
+          VERSION: ${{ github.ref_name }}
         run: |
           cp setup-optional.sh dist/media-agent/
           python -c "
-          import zipfile
-          name = f'media-agent-${{ github.ref_name }}-macos.zip'
-          with zipfile.ZipFile(f'dist/{name}', 'w', zipfile.ZIP_DEFLATED) as z:
-              import os
+          import os, zipfile
+          name = 'media-agent-' + os.environ['VERSION'] + '-macos.zip'
+          with zipfile.ZipFile(os.path.join('dist', name), 'w', zipfile.ZIP_DEFLATED) as z:
               for dp, _, files in os.walk('dist/media-agent'):
                   for f in files:
                       fp = os.path.join(dp, f)
                       z.write(fp, os.path.relpath(fp, 'dist'))
-          print(f'Created dist/{name}')
+          print('Created dist/' + name)
           "
 
       - uses: actions/upload-artifact@v4
         with:
           name: media-agent-macos
           path: dist/media-agent-*.zip
+
+  publish:
+    # Push the built packages into the public release repo (ivanzwb/release)
+    # under media-agent/release/. Requires a PAT secret RELEASE_TOKEN with
+    # Contents:write on ivanzwb/release.
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download built packages
+        uses: actions/download-artifact@v4
+        with:
+          path: _artifacts
+
+      - name: Checkout release repo
+        uses: actions/checkout@v4
+        with:
+          repository: ivanzwb/release
+          token: ${{ secrets.RELEASE_TOKEN }}
+          path: release-repo
+
+      - name: Copy packages and push
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          dest="release-repo/media-agent/release"
+          mkdir -p "$dest"
+          find _artifacts -name 'media-agent-*.zip' -exec cp -f {} "$dest/" \;
+          echo "Packaged files:"; ls -la "$dest"
+          cd release-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add media-agent/release
+          git commit -m "media-agent $VERSION" || { echo "no changes"; exit 0; }
+          git push
