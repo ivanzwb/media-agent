@@ -24,6 +24,7 @@ jobs:
         shell: pwsh
         run: |
           pyinstaller --onedir `
+            --collect-all "app" `
             --name "media-agent" `
             --add-data "app/web/templates;app/web/templates" `
             --add-data "app/web/static;app/web/static" `
@@ -109,6 +110,7 @@ jobs:
       - name: Build
         run: |
           pyinstaller --onedir \
+            --collect-all "app" \
             --name "media-agent" \
             --add-data "app/web/templates:app/web/templates" \
             --add-data "app/web/static:app/web/static" \

@@ -24,6 +24,7 @@ if %errorlevel% neq 0 (
 :: Build
 echo Building...
 pyinstaller --onedir ^
+    --collect-all "app" ^
     --name "media-agent" ^
     --add-data "app/web/templates;app/web/templates" ^
     --add-data "app/web/static;app/web/static" ^

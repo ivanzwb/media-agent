@@ -11,6 +11,7 @@ pip3 install "click<8.2" pyinstaller fish-audio-sdk playwright
 
 # Build
 pyinstaller --onedir \
+    --collect-all "app" \
     --name "media-agent" \
     --add-data "app/web/templates:app/web/templates" \
     --add-data "app/web/static:app/web/static" \
