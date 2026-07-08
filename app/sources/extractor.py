@@ -544,13 +544,14 @@ def extract_from_html(html: str, url: str) -> dict:
     # (loading spinners, related-article thumbnails, favicons).
     if content_md.strip() and not images:
         html_pl, images = _images_with_placeholders(html, base_url=url)
-        # Also extract the primary image from JSON-LD structured data
-        # (Schema.org Article/NewsArticle) — many sites store the hero image
-        # only in JSON-LD, not as a visible <img> tag.
+
+    # ── 1b-2. JSON-LD hero image — always try, even when body images exist ──
+    # Sites like NVIDIA Developer Blog store the featured/hero image in
+    # Schema.org JSON-LD, but readability strips it because it sits outside
+    # the article body.  Prepend the hero image when it adds new content.
+    if content_md.strip():
         jsonld_img = _jsonld_image(html, base_url=url)
         if jsonld_img and jsonld_img not in images:
-            # Avoid duplicates when the same image appears under different
-            # domains (e.g. www.site.com vs site.com after redirect).
             jsonld_slug = jsonld_img.rsplit("/", 1)[-1].split("?")[0]
             if not any(jsonld_slug in u for u in images):
                 images.insert(0, jsonld_img)
