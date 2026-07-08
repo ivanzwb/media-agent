@@ -5,6 +5,7 @@ from time import mktime
 
 import feedparser
 import httpx
+import re
 import trafilatura
 from readability import Document
 
@@ -95,6 +96,11 @@ def _fetch_full_article(url: str, timeout: float = 15.0) -> str | None:
                                         output_format="html",
                                         url=url)
         if extracted and len(extracted.strip()) > 200:
+            # trafilatura outputs <graphic> instead of <img> — convert so the
+            # downstream image extractor / downloader recognises them.
+            extracted = re.sub(
+                r'<graphic\s+src="([^"]+)"(?:\s+alt="([^"]*)")?\s*/?>',
+                r'<img src="\1" alt="\2"/>', extracted)
             return extracted.strip()
     except Exception:
         pass
