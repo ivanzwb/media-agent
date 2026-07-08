@@ -88,7 +88,9 @@ REWRITE_INSTRUCTION = (
     '  "title_candidates": [3 个吸睛但不虚假的标题],\n'
     '  "body_md": "Markdown 正文（中文数字编号章节+短段落+'
     '图片用 ![](url) 保留或 [[IMG:0]] 短占位符、视频用 [[VID:0]] 插入）"\n'
-    "不要输出 JSON 以外的任何内容。\n\n"
+    '⚠️ 关键：你的回复必须从 `{{` 开始、以 `}}` 结束，不要加任何前缀、'
+    "后缀、解释、摘要或代码围栏。body_md 字段中的换行必须用 \\n 转义，"
+    '不能出现真正的换行符。不要写\u201c已完成\u201d\u201c已输出至文件\u201d等元评论。\n\n"'
     "原文标题：{title}\n来源：{source}\n\n原文正文：\n{content}"
 )
 
@@ -403,6 +405,62 @@ def _repair_json_control_chars(text: str) -> str:
     return ''.join(result)
 
 
+def _extract_json_field(text: str, field: str) -> str | None:
+    """Regex-based fallback: extract a JSON string field value when the JSON
+    itself is malformed (e.g. raw newlines inside string values).  Handles
+    ``\\n``, ``\\t``, ``\\r`` and ``\\"`` escape sequences."""
+    import re as _re
+    pat = _re.compile(
+        rf'"{_re.escape(field)}"\s*:\s*"', _re.DOTALL)
+    m = pat.search(text)
+    if not m:
+        return None
+    chars: list[str] = []
+    i = m.end()
+    while i < len(text):
+        ch = text[i]
+        if ch == '\\' and i + 1 < len(text):
+            esc = text[i + 1]
+            if esc == 'n':
+                chars.append('\n')
+            elif esc == 't':
+                chars.append('\t')
+            elif esc == 'r':
+                chars.append('\r')
+            elif esc == '"':
+                chars.append('"')
+            elif esc == '\\':
+                chars.append('\\')
+            else:
+                chars.extend([ch, esc])
+            i += 2
+        elif ch == '"':
+            break
+        else:
+            chars.append(ch)
+            i += 1
+    return ''.join(chars)
+
+
+def _extract_json_fallback(text: str) -> dict | None:
+    """When JSON parsing fails, try regex-based extraction of the two
+    critical fields: title_candidates and body_md.  This recovers content
+    from LLM responses where the body_md contains raw control characters."""
+    body_md = _extract_json_field(text, "body_md")
+    if body_md is None:
+        return None
+    # title_candidates is a JSON array — grab the string elements
+    import re as _re
+    titles: list[str] = []
+    tc_m = _re.search(r'"title_candidates"\s*:\s*\[(.*?)\]', text, _re.DOTALL)
+    if tc_m:
+        for s in _re.findall(r'"([^"]*)"', tc_m.group(1)):
+            titles.append(s)
+    if not titles:
+        return None
+    return {"title_candidates": titles, "body_md": body_md}
+
+
 def _extract_json(text: str) -> dict | None:
     # 1) Direct parse
     result = _try_parse_json(text)
@@ -493,8 +551,37 @@ def rewrite(article: Article, provider: LLMProvider) -> Draft:
         title_candidates = parsed["title_candidates"]
         body_md = parsed["body_md"]
     else:
-        title_candidates = [article.title]
-        body_md = raw
+        # JSON parse failed — try regex-based field extraction as fallback
+        fallback = _extract_json_fallback(raw)
+        if fallback:
+            title_candidates = fallback["title_candidates"]
+            body_md = fallback["body_md"]
+        else:
+            # Retry once with a stricter prompt that forbids meta-commentary
+            retry_prompt = (
+                rewrite_prompt + "\n\n"
+                "⚠️ 你的上一次回复没有包含有效的 JSON 格式输出。"
+                "请严格按照要求，只输出一个 JSON 对象（以 { 开始，以 } 结束），"
+                "不要添加任何前言、后语、解释、摘要、「已完成」等元评论。"
+            )
+            raw2 = provider.chat([
+                Message(role="system", content=REWRITE_SYSTEM),
+                Message(role="user", content=retry_prompt),
+            ])
+            parsed2 = _extract_json(raw2)
+            if parsed2 and parsed2.get("title_candidates") and parsed2.get("body_md"):
+                title_candidates = parsed2["title_candidates"]
+                body_md = parsed2["body_md"]
+                raw = raw2  # use retried response for fact-check
+            else:
+                fb2 = _extract_json_fallback(raw2)
+                if fb2:
+                    title_candidates = fb2["title_candidates"]
+                    body_md = fb2["body_md"]
+                    raw = raw2
+                else:
+                    title_candidates = [article.title]
+                    body_md = raw
 
     # Replace any stray [[IMG:N]] / [[VID:N]] tokens the LLM may have output
     body_md = _apply_placeholders(body_md, media_map)
