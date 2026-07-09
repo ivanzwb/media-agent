@@ -456,7 +456,8 @@ def create_app(config: Config | None = None,
 
                 _rewrite_log(article_id, f"正在调用 LLM 进行转写…（风格：{chosen_style.name}）",
                              op_key=op_key, op_conn=op_conn)
-                draft = rewrite(art, provider, style=chosen_style)
+                draft = rewrite(art, provider, style=chosen_style,
+                                promotion_footer=run_config.promotion_footer)
                 _rewrite_log(article_id, "转写完成，进行敏感词过滤…",
                              op_key=op_key, op_conn=op_conn)
                 sanitize_draft(draft, load_words(run_config))
