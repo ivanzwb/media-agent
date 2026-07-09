@@ -10,6 +10,7 @@ from app.images.base import ImageProvider
 from app.llm.base import LLMProvider
 from app.models import Article, Draft
 from app.sources.dedup import dedup
+from app.sources.failure_log import log_fetch_failure
 from app.sources.rss import fetch_feed
 from app.sources.scraper import scrape_list, scrape_single
 from app.store import Store
@@ -55,8 +56,23 @@ def collect_sources(feeds: FeedsConfig,
         try:
             items = _fetch_source(src)
         except Exception as e:  # noqa: BLE001
+            # Log detailed failure info
+            fetch_url = getattr(src, "url", "")
+            log_fetch_failure(
+                source_name=src.name,
+                source_type=src.type,
+                url=fetch_url,
+                exception=e,
+            )
             if progress:
-                progress(f"  来源失败：{src.name}（{type(e).__name__}）")
+                err_cls = type(e).__name__
+                # Include status code in the progress message when available
+                status = getattr(e, "response", None)
+                status_code = getattr(status, "status_code", None)
+                if status_code:
+                    progress(f"  来源失败：{src.name}（{err_cls} {status_code}）")
+                else:
+                    progress(f"  来源失败：{src.name}（{err_cls}）")
             return []
         if max_per_source:
             items = items[:max_per_source]

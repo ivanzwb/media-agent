@@ -1,5 +1,8 @@
 import json
 from datetime import datetime, timezone
+from unittest.mock import ANY, patch
+
+import httpx
 
 from app.config import Config
 from app.db import connect, init_db
@@ -98,3 +101,182 @@ def test_run_pipeline_skips_same_title_source(tmp_path, monkeypatch):
     # Only 1 article in DB
     count = store.conn.execute("SELECT COUNT(*) AS c FROM articles").fetchone()["c"]
     assert count == 1
+
+
+# ── failure logging ───────────────────────────────────────────────────────
+
+
+def test_collect_sources_logs_http_failure(tmp_path, monkeypatch):
+    """When _fetch_source raises HTTPStatusError, log_fetch_failure captures it."""
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    from app.pipeline.orchestrator import collect_sources
+
+    feeds = FeedsConfig(
+        topics=[],
+        sources=[
+            SourceConfig(name="BadFeed", type="rss",
+                         url="https://bad.example.com/feed", topics=["AI"]),
+        ],
+    )
+
+    # Mock _fetch_source to raise an HTTP 403
+    request = httpx.Request("GET", "https://bad.example.com/feed")
+    response = httpx.Response(403, request=request, text="blocked")
+    exc = httpx.HTTPStatusError("Forbidden", request=request, response=response)
+
+    with patch("app.pipeline.orchestrator._fetch_source", side_effect=exc):
+        articles = collect_sources(feeds)
+        assert articles == []  # failure is swallowed, no articles returned
+
+    # Check the failure log
+    logpath = tmp_path / "fetch_failures.log"
+    assert logpath.exists()
+    entry = json.loads(logpath.read_text(encoding="utf-8"))
+    assert entry["source_name"] == "BadFeed"
+    assert entry["error_type"] == "HTTPStatusError"
+    assert entry["status_code"] == 403
+
+
+def test_collect_sources_logs_timeout_failure(tmp_path, monkeypatch):
+    """When _fetch_source raises TimeoutException, log_fetch_failure captures it."""
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    from app.pipeline.orchestrator import collect_sources
+
+    feeds = FeedsConfig(
+        topics=[],
+        sources=[
+            SourceConfig(name="SlowFeed", type="rss",
+                         url="https://slow.example.com/feed", topics=["AI"]),
+        ],
+    )
+
+    exc = httpx.TimeoutException("Connect timeout")
+    with patch("app.pipeline.orchestrator._fetch_source", side_effect=exc):
+        articles = collect_sources(feeds)
+        assert articles == []
+
+    entry = json.loads(
+        (tmp_path / "fetch_failures.log").read_text(encoding="utf-8")
+    )
+    assert entry["source_name"] == "SlowFeed"
+    assert entry["error_type"] == "TimeoutException"
+
+
+def test_collect_sources_logs_connect_error(tmp_path, monkeypatch):
+    """When _fetch_source raises ConnectError, log_fetch_failure captures it."""
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    from app.pipeline.orchestrator import collect_sources
+
+    feeds = FeedsConfig(
+        topics=[],
+        sources=[
+            SourceConfig(name="Unreachable", type="rss",
+                         url="https://dead.example.com/feed", topics=["AI"]),
+        ],
+    )
+
+    exc = httpx.ConnectError("Connection refused")
+    with patch("app.pipeline.orchestrator._fetch_source", side_effect=exc):
+        articles = collect_sources(feeds)
+        assert articles == []
+
+    entry = json.loads(
+        (tmp_path / "fetch_failures.log").read_text(encoding="utf-8")
+    )
+    assert entry["source_name"] == "Unreachable"
+    assert entry["error_type"] == "ConnectError"
+
+
+def test_collect_sources_continues_after_failure(tmp_path, monkeypatch):
+    """When one source fails, other sources are still collected."""
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    from app.pipeline.orchestrator import collect_sources
+
+    feeds = FeedsConfig(
+        topics=[],
+        sources=[
+            SourceConfig(name="Broken", type="rss",
+                         url="https://broken.example.com/feed", topics=["AI"]),
+            SourceConfig(name="Good", type="rss",
+                         url="https://good.example.com/feed", topics=["AI"]),
+        ],
+    )
+
+    good_article = Article(
+        title="Working", content_md="body", url="https://good.example.com/a",
+        source_name="Good", source_type="rss", published_at=None,
+        images=[], raw_summary=None,
+        fetched_at=datetime.now(timezone.utc),
+    )
+
+    exc = httpx.HTTPStatusError(
+        "Not Found", request=httpx.Request("GET", "https://broken.example.com/feed"),
+        response=httpx.Response(404, request=httpx.Request("GET", "https://broken.example.com/feed")),
+    )
+
+    def mock_fetch(src):
+        if src.name == "Broken":
+            raise exc
+        return [good_article]
+
+    with patch("app.pipeline.orchestrator._fetch_source", side_effect=mock_fetch):
+        articles = collect_sources(feeds)
+        assert len(articles) == 1
+        assert articles[0].source_name == "Good"
+
+
+def test_collect_sources_progress_called_on_failure(monkeypatch):
+    """Progress callback receives failure message when source errors."""
+    from app.pipeline.orchestrator import collect_sources
+
+    feeds = FeedsConfig(
+        topics=[],
+        sources=[
+            SourceConfig(name="FailSource", type="rss",
+                         url="https://fail.example.com/feed", topics=["AI"]),
+        ],
+    )
+
+    exc = httpx.HTTPStatusError(
+        "Forbidden",
+        request=httpx.Request("GET", "https://fail.example.com/feed"),
+        response=httpx.Response(403, request=httpx.Request("GET", "https://fail.example.com/feed")),
+    )
+
+    messages = []
+
+    def progress(msg):
+        messages.append(msg)
+
+    with patch("app.pipeline.orchestrator._fetch_source", side_effect=exc):
+        collect_sources(feeds, progress=progress)
+
+    # Should have both the "Fetching" and "Failed" messages
+    assert any("FailSource" in m for m in messages)
+    assert any("403" in m for m in messages)
+
+
+def test_run_pipeline_handles_source_failure(tmp_path, monkeypatch):
+    """Full pipeline run continues when a source fetch fails."""
+    from app.pipeline.orchestrator import collect_sources, run_pipeline
+    from app.llm.providers.mock import MockProvider
+
+    cfg, store = build(tmp_path)
+    feeds = FeedsConfig(
+        topics=[Topic(name="AI", keywords=["GPT"])],
+        sources=[
+            SourceConfig(name="Bad", type="rss",
+                         url="https://bad.example.com/feed", topics=["AI"]),
+        ],
+    )
+
+    monkeypatch.setattr("app.pipeline.orchestrator.collect_sources",
+                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None: [])
+
+    provider = MockProvider(responses=[
+        json.dumps({"title_candidates": ["t"], "body_md": "b"}),
+        json.dumps({"flagged_claims": []})])
+    stats = run_pipeline(feeds, store, provider, max_drafts=5)
+    # No articles fetched, but pipeline should not crash
+    assert stats["fetched"] == 0
+    assert stats["archived"] == 0
