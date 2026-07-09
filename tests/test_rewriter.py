@@ -20,6 +20,21 @@ def sample_article():
                    topic="AI")
 
 
+class RecordingProvider:
+    """Captures chat messages for prompt assertion."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self._i = 0
+        self.calls: list = []
+
+    def chat(self, messages, **opts):
+        self.calls.append(messages)
+        out = self._responses[min(self._i, len(self._responses) - 1)]
+        self._i += 1
+        return out
+
+
 def test_rewrite_builds_draft_from_json():
     rewrite_json = json.dumps({
         "title_candidates": ["震撼！新模型登场", "新AI模型刷新纪录"],
@@ -48,6 +63,84 @@ def test_rewrite_captures_flagged_claims():
     assert len(draft.flagged_claims) == 1
     assert "99%" in draft.flagged_claims[0]
 
+
+# ── promotion_footer ─────────────────────────────────────────────────────
+
+def test_rewrite_promotion_footer_appears_in_instruction():
+    """When promotion_footer is provided, the LLM instruction includes the
+    promotion block so the LLM can write a natural transition."""
+    resp = json.dumps({"title_candidates": ["标题"], "body_md": "正文"})
+    check = json.dumps({"flagged_claims": []})
+    provider = RecordingProvider([resp, check])
+    rewrite(sample_article(), provider,
+            promotion_footer="关注我们，获取更多前沿资讯")
+    user_msg = provider.calls[0][1].content
+    assert "推广过渡" in user_msg
+    assert "关注我们" in user_msg
+    assert "不要生硬复制" in user_msg
+
+
+def test_rewrite_promotion_footer_none_omits_block():
+    """When promotion_footer is None, the instruction has no promotion block."""
+    resp = json.dumps({"title_candidates": ["标题"], "body_md": "正文"})
+    check = json.dumps({"flagged_claims": []})
+    provider = RecordingProvider([resp, check])
+    rewrite(sample_article(), provider)  # promotion_footer defaults to None
+    user_msg = provider.calls[0][1].content
+    assert "推广过渡" not in user_msg
+
+
+def test_rewrite_promotion_footer_empty_omits_block():
+    """When promotion_footer is empty string, the instruction has no promotion block."""
+    resp = json.dumps({"title_candidates": ["标题"], "body_md": "正文"})
+    check = json.dumps({"flagged_claims": []})
+    provider = RecordingProvider([resp, check])
+    rewrite(sample_article(), provider, promotion_footer="")
+    user_msg = provider.calls[0][1].content
+    assert "推广过渡" not in user_msg
+
+
+def test_rewrite_promotion_footer_with_style():
+    """promotion_footer works with a non-default style too."""
+    resp = json.dumps({"title_candidates": ["标题"], "body_md": "正文"})
+    check = json.dumps({"flagged_claims": []})
+    from app.pipeline import styles as S
+    style = S.get_style("economist")
+    provider = RecordingProvider([resp, check])
+    rewrite(sample_article(), provider, style=style,
+            promotion_footer="订阅我们，每周深度解读")
+    user_msg = provider.calls[0][1].content
+    assert "推广过渡" in user_msg
+    assert "订阅我们" in user_msg
+    # Style-specific content is preserved
+    assert "经济学人" in user_msg or "英式" in user_msg or "冷静" in user_msg
+
+
+def test_rewrite_promotion_footer_body_md_flow():
+    """The LLM output body_md may contain promotion text (naturally integrated);
+    rewrite() should pass it through without post-processing."""
+    body = "## 写在最后\n\n总结。欢迎关注我们获取最新资讯。"
+    resp = json.dumps({"title_candidates": ["标题"], "body_md": body})
+    check = json.dumps({"flagged_claims": []})
+    provider = MockProvider(responses=[resp, check])
+    draft = rewrite(sample_article(), provider,
+                    promotion_footer="关注我们，获取最新资讯")
+    assert "欢迎关注" in draft.body_md
+    assert draft.source_url == "https://x.com/a"
+
+
+def test_rewrite_promotion_render_instruction_signature():
+    """render_instruction accepts promotion_block kwarg."""
+    from app.pipeline.rewriter import render_instruction
+    tmpl = "前置内容{promotion_block}后置内容"
+    out = render_instruction(
+        tmpl, title="t", source="s", manifest="m", content="c",
+        promotion_block="4. **推广**：关注我们\n")
+    assert "推广" in out
+    assert "后置内容" in out
+
+
+# ── Non-JSON fallback ──────────────────────────────────────────────────
 
 def test_rewrite_handles_non_json_gracefully():
     provider = MockProvider(responses=["not json at all", "also not json"])
