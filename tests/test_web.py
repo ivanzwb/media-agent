@@ -397,6 +397,61 @@ def test_archive_rewrite_article(tmp_path):
     assert len(drafts_for_article) == 1
 
 
+def test_archive_rewrite_promotion_footer_no_mechanical_append(tmp_path):
+    """The rewrite worker does NOT mechanically append the static promotion
+    footer to draft body_md (the LLM handles it via prompt)."""
+    client, store, _ = make_client(tmp_path)
+
+    # Configure promotion footer in DB
+    footer = "关注我们，获取更多前沿资讯"
+    store.set_setting("promotion_footer", footer)
+
+    art = store.save_article(Article(
+        title="Test", content_md="# Body\nfacts",
+        url="https://x.com/d", source_name="TestSource", source_type="rss",
+        published_at=datetime(2026, 2, 1, tzinfo=timezone.utc), images=[],
+        raw_summary=None, fetched_at=datetime(2026, 2, 2, tzinfo=timezone.utc),
+        topic="AI"))
+
+    # Trigger rewrite
+    r = client.post(f"/archive/{art.id}/rewrite")
+    assert r.status_code == 200
+    assert r.json()["started"] is True
+
+    # Poll until done
+    import time
+    for _ in range(30):
+        status = client.get(f"/api/rewrite-status?article_id={art.id}").json()
+        if status.get("done"):
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError("Rewrite did not complete in time")
+
+    # Read saved draft body
+    draft = store.get_draft_for_article(art.id)
+    assert draft is not None
+    body = store.read_draft_body(draft["id"])
+    body_md = body.get("body_md", "")
+
+    # The mock LLM echoes the prompt (which includes the footer text once).
+    # Without the old server.py mechanical append, the footer should NOT
+    # appear a second time as a standalone block after the source attribution.
+    assert body_md.count(footer) <= 1, (
+        f"Promotion footer appears {body_md.count(footer)} times in body_md "
+        f"(expected at most 1 — from the prompt echo only). "
+        f"This means the worker mechanically appended it."
+    )
+    # Verify the source attribution is the last section, not a duplicated footer
+    info_idx = body_md.rfind("**信息来源**")
+    if info_idx != -1:
+        after_info = body_md[info_idx:]
+        assert "关注我们" not in after_info.replace(
+            "关注我们", "", 1), (
+            "Promotion footer found after **信息来源** — worker still "
+            "mechanically appending it.")
+
+
 def test_export_config(tmp_path):
     client, store, _ = make_client(tmp_path)
     r = client.get("/export")

@@ -75,9 +75,15 @@ def test_rewrite_promotion_footer_appears_in_instruction():
     rewrite(sample_article(), provider,
             promotion_footer="关注我们，获取更多前沿资讯")
     user_msg = provider.calls[0][1].content
-    assert "推广过渡" in user_msg
+    # Section header
+    assert "推广部分" in user_msg
+    # New prompt: topic-specific CTA generation, not static transition
+    assert "2-3 个互动呼吁" in user_msg
+    assert "品牌名称" in user_msg
+    assert "基于本文实际内容" in user_msg
+    assert "参考格式" in user_msg
+    # Configured footer text is still passed as reference
     assert "关注我们" in user_msg
-    assert "不要生硬复制" in user_msg
 
 
 def test_rewrite_promotion_footer_none_omits_block():
@@ -87,7 +93,7 @@ def test_rewrite_promotion_footer_none_omits_block():
     provider = RecordingProvider([resp, check])
     rewrite(sample_article(), provider)  # promotion_footer defaults to None
     user_msg = provider.calls[0][1].content
-    assert "推广过渡" not in user_msg
+    assert "推广部分" not in user_msg
 
 
 def test_rewrite_promotion_footer_empty_omits_block():
@@ -97,7 +103,7 @@ def test_rewrite_promotion_footer_empty_omits_block():
     provider = RecordingProvider([resp, check])
     rewrite(sample_article(), provider, promotion_footer="")
     user_msg = provider.calls[0][1].content
-    assert "推广过渡" not in user_msg
+    assert "推广部分" not in user_msg
 
 
 def test_rewrite_promotion_footer_with_style():
@@ -110,7 +116,7 @@ def test_rewrite_promotion_footer_with_style():
     rewrite(sample_article(), provider, style=style,
             promotion_footer="订阅我们，每周深度解读")
     user_msg = provider.calls[0][1].content
-    assert "推广过渡" in user_msg
+    assert "推广部分" in user_msg
     assert "订阅我们" in user_msg
     # Style-specific content is preserved
     assert "经济学人" in user_msg or "英式" in user_msg or "冷静" in user_msg
@@ -127,6 +133,25 @@ def test_rewrite_promotion_footer_body_md_flow():
                     promotion_footer="关注我们，获取最新资讯")
     assert "欢迎关注" in draft.body_md
     assert draft.source_url == "https://x.com/a"
+
+
+def test_rewrite_promotion_footer_no_mechanical_append():
+    """rewrite() does NOT mechanically append the promotion footer to body_md;
+    it only passes it as a reference in the LLM instruction. The LLM output
+    passes through unadulterated — no `---\n{footer}` block is added."""
+    body = "原文内容正文"
+    resp = json.dumps({"title_candidates": ["标题"], "body_md": body})
+    check = json.dumps({"flagged_claims": []})
+    provider = MockProvider(responses=[resp, check])
+    draft = rewrite(sample_article(), provider,
+                    promotion_footer="关注我们，获取最新资讯")
+    # rewrite() post-processes body_md (image interleaving, source attribution)
+    # but does NOT append the promotion footer as a standalone section
+    assert "关注我们，获取最新资讯" not in draft.body_md
+    # The "信息来源" section is the last section — no promotion footer after it
+    info_idx = draft.body_md.rfind("**信息来源**")
+    after_info = draft.body_md[info_idx:] if info_idx != -1 else ""
+    assert "关注我们" not in after_info
 
 
 def test_rewrite_promotion_render_instruction_signature():

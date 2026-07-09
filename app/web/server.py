@@ -461,11 +461,6 @@ def create_app(config: Config | None = None,
                              op_key=op_key, op_conn=op_conn)
                 sanitize_draft(draft, load_words(run_config))
 
-                # Append promotion footer if configured
-                footer = run_config.promotion_footer
-                if footer:
-                    draft.body_md = draft.body_md.rstrip() + f"\n\n---\n{footer}\n"
-
                 _rewrite_log(article_id, "保存草稿…",
                              op_key=op_key, op_conn=op_conn)
                 old = ws.get_draft_for_article(article_id)

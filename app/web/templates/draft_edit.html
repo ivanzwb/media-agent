@@ -929,12 +929,16 @@
           }, 800);
         } else {
           status.innerHTML = '❌ 转写失败：' + (s.error || '未知错误');
+          var rf = document.getElementById('rewrite-btn');
+          if (rf) rf.disabled = false;
           rewriteDraftPollTimer = null;
           rewriteDraftArticleId = null;
         }
         return;
       }
-      if (s.running) {
+      // Keep polling as long as it's running OR as long as it's not done
+      // (covers edge cases where state might briefly show neither running nor done)
+      if (s.running || !s.done) {
         rewriteDraftPollTimer = setTimeout(pollRewriteDraft, 1200);
       }
     } catch (e) {
@@ -967,6 +971,11 @@
       const fd = new FormData();
       if (sel && sel.value) fd.append('style', sel.value);
       const resp = await fetch('/archive/' + articleId + '/rewrite', {method: 'POST', body: fd});
+      if (!resp.ok) {
+        status.textContent = '请求失败 (' + resp.status + ')';
+        btn.disabled = false;
+        return;
+      }
       const data = await resp.json();
       if (data.started === false) {
         status.textContent = '已有任务在进行';
@@ -981,6 +990,26 @@
       alert('转写请求失败');
     }
   }
+
+  // On page load, check if there's an ongoing rewrite for this article
+  // (handles the case where the user refreshed during a rewrite).
+  {% if article_id %}
+  (function checkRunningDraftRewrite() {
+    var articleId = {{ article_id }};
+    if (!articleId) return;
+    fetch('/api/rewrite-status?article_id=' + articleId).then(function (r) { return r.json(); }).then(function (s) {
+      if (s.running || (!s.done && s.draft_id === null)) {
+        rewriteDraftArticleId = articleId;
+        showRewriteDraftPanel();
+        pollRewriteDraft();
+      } else if (s.done && s.draft_id && s.draft_id !== {{ draft.id }}) {
+        // The latest rewrite completed with a different draft — redirect.
+        var from = new URLSearchParams(window.location.search).get('from') || '';
+        window.location = '/drafts/' + s.draft_id + '/edit' + (from ? '?from=' + from : '');
+      }
+    }).catch(function () {});
+  })();
+  {% endif %}
 
   // One-click publish to WeChat Official Account.
   // kind: 'article' (图文) | 'video'; mode: 'draft' (草稿箱) | 'publish' (直接发布)

@@ -575,11 +575,18 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
         system_prompt = style.prompt
         instruction_tmpl = style.instruction
 
-    # Promotion block: if provided, tells the LLM to naturally transition into
-    # the promotion text instead of mechanically appending it post-rewrite.
+    # Promotion block: if provided, tells the LLM to generate a
+    # context-aware promotional call-to-action based on the article's
+    # actual topic/content, using the configured footer as a reference
+    # for the brand name and CTA format — NOT as verbatim content.
     promotion_block = (
-        f"4. **推广过渡**：用一两句话自然过渡到以下推广内容"
-        f"（不要生硬复制，语气与全文一致）：\n{promotion_footer}\n"
+        f"4. **推广部分**：写一段与本文主题相关的推广引导，包含：\n"
+        f"   - 一句自然的引导语（如「如果觉得有收获」）\n"
+        f"   - 2-3 个互动呼吁（从点赞、关注、评论、收藏中选），"
+        f"每个的文案必须基于本文实际内容，不得照抄下文的示例\n"
+        f"   - 末尾标注品牌名称\n\n"
+        f"参考格式（提取其中的品牌名称和结构，但把具体主题内容替换为与本文匹配的）：\n"
+        f"{promotion_footer}\n"
         if promotion_footer else ""
     )
     rewrite_prompt = render_instruction(

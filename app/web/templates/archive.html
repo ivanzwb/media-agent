@@ -364,12 +364,27 @@ function toggleRewriteMin() {
   applyRewriteMin();
 }
 
+// Update article action cells to reflect server-side rewrite state after page load.
+function syncRewriteCell(entry) {
+  var cell = document.getElementById('art-actions-' + entry.article_id);
+  if (!cell) return;
+  if (entry.running) {
+    cell.innerHTML = '<span class="muted">⏳ 转写中…</span>';
+  } else if (entry.done && entry.error) {
+    cell.innerHTML =
+      '<span class="badge" style="background:#e74c3c;color:#fff">✗ 失败</span> ' +
+      '<button class="btn small primary" onclick="rewriteArticle(' + entry.article_id + ', false)">重试</button>';
+  }
+  // done + draft_id is already handled by the template (draft_map).
+}
+
 // ---- restore on page load ----
 (function checkRunningRewrite() {
   fetch('/api/rewrite-all-status').then(function (r) { return r.json(); }).then(function (data) {
     if (data.entries && data.entries.length > 0) {
       data.entries.forEach(function (e) {
         if (e.running || !e.done) trackedArticleIds[e.article_id] = { title: e.title || '' };
+        syncRewriteCell(e);
       });
       refreshRewritePanel(data.entries);
       if (data.entries.some(function (e) { return e.running || !e.done; })) {
