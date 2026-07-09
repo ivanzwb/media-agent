@@ -969,7 +969,7 @@
     try {
       const sel = document.getElementById('draft-rewrite-style');
       const fd = new FormData();
-      if (sel && sel.value) fd.append('style', sel.value);
+      fd.append('style', (sel && sel.value) || '');
       const resp = await fetch('/archive/' + articleId + '/rewrite', {method: 'POST', body: fd});
       if (!resp.ok) {
         status.textContent = '请求失败 (' + resp.status + ')';

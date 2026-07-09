@@ -324,18 +324,43 @@ async function rewriteArticle(id, isRewrite) {
   try {
     const sel = document.getElementById('rewrite-style-select');
     const fd = new FormData();
-    if (sel && sel.value) fd.append('style', sel.value);
+    fd.append('style', (sel && sel.value) || '');
     const resp = await fetch('/archive/' + id + '/rewrite', {method: 'POST', body: fd});
-    const data = await resp.json();
-    if (data.started === false) {
-      cell.innerHTML = '<span class="muted">已有任务在进行</span>';
+    if (!resp.ok) {
+      cell.innerHTML = origHTML;
+      const errMsg = '请求失败 (' + resp.status + ')';
+      alert(errMsg);
       return;
     }
-    // Start polling all rewrites (don't show panel yet — first poll will)
+    const data = await resp.json();
+    if (data.started === false) {
+      cell.innerHTML = origHTML;
+      alert('已有任务在进行');
+      return;
+    }
+    // Register and show panel immediately so the user sees the log box,
+    // even before the first poll completes.
     trackedArticleIds[id] = { title: '' };
+    // Render a placeholder entry so the panel is visible right away.
+    var container = document.getElementById('rewrite-entries');
+    if (container && !document.getElementById('re-' + id)) {
+      var el = document.createElement('div');
+      el.className = 'rewrite-entry';
+      el.id = 're-' + id;
+      el.innerHTML =
+        '<div class="rewrite-entry-head" onclick="this.parentElement.classList.toggle(\'open\')">' +
+        '<span class="rewrite-glow running" id="reg-' + id + '"></span>' +
+        '<span class="rewrite-entry-title" id="ret-' + id + '">文章 #' + id + '</span>' +
+        '<span class="rewrite-entry-status" id="res-' + id + '">转写中…</span>' +
+        '</div>' +
+        '<pre class="rewrite-entry-logs" id="rel-' + id + '"></pre>';
+      container.appendChild(el);
+      document.getElementById('rewrite-panel').style.display = 'flex';
+      applyRewriteMin();
+    }
     if (!rewritePollTimer) pollAllRewrites();
   } catch (e) {
-    cell.innerHTML = '<span class="muted">请求失败</span>';
+    cell.innerHTML = origHTML;
     alert('转写请求失败');
   }
 }
