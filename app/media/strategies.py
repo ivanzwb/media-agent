@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse, unquote, parse_qs, urlsplit, urlunsplit, quote as _urlquote
@@ -23,6 +24,15 @@ _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
+
+# Rotated User-Agents for fallback strategy
+_FALLBACK_UAS = [
+    _UA,
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 Edg/124.0",
+]
 
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 _DIRECT_VIDEO_EXTS = {".mp4", ".webm", ".m4v", ".mov", ".ogv", ".ogg"}
@@ -45,6 +55,32 @@ def _ytdlp_base() -> list[str] | None:
     return None
 
 
+def _strip_trailing_backslash(url: str) -> str:
+    """Remove trailing backslash that gets appended by HTML attribute regex."""
+    return url.rstrip("\\")
+
+
+def _decode_json_escapes(url: str) -> str:
+    """Decode \\u00xx unicode escapes (e.g. \\u0026 -> &) that appear in URLs
+    extracted from JSON-embedded HTML (Next.js __NEXT_DATA__, RSC streams, etc.)."""
+    return re.sub(r'\\u00([0-9a-fA-F]{2})', lambda m: chr(int(m.group(1), 16)), url)
+
+
+def _first_from_srcset(url: str) -> str:
+    """If the URL is a raw srcset attribute value (comma-separated with size
+    descriptors like ' 100w' or ' 2x'), return only the first real URL."""
+    # If there's a comma followed by http/https, this is a srcset
+    if re.search(r',\s*https?://', url):
+        first = url.split(",")[0].strip()
+        # Strip trailing size descriptor: " 100w", " 2x", " 100w,"
+        first = re.sub(r'\s+\d+[whx]\s*,?\s*$', '', first)
+        return first
+    # Also handle single-URL srcset with size descriptor (no comma)
+    # e.g. "https://...jpg?mw=100 100w"
+    first = re.sub(r'\s+\d+[whx]\s*$', '', url)
+    return first
+
+
 def normalize_url(url: str) -> str | None:
     """Make a fetchable absolute http(s) URL: add scheme for //host paths,
     IDNA-encode the host, percent-encode non-ASCII path/query. Returns None
@@ -52,10 +88,20 @@ def normalize_url(url: str) -> str | None:
     # Decode HTML entities first (e.g. &amp; -> &) so URLs extracted from HTML
     # aren't sent with literal &amp; -> 400.
     u = html.unescape((url or "").strip())
+
+    # --- Pre-processing fixes for common extraction artifacts ---
+    u = _strip_trailing_backslash(u)
+    u = _decode_json_escapes(u)
+
     if u.startswith("//"):
         u = "https:" + u
     if not u.startswith(("http://", "https://")):
         return None
+
+    # Handle srcset: if URL contains comma-separated variants, take the first
+    if "," in u:
+        u = _first_from_srcset(u)
+
     parts = urlsplit(u)
     netloc = parts.netloc
     try:
@@ -112,17 +158,21 @@ class HttpxDirectStrategy:
 
     def download(
         self, url: str, dest: Path, idx: int,
-        emit: Callable = print, **kwargs,
+        emit: Callable = print, source_url: str | None = None, **kwargs,
     ) -> Path | None:
         safe = normalize_url(url)
         if not safe:
             emit(f"    [httpx_direct] 跳过无效地址 #{idx}：{(url or '')[:60]}")
             return None
 
+        # Use article page as Referer (more likely to be accepted by CDNs)
+        # than the image origin.
+        referer = source_url or _origin(safe)
+
         try:
             resp = httpx.get(
                 safe, timeout=20.0, follow_redirects=True,
-                headers={"User-Agent": _UA, "Referer": _origin(safe)},
+                headers={"User-Agent": _UA, "Referer": referer},
             )
             resp.raise_for_status()
             data = resp.content
@@ -275,6 +325,89 @@ class CurlCffiImageStrategy:
         path.write_bytes(data)
         emit(f"    [curl_cffi] 已保存 #{idx}：{path.name}")
         return path
+
+
+# ---------------------------------------------------------------------------
+# Image: fallback with UA rotation + retry (last resort)
+# ---------------------------------------------------------------------------
+
+class FallbackImageStrategy:
+    """Last-resort image strategy: retries with rotated User-Agents and
+    exponential backoff.  Tried only when all other strategies fail.
+
+    Uses ``source_url`` as Referer (the article page) rather than the image
+    origin, which helps with CDNs that require a cross-origin Referer.
+    """
+
+    name = "fallback_image"
+
+    # URLs that are obviously fake / test data — skip immediately
+    _FAKE_DOMAINS: set[str] = {"img.cdn", "cdn.example.com"}
+    _FAKE_SUFFIXES: tuple[str, ...] = ("/a.png", "/b.jpg", "/a.jpg")
+
+    def match(self, url: str) -> float:
+        # Only match http(s) URLs with image extensions
+        if not url.startswith(("http://", "https://")):
+            return 0.0
+        # Check fake domains early — don't even try
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        if host in self._FAKE_DOMAINS:
+            return 0.0
+        if any(parsed.path.rstrip("/").endswith(s) for s in self._FAKE_SUFFIXES):
+            if len(host) <= 2:  # single-letter or very short domain = fake
+                return 0.0
+        ext = Path(parsed.path).suffix.lower()
+        return 0.1 if ext in _IMG_EXTS else 0.0
+
+    def download(
+        self, url: str, dest: Path, idx: int,
+        emit: Callable = print, source_url: str | None = None, **kwargs,
+    ) -> Path | None:
+        safe = normalize_url(url)
+        if not safe:
+            emit(f"    [fallback] 跳过无效地址 #{idx}：{(url or '')[:60]}")
+            return None
+
+        referer = source_url or _origin(safe)
+
+        for attempt, ua in enumerate(_FALLBACK_UAS):
+            if attempt > 0:
+                delay = 0.5 * (2 ** (attempt - 1))  # 0.5s, 1s, 2s, 4s
+                emit(f"    [fallback] 重试 #{idx} (UA #{attempt + 1}, 等待 {delay:.0f}s)")
+                time.sleep(delay)
+
+            headers = {
+                "User-Agent": ua,
+                "Referer": referer,
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.9",
+                "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8",
+                "Cache-Control": "no-cache",
+            }
+
+            try:
+                resp = httpx.get(
+                    safe, timeout=15.0, follow_redirects=True,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                data = resp.content
+                if data:
+                    ext = _img_ext(url, resp.headers.get("content-type"))
+                    path = dest / f"img-{idx}{ext}"
+                    path.write_bytes(data)
+                    emit(f"    [fallback] 已保存 #{idx}：{path.name}")
+                    return path
+                emit(f"    [fallback] 空响应 #{idx} (UA #{attempt + 1})")
+            except httpx.HTTPStatusError as e:
+                emit(f"    [fallback] HTTP {e.response.status_code} #{idx} (UA #{attempt + 1})")
+                continue
+            except Exception as e:
+                emit(f"    [fallback] 异常 #{idx} (UA #{attempt + 1})：{e}")
+                continue
+
+        emit(f"    [fallback] 所有 UA 均失败 #{idx}")
+        return None
 
 
 # ---------------------------------------------------------------------------

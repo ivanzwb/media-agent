@@ -6,13 +6,20 @@ from pathlib import Path
 
 import pytest
 
+import time
+from unittest import mock
+
+import httpx
+
 from app.media.strategies import (
     HttpxDirectStrategy,
     UrlTransformStrategy,
     CurlCffiImageStrategy,
+    FallbackImageStrategy,
     HttpxDirectVideoStrategy,
     normalize_url, _img_ext,
 )
+from app.media.downloader import MediaDownloader
 
 
 # ── CurlCffiImageStrategy ──────────────────────────────────────────
@@ -146,3 +153,164 @@ def test_img_ext_from_url():
 def test_img_ext_fallback():
     assert _img_ext("https://example.com/photo", None) == ".jpg"
     assert _img_ext("https://example.com/photo", "application/octet-stream") == ".jpg"
+
+
+# ── normalize_url enhancements ─────────────────────────────────────
+
+def test_normalize_trailing_backslash():
+    """Trailing backslash from HTML attribute regex must be stripped."""
+    assert normalize_url("https://cdn.example.com/a.png\\") == "https://cdn.example.com/a.png"
+
+
+def test_normalize_json_unicode_escapes():
+    """\\u0026 (and similar) in URLs from JSON-embedded HTML decoded before encode."""
+    result = normalize_url("https://example.com/a.png?foo\\u0026bar")
+    assert result is not None
+    assert "\\u0026" not in result  # should be decoded to &
+    assert "?" in result
+
+
+def test_normalize_srcset_first():
+    """Comma-separated srcset → only first URL returned."""
+    result = normalize_url(
+        "https://cdn.example.com/photo.jpg 1x, https://cdn.example.com/photo@2x.jpg 2x"
+    )
+    assert result is not None
+    assert result.count("cdn.example.com") == 1
+
+
+def test_normalize_srcset_with_commas_in_query():
+    """URL with comma in query parameter (not a srcset) must not be truncated."""
+    result = normalize_url(
+        "https://example.com/image.jpg?w=1200&q=75&src=mixed&sizes[]=100,200,300"
+    )
+    assert result is not None
+    # Commas in query are preserved (not treated as srcset separator)
+    assert "100,200,300" in result
+
+
+# ── FallbackImageStrategy ─────────────────────────────────────────
+
+def test_fallback_match_image():
+    strat = FallbackImageStrategy()
+    assert strat.match("https://cdn.images.example/photo.jpg") == 0.1
+    assert strat.match("https://cdn.images.example/chart.png") == 0.1
+    assert strat.match("https://cdn.images.example/banner.webp") == 0.1
+    assert strat.match("https://cdn.images.example/icon.gif") == 0.1
+
+
+def test_fallback_no_match_fake_domain():
+    strat = FallbackImageStrategy()
+    assert strat.match("https://img.cdn/a.png") == 0.0
+    assert strat.match("https://cdn.example.com/a.png") == 0.0
+
+
+def test_fallback_no_match_fake_suffix_short_host():
+    """Single-letter domain + known test suffix = suppressed."""
+    strat = FallbackImageStrategy()
+    # host='i', suffix='/a.png'
+    assert strat.match("https://i/a.png") == 0.0
+    assert strat.match("https://v/b.jpg") == 0.0
+    # Real-looking domain with same suffix is OK
+    assert strat.match("https://cdn.example.com/a.png") == 0.0  # fake domain
+
+
+def test_fallback_no_match_non_image():
+    strat = FallbackImageStrategy()
+    assert strat.match("https://example.com/page") == 0.0
+    assert strat.match("https://example.com/video.mp4") == 0.0
+    assert strat.match("not-a-url") == 0.0
+
+
+def test_fallback_download_invalid_url():
+    strat = FallbackImageStrategy()
+    with tempfile.TemporaryDirectory() as tmp:
+        result = strat.download("not-a-url", Path(tmp), 1, emit=lambda m: None)
+        assert result is None
+
+
+def test_fallback_download_all_ua_fail(monkeypatch):
+    """When all 5 UAs return non-2xx, download returns None."""
+    strat = FallbackImageStrategy()
+
+    class _ErrResp:
+        status_code = 403
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError("mock 403", request=mock.MagicMock(), response=self)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _ErrResp())
+    monkeypatch.setattr(time, "sleep", lambda _s: None)  # skip delays
+
+    with tempfile.TemporaryDirectory() as tmp:
+        result = strat.download(
+            "https://cdn.example.com/photo.jpg", Path(tmp), 1,
+            emit=lambda m: None)
+        assert result is None
+
+
+def test_fallback_download_success(monkeypatch):
+    """A single successful response saves the image and returns the path."""
+    strat = FallbackImageStrategy()
+
+    class _OkResp:
+        content = b"\x89PNG\r\n\x1a\nfake"
+        headers = {"content-type": "image/png"}
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _OkResp())
+
+    with tempfile.TemporaryDirectory() as tmp:
+        result = strat.download(
+            "https://cdn.example.com/photo.jpg", Path(tmp), 1,
+            emit=lambda m: None)
+        assert result is not None
+        assert result.exists()
+        assert result.suffix == ".jpg"  # URL's own extension takes priority
+
+
+# ── HttpxDirectStrategy: source_url as Referer ────────────────────
+
+def test_httpx_direct_source_url_referer(monkeypatch):
+    """source_url is passed to the strategy and used as Referer header."""
+    strat = HttpxDirectStrategy()
+    captured_kwargs = {}
+
+    def _mock_get(url, **kwargs):
+        captured_kwargs.update(kwargs)
+        # Return an error so download() returns None
+        raise httpx.HTTPStatusError(
+            "mock", request=mock.MagicMock(),
+            response=mock.MagicMock(status_code=403))
+
+    monkeypatch.setattr(httpx, "get", _mock_get)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        strat.download(
+            "https://cdn.example.com/photo.jpg", Path(tmp), 1,
+            emit=lambda m: None, source_url="https://example.com/article")
+        # Verify Referer header contains source_url
+        headers = captured_kwargs.get("headers", {})
+        assert headers.get("Referer") == "https://example.com/article"
+
+
+# ── MediaDownloader sanity check ──────────────────────────────────
+
+def test_downloader_skip_single_letter_host():
+    """Single-letter host + single-file path → skipped before strategy chain."""
+    dl = MediaDownloader("image")
+    with tempfile.TemporaryDirectory() as tmp:
+        result = dl.download(
+            "https://i/a.png", Path(tmp), 1, emit=lambda m: None)
+        assert result is None
+
+
+def test_downloader_skip_non_standard_scheme():
+    """data: URIs are skipped without reaching strategy chain."""
+    dl = MediaDownloader("image")
+    with tempfile.TemporaryDirectory() as tmp:
+        result = dl.download(
+            "data:image/png;base64,xxxx", Path(tmp), 1, emit=lambda m: None)
+        assert result is None

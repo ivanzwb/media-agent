@@ -16,9 +16,11 @@ Usage:
 from __future__ import annotations
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
 from app.media.failure_log import log_failure
 
@@ -76,8 +78,14 @@ class MediaDownloader:
             The article/container URL for the failure log (not used for
             download logic).
         """
+        # --- Pre-processing: clean extraction artifacts ---
+        clean_url = (url or "").strip().rstrip("\\")
+        # Decode \u00xx escapes that survive from JSON-embedded HTML
+        clean_url = re.sub(r'\\u00([0-9a-fA-F]{2})',
+                           lambda m: chr(int(m.group(1), 16)), clean_url)
+
         # --- Check for non-downloadable URI schemes before any strategy ---
-        lower = url.strip().lower()
+        lower = clean_url.strip().lower()
         if lower.startswith("data:"):
             emit(f"    [downloader] 跳过 data: URI #{idx}（不下载）")
             log_failure(url, source_url, self.media_type,
@@ -91,6 +99,18 @@ class MediaDownloader:
             emit(f"    [downloader] 跳过非标准 URI #{idx}：{(url or '')[:60]}")
             log_failure(url, source_url, self.media_type,
                         error="non-standard URI scheme (skipped)", skipped=True)
+            return None
+
+        # --- Sanity check: skip obviously fake URLs (test data) ---
+        parsed = urlparse(clean_url)
+        host = parsed.hostname or ""
+        path_lower = parsed.path.lower()
+        # Single-letter hostname + single-file path = almost certainly test data
+        # e.g. https://i/a.png, https://v/b.mp4
+        if len(host) <= 2 and re.match(r'^/[a-z]\.(png|jpg|jpeg|gif|webp|mp4)$', path_lower):
+            emit(f"    [downloader] 跳过疑似测试数据 #{idx}：{clean_url[:60]}")
+            log_failure(url, source_url, self.media_type,
+                        error="suspected test/fake URL (skipped)", skipped=True)
             return None
 
         # --- Strategy chain ---
