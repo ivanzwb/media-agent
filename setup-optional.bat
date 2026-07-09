@@ -34,34 +34,30 @@ if exist "%INTERNAL_DIR%playwright\" (
     goto :chromium_skip
 )
 
-:: --- Check if Chromium browser is already installed ------------------
-set "PW_CHROMIUM_DIR="
-if exist "%USERPROFILE%\AppData\Local\ms-playwright\" (
-    for /d %%d in ("%USERPROFILE%\AppData\Local\ms-playwright\chromium-*") do (
-        if exist "%%d\chrome.exe" set "PW_CHROMIUM_DIR=%%d"
-    )
-)
+:: --- Check if a Chromium browser is already installed ----------------
+:: The app scrapes with headless Chromium, which uses the ~115 MB headless
+:: shell — so we only need chromium-headless-shell, not the full ~185 MB
+:: Chromium. Accept either if already present (headless shell OR full).
+call :detect_chromium
 if defined PW_CHROMIUM_DIR (
     echo   [OK] Chromium already installed
     goto :fish
 )
 
-:: --- Attempt Chromium install via bundled exe ------------------------
-echo   Downloading Chromium browser (~300 MB, first time only)...
+:: --- Attempt install via bundled exe (headless shell only) -----------
+echo   Downloading Chromium headless shell (~115 MB, first time only)...
+:: Raise Playwright's download timeout (default 30s) so a slow connection
+:: doesn't abort and re-download from scratch.
+set "PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=180000"
 if exist "%BUNDLE_DIR%media-agent.exe" (
-    "%BUNDLE_DIR%media-agent.exe" --run-module playwright install chromium
+    "%BUNDLE_DIR%media-agent.exe" --run-module playwright install chromium-headless-shell
 ) else (
     echo   [SKIP] media-agent.exe not found
     goto :chromium_manual
 )
 
 :: Verify install succeeded
-set "PW_CHROMIUM_DIR="
-if exist "%USERPROFILE%\AppData\Local\ms-playwright\" (
-    for /d %%d in ("%USERPROFILE%\AppData\Local\ms-playwright\chromium-*") do (
-        if exist "%%d\chrome.exe" set "PW_CHROMIUM_DIR=%%d"
-    )
-)
+call :detect_chromium
 if defined PW_CHROMIUM_DIR (
     echo   [OK] Chromium installed
 ) else (
@@ -71,7 +67,7 @@ if defined PW_CHROMIUM_DIR (
     echo   Manual install:
     echo     1. Make sure Python 3.11+ is installed
     echo     2. pip install playwright
-    echo     3. python -m playwright install chromium
+    echo     3. python -m playwright install chromium-headless-shell
     echo.
 )
 :chromium_skip
@@ -135,10 +131,13 @@ if not exist "%COSYVOICE_DIR%python.exe" (
 )
 echo   [OK] Python extracted
 
-:: --- Remove python._pth to enable site-packages + pip ----------------
-if exist "%COSYVOICE_DIR%python._pth" (
-    del "%COSYVOICE_DIR%python._pth"
-    echo   [OK] python._pth removed (enables pip)
+:: --- Remove python*._pth to enable site-packages + pip ---------------
+:: The embeddable zip ships a version-named file (e.g. python311._pth), NOT
+:: python._pth — a wildcard is required, otherwise site-packages stays
+:: disabled and `python -m pip` fails with "No module named pip".
+if exist "%COSYVOICE_DIR%python*._pth" (
+    del "%COSYVOICE_DIR%python*._pth"
+    echo   [OK] python*._pth removed (enables pip)
 )
 
 :: --- Install pip ----------------------------------------------------
@@ -208,3 +207,24 @@ echo  Setup complete!
 echo  Report issues: https://github.com/ivanzwb/media-agent/issues
 echo ============================================
 pause
+exit /b 0
+
+:: ===== Subroutines ==================================================
+:: Detect an installed Chromium — headless shell (preferred, ~115 MB) or
+:: the full Chromium — and set PW_CHROMIUM_DIR to its folder if found.
+:detect_chromium
+:: Playwright nests the executable one level down (chrome-win64\chrome.exe,
+:: chrome-headless-shell-win64\chrome-headless-shell.exe) — check those, with
+:: a flat-path fallback for older layouts.
+set "PW_CHROMIUM_DIR="
+if exist "%USERPROFILE%\AppData\Local\ms-playwright\" (
+    for /d %%d in ("%USERPROFILE%\AppData\Local\ms-playwright\chromium_headless_shell-*") do (
+        if exist "%%d\chrome-headless-shell-win64\chrome-headless-shell.exe" set "PW_CHROMIUM_DIR=%%d"
+        if exist "%%d\chrome-headless-shell.exe" set "PW_CHROMIUM_DIR=%%d"
+    )
+    for /d %%d in ("%USERPROFILE%\AppData\Local\ms-playwright\chromium-*") do (
+        if exist "%%d\chrome-win64\chrome.exe" set "PW_CHROMIUM_DIR=%%d"
+        if exist "%%d\chrome.exe" set "PW_CHROMIUM_DIR=%%d"
+    )
+)
+goto :eof

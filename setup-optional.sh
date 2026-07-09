@@ -39,16 +39,22 @@ if [ "$skip_to_end" != true ]; then
     PW_CACHE="$HOME/Library/Caches/ms-playwright"
     CHROMIUM_INSTALLED=false
     if [ -d "$PW_CACHE" ]; then
-        for d in "$PW_CACHE"/chromium-*/chrome; do
-            [ -x "$d" ] && CHROMIUM_INSTALLED=true && break
+        # The app scrapes headless, which uses the ~115 MB headless shell —
+        # accept either the headless shell OR a full Chromium if present.
+        # Detect by the versioned directory (executable path varies by OS).
+        for d in "$PW_CACHE"/chromium_headless_shell-* "$PW_CACHE"/chromium-*; do
+            [ -d "$d" ] && CHROMIUM_INSTALLED=true && break
         done
     fi
 
     if [ "$CHROMIUM_INSTALLED" = true ]; then
         echo "  [OK] Chromium already installed"
     elif [ -x "$MEDIA_AGENT" ]; then
-        echo "  Downloading Chromium browser (~300 MB, first time only)..."
-        if "$MEDIA_AGENT" --run-module playwright install chromium 2>/dev/null; then
+        echo "  Downloading Chromium headless shell (~115 MB, first time only)..."
+        # Raise Playwright's download timeout (default 30s) so a slow
+        # connection doesn't abort and re-download from scratch.
+        export PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=180000
+        if "$MEDIA_AGENT" --run-module playwright install chromium-headless-shell 2>/dev/null; then
             echo "  [OK] Chromium installed"
         else
             echo "  [FAIL] Chromium auto-install failed"
@@ -56,7 +62,7 @@ if [ "$skip_to_end" != true ]; then
             echo "  Manual install:"
             echo "    1. Make sure Python 3.11+ is installed"
             echo "    2. pip install playwright"
-            echo "    3. python -m playwright install chromium"
+            echo "    3. python -m playwright install chromium-headless-shell"
         fi
     else
         echo "  [SKIP] $MEDIA_AGENT not found"
