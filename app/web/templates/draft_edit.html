@@ -62,15 +62,15 @@
     {% if article_id %}
     <div class="sidebar-section">
       <p class="muted">操作</p>
-      <p style="display:flex;gap:6px;align-items:center;white-space:nowrap">
+      <p style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         <button type="button" class="btn small" onclick="refetchDraftArticle({{ article_id }})" id="refetch-btn">重新抓取</button>
-        <span class="style-select-inline">
+        <span style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap">
           <label for="draft-rewrite-style" class="filter-label">风格</label>
           <select id="draft-rewrite-style" class="btn small" title="重写使用的风格（不改变全局默认）">
             <option value="">默认（全局）</option>
           </select>
+          <button type="button" class="btn small" onclick="rewriteDraftArticle({{ article_id }})" id="rewrite-btn">重写</button>
         </span>
-        <button type="button" class="btn small" onclick="rewriteDraftArticle({{ article_id }})" id="rewrite-btn">重写</button>
       </p>
       <p id="draft-op-status" class="muted" style="font-size:0.9em"></p>
     </div>
