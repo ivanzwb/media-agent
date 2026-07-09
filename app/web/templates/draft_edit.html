@@ -62,9 +62,15 @@
     {% if article_id %}
     <div class="sidebar-section">
       <p class="muted">操作</p>
-      <p style="display:flex;gap:6px;flex-wrap:wrap">
+      <p style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         <button type="button" class="btn small" onclick="refetchDraftArticle({{ article_id }})" id="refetch-btn">重新抓取</button>
         <button type="button" class="btn small" onclick="rewriteDraftArticle({{ article_id }})" id="rewrite-btn">重写</button>
+        <span class="style-select-inline">
+          <label for="draft-rewrite-style" class="filter-label">风格</label>
+          <select id="draft-rewrite-style" class="btn small" title="重写使用的风格（不改变全局默认）">
+            <option value="">默认（全局）</option>
+          </select>
+        </span>
       </p>
       <p id="draft-op-status" class="muted" style="font-size:0.9em"></p>
     </div>
@@ -936,6 +942,20 @@
     }
   }
 
+  // Populate the draft rewrite-style selector.
+  (function loadDraftRewriteStyles() {
+    const sel = document.getElementById('draft-rewrite-style');
+    if (!sel) return;
+    fetch('/api/rewrite-styles').then(r => r.json()).then(data => {
+      (data.styles || []).forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.name + (s.is_builtin ? '' : '（自定义）');
+        sel.appendChild(opt);
+      });
+    }).catch(() => {});
+  })();
+
   async function rewriteDraftArticle(articleId) {
     const btn = document.getElementById('rewrite-btn');
     const status = document.getElementById('draft-op-status');
@@ -943,7 +963,10 @@
     btn.disabled = true;
     status.textContent = '';
     try {
-      const resp = await fetch('/archive/' + articleId + '/rewrite', {method: 'POST'});
+      const sel = document.getElementById('draft-rewrite-style');
+      const fd = new FormData();
+      if (sel && sel.value) fd.append('style', sel.value);
+      const resp = await fetch('/archive/' + articleId + '/rewrite', {method: 'POST', body: fd});
       const data = await resp.json();
       if (data.started === false) {
         status.textContent = '已有任务在进行';

@@ -36,6 +36,7 @@ from app.pipeline.recommender import (
 from app.pipeline.score import compute_draft_score
 from app.pipeline.localize import localize_one
 from app.pipeline.rewriter import rewrite
+from app.pipeline import styles as rewrite_styles
 from app.pipeline.sanitizer import load_words, sanitize_draft
 from app.pipeline.video import build_explainer_video, video_path
 from app.sources.extractor import _images_from_html, _videos_from_html
@@ -197,12 +198,13 @@ def create_app(config: Config | None = None,
             LG.consume_rewrite(license_mgr, store)
             return True
 
+        style = rewrite_styles.resolve_style(run_config.rewrite_style, store)
         return run_pipeline(
             feeds_cfg, store, provider, image_provider=image_provider,
             record=True, max_age_days=run_config.max_age_days,
             max_per_source=run_config.max_per_source,
             download_media=True, progress=progress,
-            rewrite_gate=_rewrite_gate)
+            rewrite_gate=_rewrite_gate, style=style)
 
     # ---- background run state (for live progress / logs) ----
     run_lock = threading.Lock()
@@ -398,13 +400,16 @@ def create_app(config: Config | None = None,
                 "videos": len(art.videos), "localized": localized}
 
     @app.post("/archive/{article_id}/rewrite")
-    def archive_rewrite(article_id: int):
+    def archive_rewrite(article_id: int, style: str = Form("")):
         store = get_store()
         row = store.get_article(article_id)
         if not row:
             return {"ok": False, "error": "文章不存在"}
         if not LG.rewrite_allowed(license_mgr, store):
             return LG.rewrite_error()
+        # Resolve the requested style (empty → global default). Capture the
+        # concrete style now so the worker thread uses a consistent value.
+        chosen_style = rewrite_styles.resolve_style(style.strip() or None, store)
         body = store.read_article_body(article_id)
         content_md = body.get("content_md", "")
         images = body.get("images") or _images_from_html(content_md)
@@ -449,9 +454,9 @@ def create_app(config: Config | None = None,
                     base_url=run_config.image_api_base
                            or run_config.llm_api_base)
 
-                _rewrite_log(article_id, "正在调用 LLM 进行转写…",
+                _rewrite_log(article_id, f"正在调用 LLM 进行转写…（风格：{chosen_style.name}）",
                              op_key=op_key, op_conn=op_conn)
-                draft = rewrite(art, provider)
+                draft = rewrite(art, provider, style=chosen_style)
                 _rewrite_log(article_id, "转写完成，进行敏感词过滤…",
                              op_key=op_key, op_conn=op_conn)
                 sanitize_draft(draft, load_words(run_config))
@@ -567,6 +572,55 @@ def create_app(config: Config | None = None,
                     "logs": list(st["logs"]),
                 })
         return {"entries": results}
+
+    # ── Rewrite styles (转写风格) CRUD ──────────────────────────────────
+    @app.get("/api/rewrite-styles")
+    def api_list_rewrite_styles():
+        store = get_store()
+        default_id = rewrite_styles.get_default_style_id(store)
+        return {
+            "default": default_id,
+            "styles": [s.to_public() for s in rewrite_styles.all_styles(store)],
+        }
+
+    @app.post("/api/rewrite-styles")
+    def api_create_rewrite_style(name: str = Form(...),
+                                 description: str = Form(""),
+                                 prompt: str = Form(""),
+                                 instruction: str = Form(...)):
+        store = get_store()
+        try:
+            s = rewrite_styles.save_custom_style(
+                store, id=None, name=name, description=description,
+                prompt=prompt, instruction=instruction)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return {"ok": True, "style": s.to_public()}
+
+    @app.put("/api/rewrite-styles/{style_id}")
+    def api_update_rewrite_style(style_id: str, name: str = Form(...),
+                                 description: str = Form(""),
+                                 prompt: str = Form(""),
+                                 instruction: str = Form(...)):
+        store = get_store()
+        try:
+            s = rewrite_styles.save_custom_style(
+                store, id=style_id, name=name, description=description,
+                prompt=prompt, instruction=instruction)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return {"ok": True, "style": s.to_public()}
+
+    @app.delete("/api/rewrite-styles/{style_id}")
+    def api_delete_rewrite_style(style_id: str):
+        store = get_store()
+        try:
+            ok = rewrite_styles.delete_custom_style(store, style_id)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        if not ok:
+            return JSONResponse({"ok": False, "error": "风格不存在"}, status_code=404)
+        return {"ok": True}
 
     @app.get("/drafts", response_class=HTMLResponse)
     def drafts_list(request: Request, status: str | None = None):
@@ -2191,6 +2245,9 @@ def create_app(config: Config | None = None,
             "wx_secret_masked": wx_secret_masked,
             "schedule_cron": store.get_setting("schedule_cron", ""),
             "schedule_enabled": store.get_setting("schedule_enabled", "0") == "1",
+            "rewrite_styles": [s.to_public() for s in
+                               rewrite_styles.all_styles(store)],
+            "rewrite_style": rewrite_styles.get_default_style_id(store),
             "license": license_mgr.status_dict(),
             "license_labels": LF.LABELS,
             "active": "settings"})
@@ -2221,6 +2278,7 @@ def create_app(config: Config | None = None,
                        wechat_appsecret: str = Form(""),
                        wechat_author: str = Form(""),
                        cli_tool: str = Form(""),
+                       rewrite_style: str = Form(""),
                        schedule_cron: str = Form(""),
                       schedule_enabled: str = Form("0")):
         store = get_store()
@@ -2305,6 +2363,13 @@ def create_app(config: Config | None = None,
                     store.delete_setting("download_workers")
             except ValueError:
                 pass
+
+        # Default rewrite style: validate against the registry; empty or the
+        # builtin default clears the setting (falls back to deep-tech).
+        try:
+            rewrite_styles.set_default_style(store, rewrite_style.strip())
+        except ValueError:
+            pass  # invalid id — leave existing value unchanged
 
         # Scheduler settings (unchanged)
         store.set_setting("schedule_cron", schedule_cron.strip())

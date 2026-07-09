@@ -516,7 +516,25 @@ def _inline_content(content_md: str, images: list[str],
     return content_md
 
 
-def rewrite(article: Article, provider: LLMProvider) -> Draft:
+def render_instruction(template: str, *, title: str, source: str,
+                       manifest: str, content: str) -> str:
+    """Render a rewrite instruction *template* by substituting the four
+    placeholders.  Uses plain string replacement (not ``str.format``) so
+    user-authored templates can contain literal ``{`` / ``}`` (e.g. JSON
+    examples) without needing to escape them."""
+    return (template
+            .replace("{manifest}", manifest)
+            .replace("{title}", title)
+            .replace("{source}", source)
+            .replace("{content}", content))
+
+
+def rewrite(article: Article, provider: LLMProvider, style=None) -> Draft:
+    """Rewrite *article* into a Chinese self-media Draft.
+
+    *style* is an optional ``app.pipeline.styles.RewriteStyle``. When None the
+    original 深度科技报道 behaviour is used (backward compatible).
+    """
     images = article.images or []
     videos = getattr(article, "videos", []) or []
 
@@ -541,11 +559,18 @@ def rewrite(article: Article, provider: LLMProvider) -> Draft:
     slice_limit = max(8000, img_end + 500)
     content = body[:slice_limit]
 
-    rewrite_prompt = REWRITE_INSTRUCTION.format(
-        title=article.title, source=article.source_name,
+    if style is None:
+        system_prompt = REWRITE_SYSTEM
+        # Convert the str.format template ({{/}} escaped) to replace-form.
+        instruction_tmpl = REWRITE_INSTRUCTION.replace("{{", "{").replace("}}", "}")
+    else:
+        system_prompt = style.prompt
+        instruction_tmpl = style.instruction
+    rewrite_prompt = render_instruction(
+        instruction_tmpl, title=article.title, source=article.source_name,
         manifest=manifest, content=content)
     raw = provider.chat([
-        Message(role="system", content=REWRITE_SYSTEM),
+        Message(role="system", content=system_prompt),
         Message(role="user", content=rewrite_prompt),
     ])
     parsed = _extract_json(raw)
@@ -567,7 +592,7 @@ def rewrite(article: Article, provider: LLMProvider) -> Draft:
                 "不要添加任何前言、后语、解释、摘要、「已完成」等元评论。"
             )
             raw2 = provider.chat([
-                Message(role="system", content=REWRITE_SYSTEM),
+                Message(role="system", content=system_prompt),
                 Message(role="user", content=retry_prompt),
             ])
             parsed2 = _extract_json(raw2)

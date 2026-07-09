@@ -9,6 +9,7 @@
   <a href="#sec-llm">LLM</a>
   <a href="#sec-image">图片</a>
   <a href="#sec-agent">Agent</a>
+  <a href="#sec-rewrite-style">转写风格</a>
   <a href="#sec-tts">TTS</a>
   <a href="#sec-voice">声音库</a>
   <a href="#sec-sensitive">敏感词</a>
@@ -177,6 +178,25 @@ async function deactivateLicense() {
       <button type="button" class="btn" id="test-cli-btn" style="margin-top:6px;padding:2px 10px;font-size:0.85em">测试 Agent</button>
       <span id="cli-test-result" style="margin-left:8px;font-size:0.9em"></span>
       <span class="field-desc">若检测到已安装的 CLI agent，转写将优先使用 agent 而非 LLM API。agent 具备更强的推理和编辑能力，通常输出质量更高。</span>
+    </div>
+  </fieldset>
+
+  <fieldset class="settings-section" id="sec-rewrite-style">
+    <legend>转写风格</legend>
+    <div class="field">
+      <label for="rewrite_style">全局默认风格 <span class="env-hint">MEDIA_AGENT_REWRITE_STYLE</span></label>
+      <select name="rewrite_style" id="rewrite_style">
+        {% for s in rewrite_styles %}
+        <option value="{{ s.id }}" {{ 'selected' if s.id == rewrite_style else '' }}>{{ s.name }}{% if s.is_builtin %}{% else %}（自定义）{% endif %}</option>
+        {% endfor %}
+      </select>
+      <span class="field-desc">全自动流水线与归档页转写默认使用此风格。归档页可临时切换其它风格。</span>
+    </div>
+    <div class="field">
+      <label>自定义风格</label>
+      <div id="custom-style-list" class="style-list"></div>
+      <button type="button" class="btn" id="new-style-btn" style="margin-top:6px">＋ 新建自定义风格</button>
+      <span class="field-desc">内置风格可查看提示词但不可编辑/删除；自定义风格可随时增删改。</span>
     </div>
   </fieldset>
 
@@ -684,4 +704,128 @@ document.getElementById('test-cli-btn')?.addEventListener('click', async functio
     </form>
   </div>
 </fieldset>
+
+<!-- Rewrite style editor modal -->
+<div id="style-modal" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <h3 id="style-modal-title">新建自定义风格</h3>
+    <input type="hidden" id="style-edit-id" value=""/>
+    <div class="field">
+      <label for="style-name">风格名称</label>
+      <input type="text" id="style-name" placeholder="如：硬核评测"/>
+    </div>
+    <div class="field">
+      <label for="style-desc">简要说明</label>
+      <input type="text" id="style-desc" placeholder="一句话描述这个风格"/>
+    </div>
+    <div class="field">
+      <label for="style-prompt">系统提示词（角色/语气设定）</label>
+      <textarea id="style-prompt" rows="3" placeholder="你是……"></textarea>
+    </div>
+    <div class="field">
+      <label for="style-instruction">指令模板</label>
+      <textarea id="style-instruction" rows="8" placeholder="可用占位符：{title} {source} {manifest} {content}（必须包含 {content}）"></textarea>
+      <span class="field-desc">占位符：<code>{title}</code> 原文标题、<code>{source}</code> 来源、<code>{manifest}</code> 图片清单、<code>{content}</code> 原文正文（必填）。</span>
+    </div>
+    <div id="style-modal-msg" class="field-desc" style="color:#c0392b"></div>
+    <div class="adapt-row" style="margin-top:10px">
+      <button type="button" class="btn primary" id="style-save-btn">保存</button>
+      <button type="button" class="btn" onclick="closeStyleModal()">取消</button>
+    </div>
+  </div>
+</div>
+
+<script id="rewrite-styles-data" type="application/json">{{ rewrite_styles|tojson }}</script>
+<script>
+(function () {
+  var STYLES = [];
+  try { STYLES = JSON.parse(document.getElementById('rewrite-styles-data').textContent); }
+  catch (e) { STYLES = []; }
+
+  function renderList() {
+    var box = document.getElementById('custom-style-list');
+    if (!box) return;
+    box.innerHTML = '';
+    STYLES.forEach(function (s) {
+      var row = document.createElement('div');
+      row.className = 'style-row';
+      var tag = s.is_builtin ? '<span class="badge">内置</span>' : '<span class="badge ok">自定义</span>';
+      var actions = s.is_builtin
+        ? '<button type="button" class="btn small" data-view="' + s.id + '">查看</button>'
+        : '<button type="button" class="btn small" data-edit="' + s.id + '">编辑</button>' +
+          '<button type="button" class="btn small danger" data-del="' + s.id + '">删除</button>';
+      row.innerHTML = '<div class="style-row-main"><strong>' + esc(s.name) + '</strong> ' + tag +
+        '<div class="muted" style="font-size:0.85em">' + esc(s.description || '') + '</div></div>' +
+        '<div class="style-row-actions">' + actions + '</div>';
+      box.appendChild(row);
+    });
+    box.querySelectorAll('[data-edit]').forEach(function (b) {
+      b.onclick = function () { openStyleModal(find(b.getAttribute('data-edit')), false); };
+    });
+    box.querySelectorAll('[data-view]').forEach(function (b) {
+      b.onclick = function () { openStyleModal(find(b.getAttribute('data-view')), true); };
+    });
+    box.querySelectorAll('[data-del]').forEach(function (b) {
+      b.onclick = function () { delStyle(b.getAttribute('data-del')); };
+    });
+  }
+  function find(id) { return STYLES.filter(function (s) { return s.id === id; })[0]; }
+  function esc(t) { var d = document.createElement('div'); d.textContent = t == null ? '' : t; return d.innerHTML; }
+
+  window.openStyleModal = function (s, readonly) {
+    document.getElementById('style-modal-msg').textContent = '';
+    document.getElementById('style-edit-id').value = (s && !s.is_builtin) ? s.id : '';
+    document.getElementById('style-name').value = s ? s.name : '';
+    document.getElementById('style-desc').value = s ? (s.description || '') : '';
+    document.getElementById('style-prompt').value = s ? (s.prompt || '') : '';
+    document.getElementById('style-instruction').value = s ? (s.instruction || '') : '';
+    document.getElementById('style-modal-title').textContent =
+      s ? (s.is_builtin ? '查看内置风格：' + s.name : '编辑风格：' + s.name) : '新建自定义风格';
+    var ro = !!readonly;
+    ['style-name', 'style-desc', 'style-prompt', 'style-instruction'].forEach(function (id) {
+      document.getElementById(id).readOnly = ro;
+    });
+    document.getElementById('style-save-btn').style.display = ro ? 'none' : '';
+    document.getElementById('style-modal').style.display = 'flex';
+  };
+  window.closeStyleModal = function () {
+    document.getElementById('style-modal').style.display = 'none';
+  };
+
+  document.getElementById('new-style-btn').onclick = function () { openStyleModal(null, false); };
+
+  document.getElementById('style-save-btn').onclick = async function () {
+    var id = document.getElementById('style-edit-id').value;
+    var fd = new FormData();
+    fd.append('name', document.getElementById('style-name').value);
+    fd.append('description', document.getElementById('style-desc').value);
+    fd.append('prompt', document.getElementById('style-prompt').value);
+    fd.append('instruction', document.getElementById('style-instruction').value);
+    var url = id ? '/api/rewrite-styles/' + encodeURIComponent(id) : '/api/rewrite-styles';
+    var method = id ? 'PUT' : 'POST';
+    try {
+      var r = await fetch(url, { method: method, body: fd });
+      var data = await r.json();
+      if (!r.ok || !data.ok) {
+        document.getElementById('style-modal-msg').textContent = (data && data.error) || '保存失败';
+        return;
+      }
+      location.reload();
+    } catch (e) {
+      document.getElementById('style-modal-msg').textContent = '请求失败';
+    }
+  };
+
+  window.delStyle = async function (id) {
+    if (!confirm('确定删除该自定义风格？')) return;
+    try {
+      var r = await fetch('/api/rewrite-styles/' + encodeURIComponent(id), { method: 'DELETE' });
+      if (r.ok) location.reload();
+      else alert('删除失败');
+    } catch (e) { alert('请求失败'); }
+  };
+
+  renderList();
+})();
+</script>
 {% endblock %}

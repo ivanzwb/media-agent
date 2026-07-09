@@ -56,6 +56,7 @@ class Config:
     wechat_appid: str | None = None      # WeChat Official Account AppID
     wechat_appsecret: str | None = None  # WeChat Official Account AppSecret
     wechat_author: str | None = None     # default author shown on published 图文
+    rewrite_style: str | None = None     # default rewrite style id (see app.pipeline.styles)
     cli_tool: str | None = None          # "auto" | "opencode" | "codex" | "copilot" | "none"
     cli_timeout: int = 500               # CLI agent timeout in seconds
 
@@ -123,6 +124,7 @@ class Config:
             wechat_appid=os.environ.get("MEDIA_AGENT_WECHAT_APPID"),
             wechat_appsecret=os.environ.get("MEDIA_AGENT_WECHAT_APPSECRET"),
             wechat_author=os.environ.get("MEDIA_AGENT_WECHAT_AUTHOR"),
+            rewrite_style=os.environ.get("MEDIA_AGENT_REWRITE_STYLE"),
             cli_tool=os.environ.get("MEDIA_AGENT_CLI_TOOL", "none"),
             cli_timeout=_int_env("MEDIA_AGENT_CLI_TIMEOUT") or 500,
         )
@@ -154,6 +156,7 @@ class Config:
             "wechat_appid": "wechat_appid",
             "wechat_appsecret": "wechat_appsecret",
             "wechat_author": "wechat_author",
+            "rewrite_style": "rewrite_style",
             "cli_tool": "cli_tool",
         }
         for attr, db_key in str_overrides.items():

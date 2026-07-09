@@ -13,6 +13,12 @@
 <div class="archive-toolbar">
   <button class="btn small" onclick="expandAll()">展开全部</button>
   <button class="btn small" onclick="collapseAll()">收起全部</button>
+  <span class="style-select-inline" style="margin-left:auto">
+    <label for="rewrite-style-select" class="filter-label">转写风格</label>
+    <select id="rewrite-style-select" class="btn small" title="本页转写使用的风格（不改变全局默认）">
+      <option value="">默认（全局）</option>
+    </select>
+  </span>
 </div>
 
 {% if date_groups %}
@@ -292,13 +298,34 @@ async function pollAllRewrites() {
   }
 }
 
+// Populate the per-page rewrite-style selector from the registry.
+(function loadRewriteStyles() {
+  var sel = document.getElementById('rewrite-style-select');
+  if (!sel) return;
+  fetch('/api/rewrite-styles').then(function (r) { return r.json(); }).then(function (data) {
+    (data.styles || []).forEach(function (s) {
+      var opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = s.name + (s.is_builtin ? '' : '（自定义）');
+      sel.appendChild(opt);
+    });
+    // Pre-select the global default so the label reflects what will be used.
+    if (data.default) sel.value = '';
+    sel.setAttribute('data-default-name',
+      ((data.styles || []).filter(function (s) { return s.id === data.default; })[0] || {}).name || '');
+  }).catch(function () {});
+})();
+
 async function rewriteArticle(id, isRewrite) {
   if (isRewrite && !confirm('重写会覆盖该文章已有的主稿草稿，确定吗？')) return;
   const cell = document.getElementById('art-actions-' + id);
   const origHTML = cell.innerHTML;
   cell.innerHTML = '<span class="muted">⏳ 请求中…</span>';
   try {
-    const resp = await fetch('/archive/' + id + '/rewrite', {method: 'POST'});
+    const sel = document.getElementById('rewrite-style-select');
+    const fd = new FormData();
+    if (sel && sel.value) fd.append('style', sel.value);
+    const resp = await fetch('/archive/' + id + '/rewrite', {method: 'POST', body: fd});
     const data = await resp.json();
     if (data.started === false) {
       cell.innerHTML = '<span class="muted">已有任务在进行</span>';

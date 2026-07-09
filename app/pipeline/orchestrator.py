@@ -119,7 +119,8 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
                  max_per_source: int | None = None,
                  download_media: bool = False,
                  progress=None,
-                 rewrite_gate=None) -> dict:
+                 rewrite_gate=None,
+                 style=None) -> dict:
     emit = progress or _noop
     stats = {"fetched": 0, "archived": 0, "classified": 0, "drafted": 0}
     run_id = store.record_run() if record else None
@@ -166,7 +167,7 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
                 break
             emit(f"改写中：{art.title[:50]}", stats)
             try:
-                draft = rewrite(art, provider)
+                draft = rewrite(art, provider, style=style)
                 _apply_promotion_footer(draft, store.config)
                 if sens_words:
                     hits = sanitize_draft(draft, sens_words)

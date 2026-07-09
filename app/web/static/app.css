@@ -1722,3 +1722,32 @@ input[type="checkbox"] {
 .mt-4 { margin-top: var(--space-4); }
 .mb-3 { margin-bottom: var(--space-3); }
 .mb-4 { margin-bottom: var(--space-4); }
+
+/* ── Rewrite style manager ─────────────────────────────────────────── */
+.modal-box {
+  width: 92vw;
+  max-width: 640px;
+  max-height: 88vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  box-shadow: 0 12px 40px rgba(0,0,0,.35);
+  animation: slideUp .25s ease-out;
+}
+.modal-box h3 { margin: 0 0 var(--space-3); }
+.style-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.style-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.style-row-main { min-width: 0; }
+.style-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.style-select-inline { display: inline-flex; align-items: center; gap: 6px; }
