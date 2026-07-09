@@ -284,6 +284,8 @@ async function pollAllRewrites() {
     var resp = await fetch('/api/rewrite-all-status');
     var data = await resp.json();
     refreshRewritePanel(data.entries || []);
+    // Sync article action cells (running→done, etc.)
+    (data.entries || []).forEach(function (e) { syncRewriteCell(e); });
     // Check if any still running
     var anyRunning = (data.entries || []).some(function (e) { return e.running; });
     var anyUndone = (data.entries || []).some(function (e) { return !e.done; });
@@ -389,7 +391,8 @@ function toggleRewriteMin() {
   applyRewriteMin();
 }
 
-// Update article action cells to reflect server-side rewrite state after page load.
+// Update article action cells to reflect server-side rewrite state.
+// Called on page load (checkRunningRewrite) and on each poll (pollAllRewrites).
 function syncRewriteCell(entry) {
   var cell = document.getElementById('art-actions-' + entry.article_id);
   if (!cell) return;
@@ -399,8 +402,12 @@ function syncRewriteCell(entry) {
     cell.innerHTML =
       '<span class="badge" style="background:#e74c3c;color:#fff">✗ 失败</span> ' +
       '<button class="btn small primary" onclick="rewriteArticle(' + entry.article_id + ', false)">重试</button>';
+  } else if (entry.done && entry.draft_id) {
+    cell.innerHTML =
+      '<span class="badge ok">✓ 已转写</span> ' +
+      '<a class="btn small" href="/drafts/' + entry.draft_id + '/edit?from=archive">查看草稿</a> ' +
+      '<button class="btn small" onclick="rewriteArticle(' + entry.article_id + ', true)">重写</button>';
   }
-  // done + draft_id is already handled by the template (draft_map).
 }
 
 // ---- restore on page load ----
