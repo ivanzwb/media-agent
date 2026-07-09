@@ -44,6 +44,28 @@ def test_collect_sources_caps_per_source(monkeypatch):
     assert len(out) == 2
 
 
+def test_collect_sources_staggers_requests(monkeypatch):
+    """Each source fetch is preceded by a random sleep (0.3–1.5s) to
+    avoid triggering rate limits from concurrent requests."""
+    sleeps = []
+    monkeypatch.setattr("app.pipeline.orchestrator.time.sleep",
+                        sleeps.append)
+    monkeypatch.setattr("app.pipeline.orchestrator.random.uniform",
+                        lambda lo, hi: 0.8)  # deterministic
+    monkeypatch.setattr("app.pipeline.orchestrator.fetch_feed",
+                        lambda url, name: [art("x")])
+    feeds = FeedsConfig(topics=[], sources=[
+        SourceConfig(name="A", type="rss", url="https://a.com/feed"),
+        SourceConfig(name="B", type="rss", url="https://b.com/feed"),
+        SourceConfig(name="C", type="rss", url="https://c.com/feed"),
+    ])
+    out = collect_sources(feeds, workers=1)
+    assert len(out) == 3
+    assert len(sleeps) == 3
+    for s in sleeps:
+        assert s == 0.8
+
+
 def test_run_pipeline_applies_controls(tmp_path, monkeypatch):
     cfg = Config(data_dir=tmp_path)
     cfg.ensure_dirs()

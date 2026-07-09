@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -53,6 +55,8 @@ def collect_sources(feeds: FeedsConfig,
         idx = _counter[0]
         if progress:
             progress(f"抓取来源 [{idx}/{total}]：{src.name}")
+        # Stagger concurrent requests to avoid tripping rate limits (429).
+        time.sleep(random.uniform(0.3, 1.5))
         try:
             items = _fetch_source(src)
         except Exception as e:  # noqa: BLE001

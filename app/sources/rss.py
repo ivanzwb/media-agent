@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from time import mktime
 
@@ -17,6 +18,17 @@ from app.sources.extractor import _images_from_html, _videos_from_html
 
 _UA_STR = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
            "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
+# Rotated User-Agents — cycle through on retry to evade Cloudflare/WAF blocks.
+_ROTATED_UAS = [
+    _UA_STR,
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 Edg/124.0",
+]
+
+_RSS_RETRIES = 3  # total attempts = 4 (first + 3 retries)
 
 
 def _to_dt(entry) -> datetime | None:
@@ -120,8 +132,40 @@ def _fetch_full_article(url: str, timeout: float = 15.0) -> str | None:
     return None
 
 
+def _ua_header(attempt: int) -> dict[str, str]:
+    """Return a User-Agent header, rotating on retry to evade blocking."""
+    idx = attempt % len(_ROTATED_UAS)
+    return {"User-Agent": _ROTATED_UAS[idx]}
+
+
 def fetch_feed(url: str, source_name: str, timeout: float = 20.0) -> list[Article]:
-    resp = httpx.get(url, timeout=timeout, follow_redirects=True,
-                     headers={"User-Agent": _UA_STR})
-    resp.raise_for_status()
-    return parse_feed(resp.text, source_name)
+    """Fetch and parse an RSS/Atom feed, with retry+backoff on transient errors.
+
+    Transient failures (timeouts, connection errors, 5xx, 429) are retried up
+    to ``_RSS_RETRIES`` times with exponential backoff.  Permanent failures
+    (4xx other than 429) are raised immediately without retrying.
+    User-Agent is rotated on each retry attempt.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(_RSS_RETRIES + 1):
+        try:
+            resp = httpx.get(url, timeout=timeout, follow_redirects=True,
+                             headers=_ua_header(attempt))
+            resp.raise_for_status()
+            return parse_feed(resp.text, source_name)
+        except httpx.HTTPStatusError as exc:
+            last_exc = exc
+            code = exc.response.status_code
+            # 4xx (except 429) are permanent — don't waste retries on them.
+            if code < 500 and code != 429:  # noqa: PLR2004
+                raise
+        except (httpx.TimeoutException, httpx.NetworkError, OSError) as exc:
+            last_exc = exc
+        except httpx.HTTPError as exc:
+            # Other HTTP-level errors (RemoteProtocolError, DecodingError, etc.)
+            last_exc = exc
+        if attempt < _RSS_RETRIES:
+            backoff = 0.5 * (2 ** attempt)  # 0.5s, 1s, 2s, …
+            time.sleep(backoff)
+    assert last_exc is not None
+    raise last_exc

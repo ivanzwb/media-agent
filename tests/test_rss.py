@@ -261,3 +261,165 @@ def test_parse_feed_enrich_mixed_results():
         assert articles[0].content_md == long_content
         # Second: kept feed summary
         assert "embodied" in articles[1].content_md.lower()
+
+
+# ── fetch_feed retry + UA rotation ────────────────────────────────────
+
+
+def test_fetch_feed_retries_timeout_then_succeeds(monkeypatch):
+    """Timeout on first 2 attempts, succeeds on 3rd."""
+    import httpx
+    from app.sources import rss
+    monkeypatch.setattr(rss.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(rss, "parse_feed", lambda *a, **k: [])
+    calls = {"n": 0}
+
+    def flaky_get(*a, **k):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise httpx.TimeoutException("boom")
+        class R:
+            text = "OK"
+            def raise_for_status(self): ...
+        return R()
+    monkeypatch.setattr(rss.httpx, "get", flaky_get)
+    result = rss.fetch_feed("https://example.com/feed", "Test")
+    assert result == []
+    assert calls["n"] == 3  # 2 failures + 1 success
+
+
+def test_fetch_feed_retries_429_then_succeeds(monkeypatch):
+    """429 Too Many Requests is retried, not treated as permanent."""
+    import httpx
+    from app.sources import rss
+    monkeypatch.setattr(rss.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(rss, "parse_feed", lambda *a, **k: [])
+    calls = {"n": 0}
+    req = httpx.Request("GET", "https://example.com/feed")
+
+    def rate_limit(*a, **k):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            resp = httpx.Response(429, request=req)
+            raise httpx.HTTPStatusError("429", request=req, response=resp)
+        class R:
+            text = "OK"
+            def raise_for_status(self): ...
+        return R()
+    monkeypatch.setattr(rss.httpx, "get", rate_limit)
+    result = rss.fetch_feed("https://example.com/feed", "Test")
+    assert result == []
+    assert calls["n"] == 2  # 1 failure + 1 success
+
+
+def test_fetch_feed_no_retry_on_4xx(monkeypatch):
+    """403/404/410 are permanent — raise immediately, no retries."""
+    import pytest
+    import httpx
+    from app.sources import rss
+    monkeypatch.setattr(rss.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(rss, "parse_feed", lambda *a, **k: [])
+    calls = {"n": 0}
+    req = httpx.Request("GET", "https://example.com/feed")
+
+    def get403(*a, **k):
+        calls["n"] += 1
+        resp = httpx.Response(403, request=req)
+        raise httpx.HTTPStatusError("403", request=req, response=resp)
+    monkeypatch.setattr(rss.httpx, "get", get403)
+    with pytest.raises(httpx.HTTPStatusError):
+        rss.fetch_feed("https://example.com/feed", "Test")
+    assert calls["n"] == 1  # 4xx is permanent — no retries
+
+
+def test_fetch_feed_retries_5xx(monkeypatch):
+    """500/502/503 are transient — retry until exhausted."""
+    import pytest
+    import httpx
+    from app.sources import rss
+    monkeypatch.setattr(rss.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(rss, "parse_feed", lambda *a, **k: [])
+    calls = {"n": 0}
+    req = httpx.Request("GET", "https://example.com/feed")
+
+    def server_error(*a, **k):
+        calls["n"] += 1
+        resp = httpx.Response(502, request=req)
+        raise httpx.HTTPStatusError("502", request=req, response=resp)
+    monkeypatch.setattr(rss.httpx, "get", server_error)
+    with pytest.raises(httpx.HTTPStatusError):
+        rss.fetch_feed("https://example.com/feed", "Test")
+    # _RSS_RETRIES=3 → 4 total attempts (1 original + 3 retries)
+    assert calls["n"] == 4
+
+
+def test_fetch_feed_rotates_ua_on_retry(monkeypatch):
+    """Each retry attempt uses a different User-Agent."""
+    import httpx
+    from app.sources import rss
+    monkeypatch.setattr(rss.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(rss, "parse_feed", lambda *a, **k: [])
+    uas = []
+
+    def record_ua(*a, **k):
+        uas.append(k.get("headers", {}).get("User-Agent", ""))
+        raise httpx.TimeoutException("boom")
+    monkeypatch.setattr(rss.httpx, "get", record_ua)
+
+    try:
+        rss.fetch_feed("https://example.com/feed", "Test")
+    except httpx.TimeoutException:
+        pass
+
+    assert len(uas) == 4  # 4 attempts
+    # First attempt should use the default Chrome UA
+    assert "Chrome" in uas[0]
+    # At least one subsequent attempt should use a different UA
+    assert len(set(uas)) >= 2  # at least 2 unique UAs
+
+
+def test_fetch_feed_retries_connection_error(monkeypatch):
+    """ConnectError (DNS/unreachable) is transient — retry."""
+    import httpx
+    from app.sources import rss
+    monkeypatch.setattr(rss.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(rss, "parse_feed", lambda *a, **k: [])
+    calls = {"n": 0}
+
+    def connect_error(*a, **k):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise httpx.ConnectError("no route")
+        class R:
+            text = "OK"
+            def raise_for_status(self): ...
+        return R()
+    monkeypatch.setattr(rss.httpx, "get", connect_error)
+    result = rss.fetch_feed("https://example.com/feed", "Test")
+    assert result == []
+    assert calls["n"] == 3
+
+
+def test_fetch_feed_backoff_increases(monkeypatch):
+    """Sleep time doubles each retry: 0.5s, 1s, 2s."""
+    import httpx
+    from app.sources import rss
+    sleeps = []
+    monkeypatch.setattr(rss.time, "sleep", sleeps.append)
+    monkeypatch.setattr(rss, "parse_feed", lambda *a, **k: [])
+    req = httpx.Request("GET", "https://example.com/feed")
+
+    def flaky_5xx(*a, **k):
+        resp = httpx.Response(503, request=req)
+        raise httpx.HTTPStatusError("503", request=req, response=resp)
+    monkeypatch.setattr(rss.httpx, "get", flaky_5xx)
+
+    try:
+        rss.fetch_feed("https://example.com/feed", "Test")
+    except httpx.HTTPStatusError:
+        pass
+
+    assert len(sleeps) == 3
+    assert sleeps[0] == 0.5
+    assert sleeps[1] == 1.0
+    assert sleeps[2] == 2.0

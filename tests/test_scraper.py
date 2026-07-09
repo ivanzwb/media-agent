@@ -245,6 +245,29 @@ def test_fetch_html_no_retry_on_4xx(monkeypatch):
     assert calls["n"] == 1   # 4xx is permanent — no retries
 
 
+def test_fetch_html_rotates_ua_on_retry(monkeypatch):
+    """Each retry attempt uses a different User-Agent."""
+    import httpx
+    from app.sources import scraper
+    monkeypatch.setattr(scraper.time, "sleep", lambda *_: None)
+    uas = []
+
+    def record_ua(*a, **k):
+        uas.append(k.get("headers", {}).get("User-Agent", ""))
+        raise httpx.TimeoutException("boom")
+    monkeypatch.setattr(scraper.httpx, "get", record_ua)
+
+    try:
+        scraper._fetch_html("https://x.com/c", retries=3)
+    except httpx.TimeoutException:
+        pass
+
+    # Default retries=3 → 3 attempts
+    assert len(uas) == 3
+    # At least one UA should differ from the first
+    assert len(set(uas)) >= 2
+
+
 def test_scrape_single_builds_article(monkeypatch):
     def fake_get(url, **kwargs):
         class R:
