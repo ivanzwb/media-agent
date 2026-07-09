@@ -183,8 +183,8 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
                 break
             emit(f"改写中：{art.title[:50]}", stats)
             try:
-                draft = rewrite(art, provider, style=style)
-                _apply_promotion_footer(draft, store.config)
+                draft = rewrite(art, provider, style=style,
+                                promotion_footer=store.config.promotion_footer)
                 if sens_words:
                     hits = sanitize_draft(draft, sens_words)
                     if hits:

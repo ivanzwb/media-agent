@@ -56,7 +56,8 @@ REWRITE_INSTRUCTION = (
     "必须包含以下内容（按顺序）：\n"
     "1. **总结**：全文的主线观点或启示\n"
     "2. **展望**：对未来的预测或思考（基于原文，不得编造）\n"
-    "3. **原文信息**：注明原文标题、来源和日期\n\n"
+    "3. **原文信息**：注明原文标题、来源和日期\n"
+    "{{promotion_block}}\n\n"
     "### 翻译原则\n\n"
     "| 原文情况 | 处理方式 |\n"
     "|---------|---------|\n"
@@ -517,8 +518,9 @@ def _inline_content(content_md: str, images: list[str],
 
 
 def render_instruction(template: str, *, title: str, source: str,
-                       manifest: str, content: str) -> str:
-    """Render a rewrite instruction *template* by substituting the four
+                       manifest: str, content: str,
+                       promotion_block: str = "") -> str:
+    """Render a rewrite instruction *template* by substituting the
     placeholders.  Uses plain string replacement (not ``str.format``) so
     user-authored templates can contain literal ``{`` / ``}`` (e.g. JSON
     examples) without needing to escape them."""
@@ -526,14 +528,20 @@ def render_instruction(template: str, *, title: str, source: str,
             .replace("{manifest}", manifest)
             .replace("{title}", title)
             .replace("{source}", source)
-            .replace("{content}", content))
+            .replace("{content}", content)
+            .replace("{promotion_block}", promotion_block))
 
 
-def rewrite(article: Article, provider: LLMProvider, style=None) -> Draft:
+def rewrite(article: Article, provider: LLMProvider, style=None,
+            promotion_footer: str | None = None) -> Draft:
     """Rewrite *article* into a Chinese self-media Draft.
 
     *style* is an optional ``app.pipeline.styles.RewriteStyle``. When None the
     original 深度科技报道 behaviour is used (backward compatible).
+
+    *promotion_footer* — when provided, tells the LLM to naturally transition
+    into this promotional text at the end of the article instead of mechanically
+    appending it post-rewrite.
     """
     images = article.images or []
     videos = getattr(article, "videos", []) or []
@@ -566,9 +574,18 @@ def rewrite(article: Article, provider: LLMProvider, style=None) -> Draft:
     else:
         system_prompt = style.prompt
         instruction_tmpl = style.instruction
+
+    # Promotion block: if provided, tells the LLM to naturally transition into
+    # the promotion text instead of mechanically appending it post-rewrite.
+    promotion_block = (
+        f"4. **推广过渡**：用一两句话自然过渡到以下推广内容"
+        f"（不要生硬复制，语气与全文一致）：\n{promotion_footer}\n"
+        if promotion_footer else ""
+    )
     rewrite_prompt = render_instruction(
         instruction_tmpl, title=article.title, source=article.source_name,
-        manifest=manifest, content=content)
+        manifest=manifest, content=content,
+        promotion_block=promotion_block)
     raw = provider.chat([
         Message(role="system", content=system_prompt),
         Message(role="user", content=rewrite_prompt),
