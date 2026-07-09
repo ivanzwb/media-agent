@@ -71,14 +71,16 @@ def test_every_builtin_instruction_has_content_placeholder():
 
 
 def test_deep_tech_render_matches_legacy_format():
-    """The default style must reproduce the old .format() output exactly so
-    existing behaviour is unchanged."""
+    """The default style must reproduce the old .format() output except for
+    the {promotion_block} placeholder which exists only in the new scheme."""
     dt = S.builtin_styles()[0]
     old = REWRITE_INSTRUCTION.format(
         title="T", source="SRC", manifest="MAN", content="CON")
     new = render_instruction(
         dt.instruction, title="T", source="SRC", manifest="MAN", content="CON")
-    assert new == old
+    # legacy format() preserves {promotion_block} as literal text;
+    # render_instruction strips it when no promotion is configured.
+    assert new == old.replace("{promotion_block}", "")
     assert dt.prompt == REWRITE_SYSTEM
 
 
@@ -86,6 +88,31 @@ def test_render_instruction_substitutes_all_placeholders():
     tmpl = "T={title} S={source} M={manifest} C={content}"
     out = render_instruction(tmpl, title="t", source="s", manifest="m", content="c")
     assert out == "T=t S=s M=m C=c"
+
+
+def test_render_instruction_with_promotion_block():
+    """{promotion_block} is substituted when a value is provided."""
+    tmpl = "结尾{promotion_block}结束"
+    block = "4. **推广**：关注我们\n"
+    out = render_instruction(tmpl, title="t", source="s", manifest="m", content="c",
+                             promotion_block=block)
+    assert "推广" in out
+    assert out == "结尾4. **推广**：关注我们\n结束"
+
+
+def test_render_instruction_promotion_block_defaults_empty():
+    """{promotion_block} is stripped when not configured."""
+    tmpl = "正文{promotion_block}结尾"
+    out = render_instruction(tmpl, title="t", source="s", manifest="m", content="c")
+    assert out == "正文结尾"
+
+
+def test_every_builtin_instruction_has_promotion_block():
+    """All builtin styles include the {promotion_block} placeholder so the
+    LLM receives promotion guidance when promotion_footer is configured."""
+    for s in S.builtin_styles():
+        assert "{promotion_block}" in s.instruction, (
+            f"Style '{s.id}' is missing {{promotion_block}} in its instruction")
 
 
 # ── Custom style CRUD ─────────────────────────────────────────────────────
