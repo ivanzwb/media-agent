@@ -24,7 +24,7 @@ jobs:
       - name: Download embeddable Python
         shell: pwsh
         run: |
-          $url = "https://www.python.org/ftp/python/3.11.11/python-3.11.11-embed-amd64.zip"
+          $url = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip"
           $out = "packaging/python-embed-win64.zip"
           if (-not (Test-Path $out)) {
             Invoke-WebRequest -Uri $url -OutFile $out
@@ -135,7 +135,7 @@ jobs:
       # Download embeddable Python for CosyVoice sidecar env
       - name: Download embeddable Python
         run: |
-          curl -sL "https://www.python.org/ftp/python/3.11.11/python-3.11.11-embed-macosx10.9-x86_64.tar.gz" \
+          curl -sL "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-macosx10.9-x86_64.tar.gz" \
             -o packaging/python-embed-macos.tar.gz
           curl -sL "https://bootstrap.pypa.io/get-pip.py" -o packaging/get-pip.py
 
