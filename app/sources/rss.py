@@ -15,6 +15,9 @@ from app.models import Article
 from app.sources.date_parser import parse_date
 from app.sources.extractor import _images_from_html, _videos_from_html
 
+_UA_STR = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+           "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
 
 def _to_dt(entry) -> datetime | None:
     parsed = getattr(entry, "published_parsed", None) or \
@@ -81,7 +84,7 @@ def _fetch_full_article(url: str, timeout: float = 15.0) -> str | None:
     """
     try:
         resp = httpx.get(url, timeout=timeout, follow_redirects=True,
-                         headers={"User-Agent": "media-agent/0.1"})
+                         headers={"User-Agent": _UA_STR})
         resp.raise_for_status()
         html = resp.text
     except Exception:
@@ -119,6 +122,6 @@ def _fetch_full_article(url: str, timeout: float = 15.0) -> str | None:
 
 def fetch_feed(url: str, source_name: str, timeout: float = 20.0) -> list[Article]:
     resp = httpx.get(url, timeout=timeout, follow_redirects=True,
-                     headers={"User-Agent": "media-agent/0.1"})
+                     headers={"User-Agent": _UA_STR})
     resp.raise_for_status()
     return parse_feed(resp.text, source_name)

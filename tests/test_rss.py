@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from app.sources.rss import parse_feed, _fetch_full_article
+from app.sources.rss import parse_feed, fetch_feed, _fetch_full_article, _UA_STR
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_feed.xml"
 
@@ -196,6 +196,52 @@ def test_parse_feed_enrich_disabled():
         mock_fetch.assert_not_called()
         assert len(articles) == 2
         assert "summary" in articles[0].content_md.lower()
+
+
+# ── UA header ─────────────────────────────────────────────────────────────
+
+
+@patch("app.sources.rss.httpx.get")
+def test_fetch_feed_uses_chrome_ua(mock_get):
+    """fetch_feed passes a Chrome User-Agent, not a bot-like one."""
+    mock_get.return_value.text = ""
+    mock_get.return_value.raise_for_status = lambda: None
+    # parse_feed needs valid XML, so mock it too
+    with patch("app.sources.rss.parse_feed", return_value=[]):
+        fetch_feed("https://example.com/feed", "Test")
+    _, kwargs = mock_get.call_args
+    ua = kwargs["headers"]["User-Agent"]
+    assert "Chrome" in ua
+    assert "Mozilla/5.0" in ua
+    assert "media-agent" not in ua
+
+
+@patch("app.sources.rss.httpx.get")
+def test_fetch_full_article_uses_chrome_ua(mock_get):
+    """_fetch_full_article passes a Chrome User-Agent, not a bot-like one."""
+    mock_get.return_value.text = "<html></html>"
+    mock_get.return_value.raise_for_status = lambda: None
+    with patch("app.sources.rss.trafilatura.extract",
+               side_effect=Exception("no trafilatura")):
+        with patch("app.sources.rss.Document",
+                   side_effect=Exception("no readability")):
+            _fetch_full_article("https://example.com/article")
+    _, kwargs = mock_get.call_args
+    ua = kwargs["headers"]["User-Agent"]
+    assert "Chrome" in ua
+    assert "media-agent" not in ua
+
+
+@patch("app.sources.rss.httpx.get")
+def test_fetch_feed_ua_not_bot_string(mock_get):
+    """The UA is the real Chrome string, not the old 'media-agent/0.1'."""
+    mock_get.return_value.text = ""
+    mock_get.return_value.raise_for_status = lambda: None
+    with patch("app.sources.rss.parse_feed", return_value=[]):
+        fetch_feed("https://example.com/feed", "Test")
+    _, kwargs = mock_get.call_args
+    ua = kwargs["headers"]["User-Agent"]
+    assert ua == _UA_STR  # noqa: SLF001 — testing module constant
 
 
 def test_parse_feed_enrich_mixed_results():
