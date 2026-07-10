@@ -1050,12 +1050,17 @@
 
   // On page load, check if there's an ongoing rewrite for this article
   // (handles the case where the user refreshed during a rewrite).
+  // Use /api/operations to find *actual* running tasks rather than
+  // relying on rewrite-status alone — _rewrite_state() creates a
+  // placeholder for every article_id, so {running:false,done:false}
+  // could mean "never requested" instead of "in flight".
   {% if article_id %}
   (function checkRunningDraftRewrite() {
     var articleId = {{ article_id }};
     if (!articleId) return;
     fetch('/api/rewrite-status?article_id=' + articleId).then(function (r) { return r.json(); }).then(function (s) {
-      if (s.running || (!s.done && s.draft_id === null)) {
+      if (s.running) {
+        // Rewrite is actively running in the background worker.
         rewriteDraftArticleId = articleId;
         showRewriteDraftPanel();
         pollRewriteDraft();
@@ -1063,6 +1068,19 @@
         // The latest rewrite completed with a different draft — redirect.
         var from = new URLSearchParams(window.location.search).get('from') || '';
         window.location = '/drafts/' + s.draft_id + '/edit' + (from ? '?from=' + from : '');
+      } else if (!s.done && !s.running) {
+        // State exists but no worker: check ops table for a rewrite
+        // task that was queued but hasn't been picked up yet.
+        fetch('/api/operations').then(function (r2) { return r2.json(); }).then(function (ops) {
+          var hasPending = (ops.running || []).some(function (op) {
+            return op.type === 'rewrite' && op.target_id === articleId;
+          });
+          if (hasPending) {
+            rewriteDraftArticleId = articleId;
+            showRewriteDraftPanel();
+            pollRewriteDraft();
+          }
+        }).catch(function () {});
       }
     }).catch(function () {});
   })();
