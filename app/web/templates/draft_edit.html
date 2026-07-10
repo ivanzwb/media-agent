@@ -119,9 +119,66 @@
       <textarea name="title_candidates" rows="3">{{ title_candidates_text }}</textarea>
 
       <label>正文（Markdown）</label>
+      <div class="editor-style-toolbar">
+        <button type="button" class="btn small" title="高亮选中文字" onclick="fmtWrap('==','==','高亮')">高亮</button>
+        <button type="button" class="btn small" title="给选中文字上色" onclick="fmtColor()">彩色字</button>
+        <button type="button" class="btn small" title="居中" onclick="fmtBlock(':::center','::: ','居中文字')">居中</button>
+        <button type="button" class="btn small" title="提示卡片" onclick="fmtBlock(':::tip','::: ','💡 提示内容')">提示卡片</button>
+        <button type="button" class="btn small" title="引用" onclick="fmtQuote()">引用</button>
+        <span class="tb-sep">|</span>
+        <select id="tpl-select" class="btn small" title="套用文章模板"><option value="">套用模板…</option></select>
+        <button type="button" class="btn small" onclick="applyTemplate()">应用</button>
+        <button type="button" class="btn small primary" onclick="toggleComponentDrawer()">组件面板 ▸</button>
+      </div>
       <textarea name="body_md" id="editor">{{ body_md }}</textarea>
       <input type="hidden" name="from_page" value="{{ from_page }}"/>
     </form>
+  </div>
+</div>
+
+<!-- 秀米-style component drawer (issue #31) -->
+<div id="component-drawer" class="component-drawer" style="display:none">
+  <div class="cd-head">
+    <div class="cd-tabs">
+      <button type="button" class="cd-tab on" data-cdtab="components" onclick="cdShowTab('components')">组件库</button>
+      <button type="button" class="cd-tab" data-cdtab="templates" onclick="cdShowTab('templates')">模板库</button>
+      <button type="button" class="cd-tab" data-cdtab="materials" onclick="cdShowTab('materials')">素材库</button>
+      <button type="button" class="cd-tab" data-cdtab="custom" onclick="cdShowTab('custom')">自定义</button>
+    </div>
+    <button type="button" class="run-close" onclick="toggleComponentDrawer()" title="关闭">×</button>
+  </div>
+
+  <div class="cd-pane on" id="cdpane-components">
+    <input type="text" id="cd-search" class="cd-search" placeholder="搜索组件…" oninput="cdRenderComponents()"/>
+    <div class="cd-cats" id="cd-cats"></div>
+    <div class="cd-list" id="cd-comp-list"></div>
+  </div>
+
+  <div class="cd-pane" id="cdpane-templates">
+    <p class="muted cd-hint">点击「应用」把模板大纲插入正文（不会覆盖已有内容，插到光标处）。</p>
+    <div class="cd-list" id="cd-tpl-list"></div>
+  </div>
+
+  <div class="cd-pane" id="cdpane-materials">
+    <p class="muted cd-hint">点击插入图标 / 装饰到光标处。</p>
+    <div class="cd-materials" id="cd-mat-list"></div>
+  </div>
+
+  <div class="cd-pane" id="cdpane-custom">
+    <p class="muted cd-hint">把常用片段存为自定义组件。</p>
+    <div class="cd-form">
+      <input type="hidden" id="cc-id" value=""/>
+      <input type="text" id="cc-name" placeholder="组件名称"/>
+      <input type="text" id="cc-category" placeholder="分类（默认：自定义）"/>
+      <textarea id="cc-markdown" rows="4" placeholder="组件 Markdown 内容（可含 :::tip 等指令）"></textarea>
+      <div class="cd-form-row">
+        <button type="button" class="btn small" onclick="cdUseSelection()">用选中文字填充</button>
+        <button type="button" class="btn small primary" onclick="cdSaveCustom()">保存组件</button>
+        <button type="button" class="btn small" onclick="cdResetCustomForm()">清空</button>
+      </div>
+      <div id="cc-msg" class="muted" style="font-size:.85em"></div>
+    </div>
+    <div class="cd-list" id="cd-custom-list"></div>
   </div>
 </div>
 </div><!-- /tab-article -->
@@ -1541,4 +1598,283 @@ window.addEventListener('message', function (e) {
   padding: 12px 20px; border-top: 1px solid var(--border);
 }
 </style>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+// 秀米-style visual editor: style toolbar + component drawer (issue #31)
+// ═══════════════════════════════════════════════════════════════════
+(function () {
+  function cm() { return window.easyMDE ? window.easyMDE.codemirror : null; }
+
+  function insertAtCursor(text) {
+    var c = cm();
+    if (c) {
+      var doc = c.getDoc();
+      doc.replaceRange(text, doc.getCursor());
+      c.focus();
+    } else {
+      var ta = document.getElementById('editor');
+      if (ta) ta.value += text;
+    }
+  }
+
+  // Wrap the current selection (or a placeholder) with before/after markers.
+  window.fmtWrap = function (before, after, placeholder) {
+    var c = cm();
+    if (!c) return;
+    var doc = c.getDoc();
+    var sel = doc.getSelection() || placeholder || '';
+    doc.replaceSelection(before + sel + after);
+    c.focus();
+  };
+
+  window.fmtColor = function () {
+    var color = prompt('输入颜色（如 #e67514 或 red）：', '#e67514');
+    if (!color) return;
+    window.fmtWrap('{color:' + color + '}', '{/color}', '彩色文字');
+  };
+
+  // Wrap selection as a directive block on its own lines.
+  window.fmtBlock = function (open, close, placeholder) {
+    var c = cm();
+    if (!c) return;
+    var doc = c.getDoc();
+    var sel = doc.getSelection() || placeholder || '';
+    doc.replaceSelection('\n' + open + '\n' + sel + '\n:::\n\n');
+    c.focus();
+  };
+
+  window.fmtQuote = function () {
+    var c = cm();
+    if (!c) return;
+    var doc = c.getDoc();
+    var sel = doc.getSelection() || '引用文字';
+    var quoted = sel.split('\n').map(function (l) { return '> ' + l; }).join('\n');
+    doc.replaceSelection('\n' + quoted + '\n\n');
+    c.focus();
+  };
+
+  // ── Component drawer ──────────────────────────────────────────────
+  var drawerLoaded = false;
+  var COMPONENTS = [];
+  var CATEGORIES = [];
+  var activeCat = '';
+
+  window.toggleComponentDrawer = function () {
+    var d = document.getElementById('component-drawer');
+    var showing = d.style.display !== 'none';
+    d.style.display = showing ? 'none' : 'flex';
+    if (!showing && !drawerLoaded) { loadDrawer(); drawerLoaded = true; }
+  };
+
+  window.cdShowTab = function (name) {
+    document.querySelectorAll('.cd-tab').forEach(function (b) {
+      b.classList.toggle('on', b.dataset.cdtab === name);
+    });
+    document.querySelectorAll('.cd-pane').forEach(function (p) {
+      p.classList.toggle('on', p.id === 'cdpane-' + name);
+    });
+  };
+
+  function esc(t) { var d = document.createElement('div'); d.textContent = t == null ? '' : t; return d.innerHTML; }
+
+  function loadDrawer() {
+    fetch('/api/editor/components').then(r => r.json()).then(function (data) {
+      COMPONENTS = data.components || [];
+      CATEGORIES = data.categories || [];
+      renderCats();
+      cdRenderComponents();
+      renderCustom();
+    }).catch(function () {});
+    fetch('/api/editor/templates').then(r => r.json()).then(function (data) {
+      renderTemplates(data.templates || []);
+    }).catch(function () {});
+    fetch('/api/editor/materials').then(r => r.json()).then(function (data) {
+      renderMaterials(data.materials || []);
+    }).catch(function () {});
+  }
+
+  function renderCats() {
+    var box = document.getElementById('cd-cats');
+    var cats = [''].concat(CATEGORIES);
+    box.innerHTML = '';
+    cats.forEach(function (cat) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'cd-cat' + (cat === activeCat ? ' on' : '');
+      b.textContent = cat || '全部';
+      b.onclick = function () { activeCat = cat; renderCats(); cdRenderComponents(); };
+      box.appendChild(b);
+    });
+  }
+
+  window.cdRenderComponents = function () {
+    var q = (document.getElementById('cd-search').value || '').toLowerCase();
+    var list = document.getElementById('cd-comp-list');
+    list.innerHTML = '';
+    COMPONENTS.filter(function (c) {
+      if (activeCat && c.category !== activeCat) return false;
+      if (!q) return true;
+      return (c.name + ' ' + (c.tags || []).join(' ') + ' ' + c.category).toLowerCase().indexOf(q) >= 0;
+    }).forEach(function (c) {
+      list.appendChild(compRow(c));
+    });
+    if (!list.children.length) list.innerHTML = '<p class="muted cd-hint">无匹配组件</p>';
+  };
+
+  function compRow(c) {
+    var row = document.createElement('div');
+    row.className = 'cd-item';
+    row.innerHTML = '<div class="cd-item-main"><strong>' + esc(c.name) + '</strong>' +
+      '<span class="cd-item-cat">' + esc(c.category) + '</span></div>';
+    var ins = document.createElement('button');
+    ins.type = 'button'; ins.className = 'btn small primary'; ins.textContent = '插入';
+    ins.onclick = function () { insertAtCursor(c.markdown); };
+    row.appendChild(ins);
+    if (!c.is_builtin) {
+      var ed = document.createElement('button');
+      ed.type = 'button'; ed.className = 'btn small'; ed.textContent = '编辑';
+      ed.onclick = function () { cdEditCustom(c); cdShowTab('custom'); };
+      row.appendChild(ed);
+    }
+    return row;
+  }
+
+  function renderTemplates(tpls) {
+    var list = document.getElementById('cd-tpl-list');
+    list.innerHTML = '';
+    tpls.forEach(function (t) {
+      var row = document.createElement('div');
+      row.className = 'cd-item';
+      row.innerHTML = '<div class="cd-item-main"><strong>' + esc(t.name) + '</strong>' +
+        '<span class="cd-item-cat">主题：' + esc(t.theme) + '</span></div>';
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn small primary'; b.textContent = '应用';
+      b.onclick = function () { insertAtCursor('\n' + t.markdown + '\n'); };
+      row.appendChild(b);
+      list.appendChild(row);
+    });
+  }
+
+  function renderMaterials(mats) {
+    var box = document.getElementById('cd-mat-list');
+    box.innerHTML = '';
+    mats.forEach(function (m) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'cd-material';
+      b.title = m.name;
+      b.textContent = m.markdown;
+      b.onclick = function () { insertAtCursor(m.markdown + ' '); };
+      box.appendChild(b);
+    });
+  }
+
+  function renderCustom() {
+    var list = document.getElementById('cd-custom-list');
+    list.innerHTML = '';
+    var customs = COMPONENTS.filter(function (c) { return !c.is_builtin; });
+    if (!customs.length) { list.innerHTML = '<p class="muted cd-hint">还没有自定义组件</p>'; return; }
+    customs.forEach(function (c) {
+      var row = document.createElement('div');
+      row.className = 'cd-item';
+      row.innerHTML = '<div class="cd-item-main"><strong>' + esc(c.name) + '</strong></div>';
+      var ins = document.createElement('button');
+      ins.type = 'button'; ins.className = 'btn small primary'; ins.textContent = '插入';
+      ins.onclick = function () { insertAtCursor(c.markdown); };
+      var ed = document.createElement('button');
+      ed.type = 'button'; ed.className = 'btn small'; ed.textContent = '编辑';
+      ed.onclick = function () { cdEditCustom(c); };
+      var del = document.createElement('button');
+      del.type = 'button'; del.className = 'btn small danger'; del.textContent = '删除';
+      del.onclick = function () { cdDeleteCustom(c.id); };
+      row.appendChild(ins); row.appendChild(ed); row.appendChild(del);
+      list.appendChild(row);
+    });
+  }
+
+  window.cdEditCustom = function (c) {
+    document.getElementById('cc-id').value = c.id;
+    document.getElementById('cc-name').value = c.name;
+    document.getElementById('cc-category').value = c.category;
+    document.getElementById('cc-markdown').value = c.markdown;
+    document.getElementById('cc-msg').textContent = '编辑中：' + c.name;
+  };
+
+  window.cdResetCustomForm = function () {
+    document.getElementById('cc-id').value = '';
+    document.getElementById('cc-name').value = '';
+    document.getElementById('cc-category').value = '';
+    document.getElementById('cc-markdown').value = '';
+    document.getElementById('cc-msg').textContent = '';
+  };
+
+  window.cdUseSelection = function () {
+    var c = cm();
+    var sel = c ? c.getDoc().getSelection() : '';
+    if (sel) document.getElementById('cc-markdown').value = sel;
+  };
+
+  window.cdSaveCustom = async function () {
+    var id = document.getElementById('cc-id').value;
+    var fd = new FormData();
+    fd.set('name', document.getElementById('cc-name').value);
+    fd.set('category', document.getElementById('cc-category').value || '自定义');
+    fd.set('markdown', document.getElementById('cc-markdown').value);
+    var url = id ? '/api/editor/components/' + encodeURIComponent(id) : '/api/editor/components';
+    var method = id ? 'PUT' : 'POST';
+    try {
+      var r = await fetch(url, { method: method, body: fd });
+      var data = await r.json();
+      if (!r.ok || !data.ok) {
+        document.getElementById('cc-msg').textContent = (data && data.error) || '保存失败';
+        return;
+      }
+      cdResetCustomForm();
+      // refresh component list
+      var cr = await (await fetch('/api/editor/components')).json();
+      COMPONENTS = cr.components || [];
+      cdRenderComponents(); renderCustom();
+      document.getElementById('cc-msg').textContent = '已保存 ✓';
+    } catch (e) {
+      document.getElementById('cc-msg').textContent = '请求失败';
+    }
+  };
+
+  window.cdDeleteCustom = async function (id) {
+    if (!confirm('确定删除该自定义组件？')) return;
+    try {
+      var r = await fetch('/api/editor/components/' + encodeURIComponent(id), { method: 'DELETE' });
+      if (!r.ok) { alert('删除失败'); return; }
+      var cr = await (await fetch('/api/editor/components')).json();
+      COMPONENTS = cr.components || [];
+      cdRenderComponents(); renderCustom();
+    } catch (e) { alert('请求失败'); }
+  };
+
+  // Template selector in the style toolbar.
+  window.applyTemplate = async function () {
+    var sel = document.getElementById('tpl-select');
+    var id = sel && sel.value;
+    if (!id) { alert('请先选择一个模板'); return; }
+    try {
+      var r = await fetch('/api/editor/templates/' + encodeURIComponent(id) + '/apply', { method: 'POST' });
+      var data = await r.json();
+      if (!data.ok) { alert('应用失败：' + (data.error || '')); return; }
+      insertAtCursor('\n' + data.markdown + '\n');
+    } catch (e) { alert('请求失败'); }
+  };
+
+  // Lazily populate the toolbar template dropdown on first load too.
+  fetch('/api/editor/templates').then(r => r.json()).then(function (data) {
+    var sel = document.getElementById('tpl-select');
+    if (!sel) return;
+    (data.templates || []).forEach(function (t) {
+      if (sel.querySelector('option[value="' + t.id + '"]')) return;
+      var opt = document.createElement('option');
+      opt.value = t.id; opt.textContent = t.name;
+      sel.appendChild(opt);
+    });
+  }).catch(function () {});
+})();
+</script>
 {% endblock %}

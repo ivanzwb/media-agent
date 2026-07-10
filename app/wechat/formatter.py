@@ -105,6 +105,8 @@ def _build_styles(t: dict) -> dict:
         "img": "max-width:100%;display:block;margin:14px auto;border-radius:6px;",
         "a": f"color:{accent};text-decoration:none;border-bottom:1px solid {accent};",
         "hr": "border:none;border-top:1px solid #e0e0e0;margin:24px 0;",
+        "mark": "background:#fff3a0;color:#664d03;padding:0 .15em;border-radius:2px;",
+        "accent": accent,
         # table styles
         "table": ("border-collapse:collapse;width:100%;margin:16px 0;"
                   "font-size:15px;overflow-x:auto;"),
@@ -141,6 +143,14 @@ def _inline(text: str, st: dict) -> str:
     text = _ITALIC_RE.sub(lambda m: f"<em>{m.group('t')}</em>", text)
     text = _CODE_RE.sub(
         lambda m: f'<code style="{st["code_inline"]}">{m.group("t")}</code>', text)
+    # ==highlight== → styled <mark>
+    text = re.sub(r'==(.+?)==',
+                  lambda m: f'<mark style="{st["mark"]}">{m.group(1)}</mark>',
+                  text)
+    # {color:#hex}文字{/color} → colored span
+    text = re.sub(
+        r'\{color:(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)\}(.+?)\{/color\}',
+        lambda m: f'<span style="color:{m.group(1)}">{m.group(2)}</span>', text)
     text = re.sub(r'\x00(\d+)\x00', lambda m: tags[int(m.group(1))], text)
     return text
 
@@ -267,31 +277,85 @@ def _render_table(lines: list[str], start: int, st: dict) -> tuple[str, int]:
     return "\n".join(parts), i
 
 
-def render_styled_html(md: str, platform: str = "wechat",
-                       theme: str = "default", tweaks: dict | None = None) -> str:
-    """Render Markdown to themed, inline-styled HTML for the platform editor."""
-    themes = _themes_for(platform)
-    params = dict(themes.get(theme) or next(iter(themes.values())))
-    tweaks = tweaks or {}
-    if tweaks.get("accent"):
-        params["accent"] = tweaks["accent"]
-    if tweaks.get("font_size"):
-        try:
-            params["fs"] = int(tweaks["font_size"])
-        except (TypeError, ValueError):
-            pass
-    st = _build_styles(params)
+# ── directive containers (:::type ... :::) ───────────────────────────────
+_CONTAINER_OPEN_RE = re.compile(r'^:::\s*([\w-]+)\s*(.*)$')
+_CONTAINER_CLOSE_RE = re.compile(r'^:::\s*$')
+_BOX_PALETTES = {
+    "tip":     ("#f0f9eb", "#67c23a", "#3c6e2a"),
+    "info":    ("#eef5ff", "#409eff", "#2a5b9e"),
+    "warning": ("#fdf6ec", "#e6a23c", "#8a5a1a"),
+    "success": ("#f0f9eb", "#67c23a", "#3c6e2a"),
+    "danger":  ("#fef0f0", "#f56c6c", "#a13a3a"),
+    "note":    ("#f7f7f9", "#909399", "#555555"),
+}
 
-    md = _VIDEO_PLACEHOLDER_RE.sub("", md or "")
-    lines = md.replace("\r\n", "\n").split("\n")
+
+def _render_container(ctype: str, inner_lines: list[str], st: dict,
+                      params: dict) -> str:
+    accent = params["accent"]
+    fs = params["fs"]
+    if ctype in ("center", "right"):
+        align = "center" if ctype == "center" else "right"
+        inner = _render_blocks(inner_lines, st, params, align=align)
+        return f'<div style="text-align:{align};">{inner}</div>'
+    if ctype == "footer":
+        inner = _render_blocks(inner_lines, st, params, align="center")
+        return (f'<div style="text-align:center;color:#999;'
+                f'font-size:{fs - 2}px;margin:18px 0 8px;">{inner}</div>')
+    if ctype == "button":
+        label, url = "按钮", "#"
+        for ln in inner_lines:
+            s = ln.strip()
+            if not s:
+                continue
+            if "|" in s:
+                label, url = s.split("|", 1)
+            else:
+                label = s
+            break
+        label = _html.escape(label.strip())
+        url = _html.escape(url.strip(), quote=True)
+        btn = (f"display:inline-block;padding:10px 32px;background:{accent};"
+               "color:#fff;border-radius:24px;text-decoration:none;font-size:15px;")
+        return (f'<div style="text-align:center;margin:20px 0;">'
+                f'<a href="{url}" style="{btn}">{label}</a></div>')
+    if ctype == "tags":
+        pill = ("display:inline-block;padding:3px 12px;margin:4px 6px 4px 0;"
+                f"background:#f5f7fa;color:{accent};border:1px solid {accent};"
+                "border-radius:12px;font-size:13px;")
+        pills = [f'<span style="{pill}">{_html.escape(ln.strip())}</span>'
+                 for ln in inner_lines if ln.strip()]
+        return f'<div style="margin:12px 0;">{"".join(pills)}</div>'
+    # box-style cards
+    if ctype == "highlight":
+        box = (f"background:#fafafa;border-left:4px solid {accent};"
+               "padding:14px 16px;margin:16px 0;border-radius:0 6px 6px 0;color:#333;")
+    elif ctype == "card":
+        box = ("background:#ffffff;border:1px solid #e6e8eb;color:#333;"
+               "padding:14px 16px;margin:16px 0;border-radius:8px;")
+    else:
+        bg, border, fg = _BOX_PALETTES.get(ctype, ("#f7f7f9", accent, "#444444"))
+        box = (f"background:{bg};border-left:4px solid {border};color:{fg};"
+               "padding:12px 16px;margin:16px 0;border-radius:0 6px 6px 0;")
+    inner = _render_blocks(inner_lines, st, params)
+    return f'<section style="{box}">{inner}</section>'
+
+
+def _render_blocks(lines: list[str], st: dict, params: dict,
+                   align: str | None = None) -> str:
+    """Render a list of markdown lines to HTML fragments (no outer <section>).
+    Recursively invoked for directive containers."""
     out: list[str] = []
     para: list[str] = []
     list_type: str | None = None
     i = 0
+    p_style = st["p"]
+    if align:
+        p_style = f"{p_style}text-align:{align};"
 
     def flush_para():
         if para:
-            out.append(f'<p style="{st["p"]}">'
+            out.append(f'<p style="{p_style}">'
                        + "<br/>".join(_inline(x, st) for x in para) + "</p>")
             para.clear()
 
@@ -309,6 +373,35 @@ def render_styled_html(md: str, platform: str = "wechat",
         if not stripped:
             flush_para()
             flush_list()
+            continue
+
+        # ── directive container (:::type ... :::) ──
+        cm = _CONTAINER_OPEN_RE.match(stripped)
+        if cm and cm.group(1):
+            flush_para()
+            flush_list()
+            ctype = cm.group(1)
+            first_arg = cm.group(2).strip()
+            inner: list[str] = []
+            if first_arg:
+                inner.append(first_arg)
+            depth = 1
+            while i < len(lines):
+                ln = lines[i].strip()
+                if _CONTAINER_CLOSE_RE.match(ln):
+                    depth -= 1
+                    if depth == 0:
+                        i += 1
+                        break
+                    inner.append(lines[i])
+                    i += 1
+                    continue
+                nested = _CONTAINER_OPEN_RE.match(ln)
+                if nested and nested.group(1):
+                    depth += 1
+                inner.append(lines[i])
+                i += 1
+            out.append(_render_container(ctype, inner, st, params))
             continue
 
         # ── markdown table ──
@@ -335,10 +428,6 @@ def render_styled_html(md: str, platform: str = "wechat",
                        f'<code style="{st["code_block"]}">{body}</code></pre>')
             continue
 
-        if not stripped:
-            flush_para()
-            flush_list()
-            continue
         if stripped.startswith("<iframe") or stripped.startswith("[▶"):
             flush_para()
             flush_list()
@@ -397,6 +486,26 @@ def render_styled_html(md: str, platform: str = "wechat",
 
     flush_para()
     flush_list()
-    body = "\n".join(out)
+    return "\n".join(out)
+
+
+def render_styled_html(md: str, platform: str = "wechat",
+                       theme: str = "default", tweaks: dict | None = None) -> str:
+    """Render Markdown to themed, inline-styled HTML for the platform editor."""
+    themes = _themes_for(platform)
+    params = dict(themes.get(theme) or next(iter(themes.values())))
+    tweaks = tweaks or {}
+    if tweaks.get("accent"):
+        params["accent"] = tweaks["accent"]
+    if tweaks.get("font_size"):
+        try:
+            params["fs"] = int(tweaks["font_size"])
+        except (TypeError, ValueError):
+            pass
+    st = _build_styles(params)
+
+    md = _VIDEO_PLACEHOLDER_RE.sub("", md or "")
+    lines = md.replace("\r\n", "\n").split("\n")
+    body = _render_blocks(lines, st, params)
     body = _glue_cjk_punctuation(body)
     return f'<section style="{st["section"]}">\n{body}\n</section>'

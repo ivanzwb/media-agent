@@ -37,6 +37,7 @@ from app.pipeline.score import compute_draft_score
 from app.pipeline.localize import localize_one
 from app.pipeline.rewriter import rewrite
 from app.pipeline import styles as rewrite_styles
+from app.wechat import components as editor_components
 from app.pipeline.sanitizer import load_words, sanitize_draft
 from app.pipeline.video import build_explainer_video, video_path
 from app.sources.extractor import _images_from_html, _videos_from_html
@@ -617,6 +618,80 @@ def create_app(config: Config | None = None,
         if not ok:
             return JSONResponse({"ok": False, "error": "风格不存在"}, status_code=404)
         return {"ok": True}
+
+    # ── 秀米-style editor: components / templates / materials (issue #31) ──
+    @app.get("/api/editor/components")
+    def api_editor_components(category: str | None = None):
+        store = get_store()
+        comps = editor_components.all_components(store)
+        if category:
+            comps = [c for c in comps if c.category == category]
+        return {
+            "categories": editor_components.CATEGORIES,
+            "components": [c.to_public() for c in comps],
+        }
+
+    @app.post("/api/editor/components")
+    def api_editor_component_create(name: str = Form(...),
+                                    markdown: str = Form(...),
+                                    category: str = Form("自定义"),
+                                    tags: str = Form("")):
+        store = get_store()
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        try:
+            c = editor_components.save_custom_component(
+                store, id=None, name=name, category=category,
+                markdown=markdown, tags=tag_list)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return {"ok": True, "component": c.to_public()}
+
+    @app.put("/api/editor/components/{comp_id}")
+    def api_editor_component_update(comp_id: str, name: str = Form(...),
+                                    markdown: str = Form(...),
+                                    category: str = Form("自定义"),
+                                    tags: str = Form("")):
+        store = get_store()
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        try:
+            c = editor_components.save_custom_component(
+                store, id=comp_id, name=name, category=category,
+                markdown=markdown, tags=tag_list)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return {"ok": True, "component": c.to_public()}
+
+    @app.delete("/api/editor/components/{comp_id}")
+    def api_editor_component_delete(comp_id: str):
+        store = get_store()
+        try:
+            ok = editor_components.delete_custom_component(store, comp_id)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        if not ok:
+            return JSONResponse({"ok": False, "error": "组件不存在"}, status_code=404)
+        return {"ok": True}
+
+    @app.get("/api/editor/templates")
+    def api_editor_templates():
+        return {"templates": [t.to_public()
+                              for t in editor_components.builtin_templates()]}
+
+    @app.post("/api/editor/templates/{template_id}/apply")
+    def api_editor_template_apply(template_id: str):
+        """Return the template's markdown outline so the client can insert it
+        into the editor (non-destructive — the user saves explicitly)."""
+        tpl = editor_components.get_template(template_id)
+        if not tpl:
+            return JSONResponse({"ok": False, "error": "模板不存在"},
+                                status_code=404)
+        return {"ok": True, "markdown": tpl.markdown, "theme": tpl.theme,
+                "name": tpl.name}
+
+    @app.get("/api/editor/materials")
+    def api_editor_materials():
+        return {"materials": [m.to_public()
+                             for m in editor_components.materials()]}
 
     @app.get("/drafts", response_class=HTMLResponse)
     def drafts_list(request: Request, status: str | None = None):
