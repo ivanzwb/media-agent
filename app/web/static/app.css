@@ -1753,12 +1753,6 @@ input[type="checkbox"] {
 .style-select-inline { display: inline-flex; align-items: center; gap: 6px; }
 
 /* ── 秀米-style editor: style toolbar + component drawer (issue #31) ── */
-.editor-style-toolbar {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-  margin: 6px 0; padding: 6px 8px;
-  background: var(--surface2); border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
 .component-drawer {
   position: fixed; top: 0; right: 0; z-index: 120;
   width: 380px; max-width: 92vw; height: 100vh;

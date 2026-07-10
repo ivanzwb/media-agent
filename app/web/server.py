@@ -64,7 +64,47 @@ def _to_int(value: str, default: int) -> int:
         return default
 
 
-def _clean_agent_output(text: str) -> str:
+_THINKING_PATTERNS: tuple[str, ...] = (
+    # English first-person planning / narrative — never part of a real article body
+    "i detect ", "detect implementation", "let me ", "my approach",
+    "now i ", "now let me", "here is my plan", "i will search",
+    "i'll search", "i will fetch", "i'll fetch", "let's search",
+    "i have enough information",
+    # Chinese thinking/summary markers
+    "已完成", "以下是为", "我将", "我来", "文件已写入",
+    "已写入", "已保存到", "output.md", "文件已保存",
+)
+"""Known agent thinking/planning/summary phrases that should never appear
+in a real article body.  Used by ``_clean_agent_output`` to detect when
+the agent reasoning leaked into its output."""
+
+
+def _looks_like_thinking_text(body: str) -> bool:
+    """Check if *body* appears to be agent thinking/planning, not article content.
+
+    Heuristic: the body starts with a known thinking pattern on its first
+    non-blank line, OR lacks any markdown headings (``##``) and is very
+    short (<10 lines), which suggests it's a summary/report rather than
+    a real article body.
+    """
+    stripped = body.strip()
+    if not stripped:
+        return False
+
+    first_line = stripped.split("\n", 1)[0].strip().lower()
+    for pat in _THINKING_PATTERNS:
+        if first_line.startswith(pat.lower()):
+            return True
+
+    # No markdown headings and very short → likely summary/report
+    lines = [l for l in stripped.split("\n") if l.strip()]
+    if len(lines) < 10 and "## " not in stripped:
+        return True
+
+    return False
+
+
+def _clean_agent_output(text: str, original_body: str | None = None) -> str:
     """Sanitize raw agent output into valid front-matter markdown.
 
     Agents frequently disobey instructions and include:
@@ -72,8 +112,9 @@ def _clean_agent_output(text: str) -> str:
     - Code block fences (```markdown … ```)
     - Trailing modification notes after the body
 
-    This function strips all of the above so the result is a clean
-    front-matter file parseable by python-frontmatter.
+    When *original_body* is provided and the cleaned body is detected as
+    thinking text, the original body is preserved as a fallback so the
+    draft isn't corrupted.
     """
     import frontmatter as _fm
     if not text or not text.strip():
@@ -130,7 +171,17 @@ def _clean_agent_output(text: str) -> str:
     body = re.sub(r"\n```\s*$", "", body)
     body = body.strip()
 
-    # 5. Reconstruct: front-matter (if any) + body
+    # 5. Detect if the body is agent thinking text rather than real article content.
+    #    If so, fall back to the original body when available.  This prevents
+    #    the agent's reasoning/summary from corrupting the draft.
+    if _looks_like_thinking_text(body) and original_body is not None:
+        logger.warning(
+            "agent output body is thinking text (%d chars), falling back to original body",
+            len(body),
+        )
+        body = original_body.strip()
+
+    # 6. Reconstruct: front-matter (if any) + body
     result = _fm.dumps(_fm.Post(body, **meta))
     return result.strip() + "\n"
 
@@ -824,8 +875,7 @@ def create_app(config: Config | None = None,
                 "以及修改指令。\n\n"
                 "规则：\n"
                 "1. 根据指令修改草稿内容，**完整输出修改后的整篇文件（包含 front-matter）**。\n"
-                "2. 禁止输出任何修改说明、总结、备注、注释、思考过程、标记符号——你的全部输出"
-                "将被直接写入文件，任何多余文字都会出现在最终发布内容中。\n"
+                "2. 禁止输出任何修改说明、总结、备注、注释、思考过程、标记符号——你的全部输出将被直接写入文件，任何多余文字都会出现在最终发布内容中，会造成破坏，所以禁止。\n"
                 "3. 禁止在正文末尾添加分隔符（如 ---）、注释块、TODO 列表等。\n"
                 "4. 用户如果要求插入图片，用标准 Markdown 图片语法 `![描述](图片URL)`。\n"
                 "5. 不要用代码块包裹输出。")),
@@ -841,7 +891,9 @@ def create_app(config: Config | None = None,
 
         # Post-process: clean agent output — strip thinking text, code fences,
         # trailing notes, and anything else that would corrupt the draft file.
-        result = _clean_agent_output(result)
+        # Pass original body as fallback when agent output is pure thinking text.
+        _original_body = body.get("body_md", "") if body else ""
+        result = _clean_agent_output(result, original_body=_original_body)
 
         # Parse the cleaned output for DB sync and frontend display.
         # This always succeeds because _clean_agent_output guarantees valid

@@ -87,27 +87,15 @@
       <button type="submit" class="btn primary" form="edit-form">保存</button>
       <button type="button" class="btn secondary" id="agent-undo-btn" style="display:none" onclick="undoAgentEdit()">撤销 Agent 修改</button>
       <span class="tb-sep">|</span>
-      <span class="tb-label">同步到平台：</span>
-      {% for p in platforms %}
-      <button type="button" class="btn small" onclick="adaptToPlatform('{{ p.id }}', {{ draft.id }})">{{ p.label }}</button>
-      {% endfor %}
-      <span class="tb-sep">|</span>
-      <span class="tb-label">公众号：</span>
-      <select id="wx-theme" class="btn small" title="排版主题" style="padding:2px 6px">
-        <option value="default">默认·清爽绿</option>
-        <option value="warm">暖橙·杂志</option>
-        <option value="blue">科技蓝</option>
+      <span class="tb-label">平台：</span>
+      <select id="sync-platform" class="btn small" onchange="onSyncPlatformChange()" style="padding:2px 6px">
+        <option value="">选择平台…</option>
+        {% for p in platforms %}
+        <option value="{{ p.id }}" data-label="{{ p.label }}">{{ p.label }}</option>
+        {% endfor %}
       </select>
-      <button type="button" class="btn small primary pro-feature" title="先保存草稿，再推送图文到公众号草稿箱"
-              onclick="publishWeChat({{ draft.id }}, 'draft', 'article')">推送草稿箱</button>
-      <button type="button" class="btn small pro-feature" title="创建草稿并直接发布（不可撤回）"
-              onclick="publishWeChat({{ draft.id }}, 'publish', 'article')">直接发布</button>
-      <button type="button" class="btn small pro-feature" title="复制美化后的 HTML，粘贴到公众号编辑器正文"
-              onclick="copyStyledHtml({{ draft.id }}, 'wechat')">复制美化HTML</button>
-      <span class="tb-sep">|</span>
-      <span class="tb-label">头条：</span>
-      <button type="button" class="btn small primary pro-feature" title="复制美化 HTML 并打开头条图文发布页，正文里 Ctrl+V 粘贴"
-              onclick="copyStyledHtml({{ draft.id }}, 'toutiao', 'https://mp.toutiao.com/profile_v4/graphic/publish')">复制并打开头条</button>
+      <div id="platform-actions" style="display:inline-flex;gap:6px;align-items:center"></div>
+      <button type="button" class="btn small" id="copy-html-btn" title="复制当前平台美化 HTML 到剪贴板" style="display:none" onclick="onCopyHtml()">复制HTML</button>
       <a class="btn small" href="javascript:void(0)" onclick="goBackOrList()">返回列表</a>
     </div>
 
@@ -119,29 +107,20 @@
       <textarea name="title_candidates" rows="3">{{ title_candidates_text }}</textarea>
 
       <label>正文（Markdown）</label>
-      <div class="editor-style-toolbar">
-        <button type="button" class="btn small" title="高亮选中文字" onclick="fmtWrap('==','==','高亮')">高亮</button>
-        <button type="button" class="btn small" title="给选中文字上色" onclick="fmtColor()">彩色字</button>
-        <button type="button" class="btn small" title="居中" onclick="fmtBlock(':::center','::: ','居中文字')">居中</button>
-        <button type="button" class="btn small" title="提示卡片" onclick="fmtBlock(':::tip','::: ','💡 提示内容')">提示卡片</button>
-        <button type="button" class="btn small" title="引用" onclick="fmtQuote()">引用</button>
-        <span class="tb-sep">|</span>
-        <select id="tpl-select" class="btn small" title="套用文章模板"><option value="">套用模板…</option></select>
-        <button type="button" class="btn small" onclick="applyTemplate()">应用</button>
-        <button type="button" class="btn small primary" onclick="toggleComponentDrawer()">组件面板 ▸</button>
-      </div>
       <textarea name="body_md" id="editor">{{ body_md }}</textarea>
       <input type="hidden" name="from_page" value="{{ from_page }}"/>
     </form>
   </div>
 </div>
 
+</div><!-- /tab-article -->
+
 <!-- 秀米-style component drawer (issue #31) -->
-<div id="component-drawer" class="component-drawer" style="display:none">
+<div id="drawer-backdrop" style="display:none;position:fixed;inset:0;z-index:119;background:rgba(0,0,0,.25)" onclick="toggleComponentDrawer()"></div>
+<div id="component-drawer" class="component-drawer" style="display:none;position:fixed;top:0;right:0;z-index:120">
   <div class="cd-head">
     <div class="cd-tabs">
       <button type="button" class="cd-tab on" data-cdtab="components" onclick="cdShowTab('components')">组件库</button>
-      <button type="button" class="cd-tab" data-cdtab="templates" onclick="cdShowTab('templates')">模板库</button>
       <button type="button" class="cd-tab" data-cdtab="materials" onclick="cdShowTab('materials')">素材库</button>
       <button type="button" class="cd-tab" data-cdtab="custom" onclick="cdShowTab('custom')">自定义</button>
     </div>
@@ -152,11 +131,6 @@
     <input type="text" id="cd-search" class="cd-search" placeholder="搜索组件…" oninput="cdRenderComponents()"/>
     <div class="cd-cats" id="cd-cats"></div>
     <div class="cd-list" id="cd-comp-list"></div>
-  </div>
-
-  <div class="cd-pane" id="cdpane-templates">
-    <p class="muted cd-hint">点击「应用」把模板大纲插入正文（不会覆盖已有内容，插到光标处）。</p>
-    <div class="cd-list" id="cd-tpl-list"></div>
   </div>
 
   <div class="cd-pane" id="cdpane-materials">
@@ -181,7 +155,6 @@
     <div class="cd-list" id="cd-custom-list"></div>
   </div>
 </div>
-</div><!-- /tab-article -->
 
 <div id="tab-video" class="tab-pane">
 <h2>讲解视频（分镜脚本 + 配音）</h2>
@@ -334,16 +307,45 @@
   }
 
   // Render markdown for the live preview, matching the article view styling.
+  // Also renders directive syntax (:::, ==highlight==, {color:…}) on the client
+  // so the side-by-side preview reflects toolbar edits immediately.
   function renderDraftPreview(plainText) {
-    // Turn :::image-prompt ... ::: custom blocks into a readable callout so
-    // they don't break the preview.
-    var text = (plainText || '').replace(
-      /:::image-prompt\s*\n([\s\S]*?)\n:::/g,
-      function (_m, inner) { return '> 🎨 **配图提示**：' + inner.trim() + '\n'; }
-    );
+    var text = renderDirectivesClient(plainText || '');
     var html = window.marked ? marked.parse(text)
       : text.replace(/\n/g, '<br>');
     return '<div class="article-body">' + html + '</div>';
+  }
+
+  // ── Client-side directive renderer (mirrors app/wechat/formatter.py) ──
+  function renderDirectivesClient(text) {
+    // Inline: ==highlight== → <mark>
+    text = text.replace(/==([^=]+)==/g, '<mark>$1</mark>');
+    // Inline: {color:#xxx}…{/color} → <span style="color:…">
+    text = text.replace(/\{color:([^}]+)\}([\s\S]*?)\{\/color\}/g,
+      '<span style="color:$1">$2</span>');
+    // Block containers: :::type on own lines
+    text = text.replace(/^:::(\w+)\s*\n([\s\S]*?)\n:::/gm, function (_, type, body) {
+      var cls = ' directive-' + type;
+      if (type === 'center') return '<div class="' + cls + '" style="text-align:center;margin:10px 0">' + renderDirectivesClient(body) + '</div>';
+      if (type === 'right') return '<div class="' + cls + '" style="text-align:right;margin:10px 0">' + renderDirectivesClient(body) + '</div>';
+      if (type === 'footer') return '<div class="' + cls + '" style="color:var(--muted,#999);font-size:0.9em;margin:10px 0">' + renderDirectivesClient(body) + '</div>';
+      // for card/button/tags, wrap content in a div
+      if (type === 'card') return '<div class="' + cls + '" style="border:1px solid var(--border);border-radius:8px;padding:12px;margin:10px 0">' + renderDirectivesClient(body) + '</div>';
+      if (type === 'button') return '<div class="' + cls + '" style="display:inline-block;background:var(--accent,#07C160);color:#fff;padding:8px 20px;border-radius:6px;margin:6px 0">' + body.trim() + '</div>';
+      if (type === 'tags') {
+        var tags = body.trim().split(/[\n,]/).filter(Boolean).map(function(t) {
+          return '<span class="cd-cat" style="display:inline-block">' + t.trim() + '</span>';
+        }).join(' ');
+        return '<div class="' + cls + '" style="margin:6px 0">' + tags + '</div>';
+      }
+      // tip/info/warning/success/danger/highlight: colored callout
+      var colors = { tip: '#e6f7ff', info: '#e6f7ff', warning: '#fffbe6', success: '#f6ffed', danger: '#fff2f0', highlight: '#fff0f6' };
+      var borders = { tip: '#91d5ff', info: '#91d5ff', warning: '#ffe58f', success: '#b7eb8f', danger: '#ffccc7', highlight: '#ffadd2' };
+      var bg = colors[type] || '#f5f5f5';
+      var bd = borders[type] || '#d9d9d9';
+      return '<div class="' + cls + '" style="background:' + bg + ';border-left:4px solid ' + bd + ';padding:10px 14px;margin:10px 0;border-radius:4px">' + renderDirectivesClient(body) + '</div>';
+    });
+    return text;
   }
 
   var easyMDE = new EasyMDE({
@@ -354,6 +356,35 @@
     renderingConfig: { singleLineBreaks: false, codeSyntaxHighlighting: false },
     previewRender: function (plainText) { return renderDraftPreview(plainText); },
   });
+  // Inject custom buttons into the EasyMDE toolbar.
+  (function () {
+    function addSep(tb) { var s = document.createElement('i'); s.className = 'separator'; tb.appendChild(s); return tb; }
+    function addBtn(tb, title, fn) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.title = title; b.tabIndex = -1;
+      b.innerHTML = title;
+      b.addEventListener('click', fn);
+      tb.appendChild(b); return tb;
+    }
+    var tb = document.querySelector('.editor-toolbar');
+    if (!tb) return;
+    addSep(tb);
+    addBtn(tb, '高亮', function () { fmtWrap('==','==','高亮'); });
+    addBtn(tb, '彩色字', function () { fmtColor(); });
+    addBtn(tb, '居中', function () { fmtBlock(':::center','::: ','居中文字'); });
+    addBtn(tb, '提示卡片', function () { fmtBlock(':::tip','::: ','💡 提示内容'); });
+    addBtn(tb, '引用', function () { fmtQuote(); });
+    addSep(tb);
+    // Template selector
+    var sel = document.createElement('select');
+    sel.id = 'tpl-select';
+    sel.style.cssText = 'background:transparent;border:none;color:inherit;font:inherit;cursor:pointer;padding:0 4px;height:26px;outline:none';
+    var opt = document.createElement('option');
+    opt.value = ''; opt.textContent = '套用模板…'; sel.appendChild(opt);
+    tb.appendChild(sel);
+    addBtn(tb, '应用', function () { applyTemplate(); });
+    addBtn(tb, '组件面板 ▸', function () { toggleComponentDrawer(); });
+  })();
   // Open side-by-side live preview by default.
   try {
     if (!easyMDE.isSideBySideActive()) { easyMDE.toggleSideBySide(); }
@@ -1102,8 +1133,7 @@
       const fd = new FormData();
       fd.set('mode', mode);
       fd.set('kind', kind);
-      const themeEl = document.getElementById('wx-theme');
-      fd.set('theme', themeEl ? themeEl.value : 'default');
+      fd.set('theme', 'default');
       const resp = await fetch('/drafts/' + draftId + '/publish/wechat', {
         method: 'POST', body: fd
       });
@@ -1227,13 +1257,79 @@
     }
   }
 
+  // ── Platform selector → dynamic action buttons ──────────────────
+  var _currentPlatform = '';
+  var _platformActions = {
+    wechat: [
+      { label: '推送草稿箱', cls: 'btn small primary', action: function () { publishWeChat({{ draft.id }}, 'draft', 'article'); }, title: '先保存草稿，再推送图文到公众号草稿箱' },
+      { label: '直接发布', cls: 'btn small', action: function () { publishWeChat({{ draft.id }}, 'publish', 'article'); }, title: '创建草稿并直接发布（不可撤回）' },
+    ],
+    toutiao: [
+      { label: '复制并打开头条', cls: 'btn small primary', action: function () { copyStyledHtml({{ draft.id }}, 'toutiao', 'https://mp.toutiao.com/profile_v4/graphic/publish'); }, title: '复制美化 HTML 并打开头条图文发布页' },
+    ],
+    xiaohongshu: [
+      { label: '适配并复制', cls: 'btn small primary', action: function () { adaptToPlatformWrapper('xiaohongshu', {{ draft.id }}); }, title: '适配为小红书风格并复制到剪贴板' },
+    ],
+    zhihu: [
+      { label: '适配并复制', cls: 'btn small primary', action: function () { adaptToPlatformWrapper('zhihu', {{ draft.id }}); }, title: '适配为知乎风格并复制到剪贴板' },
+    ],
+  };
+
+  function adaptToPlatformWrapper(platformId, draftId) {
+    var btn = event.target;
+    var origText = btn.textContent;
+    btn.disabled = true; btn.textContent = '⏳ 适配中…';
+    var formData = new FormData();
+    formData.set('platform', platformId);
+    fetch('/drafts/' + draftId + '/adapt', { method: 'POST', body: formData })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var title = (data.title_candidates && data.title_candidates[0]) || '';
+        var body = data.body_md || '';
+        navigator.clipboard.writeText(title + '\n\n' + body).then(function () {
+          if (data.publish_url) window.open(data.publish_url, '_blank', 'noopener');
+        });
+        btn.textContent = '✅ 已复制';
+        setTimeout(function () { btn.textContent = origText; btn.disabled = false; }, 2000);
+      }).catch(function () {
+        btn.textContent = origText; btn.disabled = false;
+      });
+  }
+
+  window.onSyncPlatformChange = function () {
+    var sel = document.getElementById('sync-platform');
+    var box = document.getElementById('platform-actions');
+    var copyBtn = document.getElementById('copy-html-btn');
+    _currentPlatform = sel.value;
+    box.innerHTML = '';
+    var actions = _platformActions[_currentPlatform] || [];
+    actions.forEach(function (a) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = a.cls;
+      b.textContent = a.label;
+      b.title = a.title || '';
+      b.onclick = a.action;
+      box.appendChild(b);
+    });
+    // Show copyHTML whenever a platform is selected
+    copyBtn.style.display = _currentPlatform ? '' : 'none';
+  };
+
+  window.onCopyHtml = function () {
+    var plat = _currentPlatform || 'wechat';
+    if (plat === 'toutiao') {
+      copyStyledHtml({{ draft.id }}, 'toutiao', 'https://mp.toutiao.com/profile_v4/graphic/publish');
+    } else {
+      copyStyledHtml({{ draft.id }}, 'wechat');
+    }
+  };
+
   // Copy themed inline-CSS HTML to the clipboard (as rich text/html) so it can
   // be pasted straight into the 公众号/头条 editor with formatting + images.
   async function copyStyledHtml(draftId, platform, openUrl) {
     const btn = event.target;
     const orig = btn.textContent;
-    const themeEl = document.getElementById('wx-theme');
-    const theme = (platform === 'wechat' && themeEl) ? themeEl.value : 'default';
+    const theme = 'default';  // wx-theme removed — component system replaces theme selector
     btn.disabled = true; btn.textContent = '⏳ 生成…';
     let data;
     try {
@@ -1680,8 +1776,10 @@ window.addEventListener('message', function (e) {
 
   window.toggleComponentDrawer = function () {
     var d = document.getElementById('component-drawer');
+    var b = document.getElementById('drawer-backdrop');
     var showing = d.style.display !== 'none';
     d.style.display = showing ? 'none' : 'flex';
+    if (b) b.style.display = showing ? 'none' : 'block';
     if (!showing && !drawerLoaded) { loadDrawer(); drawerLoaded = true; }
   };
 
@@ -1703,9 +1801,6 @@ window.addEventListener('message', function (e) {
       renderCats();
       cdRenderComponents();
       renderCustom();
-    }).catch(function () {});
-    fetch('/api/editor/templates').then(r => r.json()).then(function (data) {
-      renderTemplates(data.templates || []);
     }).catch(function () {});
     fetch('/api/editor/materials').then(r => r.json()).then(function (data) {
       renderMaterials(data.materials || []);
@@ -1756,22 +1851,6 @@ window.addEventListener('message', function (e) {
       row.appendChild(ed);
     }
     return row;
-  }
-
-  function renderTemplates(tpls) {
-    var list = document.getElementById('cd-tpl-list');
-    list.innerHTML = '';
-    tpls.forEach(function (t) {
-      var row = document.createElement('div');
-      row.className = 'cd-item';
-      row.innerHTML = '<div class="cd-item-main"><strong>' + esc(t.name) + '</strong>' +
-        '<span class="cd-item-cat">主题：' + esc(t.theme) + '</span></div>';
-      var b = document.createElement('button');
-      b.type = 'button'; b.className = 'btn small primary'; b.textContent = '应用';
-      b.onclick = function () { insertAtCursor('\n' + t.markdown + '\n'); };
-      row.appendChild(b);
-      list.appendChild(row);
-    });
   }
 
   function renderMaterials(mats) {
