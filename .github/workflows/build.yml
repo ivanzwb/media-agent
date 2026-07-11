@@ -47,7 +47,6 @@ jobs:
           pyinstaller --onedir `
             --collect-all "app" `
             --name "media-agent" `
-            --add-data "app/web/templates;app/web/templates" `
             --add-data "app/web/static;app/web/static" `
             --add-data "frontend/dist;frontend/dist" `
             --add-data "app/licensing/public_key.b64;app/licensing" `
@@ -165,7 +164,6 @@ jobs:
           pyinstaller --onedir \
             --collect-all "app" \
             --name "media-agent" \
-            --add-data "app/web/templates:app/web/templates" \
             --add-data "app/web/static:app/web/static" \
             --add-data "frontend/dist:frontend/dist" \
             --add-data "app/licensing/public_key.b64:app/licensing" \
