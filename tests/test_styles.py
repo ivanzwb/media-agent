@@ -238,7 +238,9 @@ def test_rewrite_uses_style_prompt_and_instruction():
     # First call is the rewrite; verify the style's system prompt was used.
     sys_msg = provider.calls[0][0]
     user_msg = provider.calls[0][1]
-    assert sys_msg.content == style.prompt
+    # The original style prompt is the base, with anti-slop appended
+    assert sys_msg.content.startswith(style.prompt)
+    assert "严禁 AI 腔" in sys_msg.content
     assert sys_msg.content != REWRITE_SYSTEM
     # Article content is substituted into the instruction.
     assert "The model scores 90" in user_msg.content
