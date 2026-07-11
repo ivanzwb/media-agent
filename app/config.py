@@ -61,6 +61,7 @@ class Config:
     download_videos: bool = True          # download article videos to local
     cli_tool: str | None = None          # "auto" | "opencode" | "codex" | "copilot" | "none"
     cli_timeout: int = 500               # CLI agent timeout in seconds
+    fetch_proxy: str | None = None       # HTTP proxy for RSS/scraper fetches (e.g. http://127.0.0.1:7890)
 
     @property
     def archive_dir(self) -> Path:
@@ -131,6 +132,7 @@ class Config:
             download_videos=os.environ.get("MEDIA_AGENT_DOWNLOAD_VIDEOS", "1") not in ("0", "false", "no"),
             cli_tool=os.environ.get("MEDIA_AGENT_CLI_TOOL", "none"),
             cli_timeout=_int_env("MEDIA_AGENT_CLI_TIMEOUT") or 500,
+            fetch_proxy=os.environ.get("MEDIA_AGENT_FETCH_PROXY"),
         )
         if store is not None:
             config._apply_db_overrides(store)

@@ -24,25 +24,27 @@ from app.pipeline.sanitizer import load_words, sanitize_draft
 from app.pipeline.score import compute_draft_score
 
 
-def _fetch_source(src) -> list[Article]:
+def _fetch_source(src, proxy: str | None = None) -> list[Article]:
     if src.type == "rss":
-        return fetch_feed(src.url, src.name)
+        return fetch_feed(src.url, src.name, proxy=proxy)
     if src.type == "scrape":
         if src.mode == "list":
             return scrape_list(
                 src.url, src.name, include_pattern=src.include_pattern,
                 exclude_pattern=src.exclude_pattern,
                 max_pages=getattr(src, "max_pages", 3) or 3,
-                render_js=getattr(src, "render_js", True))
+                render_js=getattr(src, "render_js", True), proxy=proxy)
         art = scrape_single(src.url, src.name,
-                            render_js=getattr(src, "render_js", True))
+                            render_js=getattr(src, "render_js", True),
+                            proxy=proxy)
         return [art] if art else []
     return []
 
 
 def collect_sources(feeds: FeedsConfig,
                     max_per_source: int | None = None,
-                    progress=None, workers: int | None = None) -> list[Article]:
+                    progress=None, workers: int | None = None,
+                    proxy: str | None = None) -> list[Article]:
     enabled = [s for s in feeds.sources if s.enabled]
     if not enabled:
         return []
@@ -58,7 +60,7 @@ def collect_sources(feeds: FeedsConfig,
         # Stagger concurrent requests to avoid tripping rate limits (429).
         time.sleep(random.uniform(0.3, 1.5))
         try:
-            items = _fetch_source(src)
+            items = _fetch_source(src, proxy=proxy)
         except Exception as e:  # noqa: BLE001
             # Log detailed failure info
             fetch_url = getattr(src, "url", "")
@@ -151,7 +153,8 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
         emit("开始抓取来源…", stats)
         articles = collect_sources(feeds, max_per_source=max_per_source,
                                    progress=lambda m: emit(m, stats),
-                                   workers=store.config.workers)
+                                   workers=store.config.workers,
+                                   proxy=store.config.fetch_proxy)
         emit(f"抓取完成，共 {len(articles)} 篇，去重中…", stats)
         articles = filter_by_age(articles, max_age_days)
         articles = dedup(articles)

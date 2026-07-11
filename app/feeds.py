@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 import threading
@@ -7,7 +8,36 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import httpx
 import yaml
+
+logger = logging.getLogger(__name__)
+
+_UA = {"User-Agent": "media-agent/0.1 (+https://localhost)"}
+
+
+def check_url_connectivity(url: str, timeout: float = 10.0,
+                           proxy: str | None = None) -> bool:
+    """Check whether *url* is reachable via HTTP.
+
+    Tries HEAD first (lightweight), falls back to GET for servers that reject
+    HEAD.  Returns ``True`` when the server responds with a 2xx status,
+    ``False`` on any connection error, timeout, or non-2xx response.
+    """
+    kwargs = dict(timeout=timeout, follow_redirects=True, headers=_UA)
+    if proxy:
+        kwargs["proxy"] = proxy
+    for method in ("HEAD", "GET"):
+        try:
+            resp = httpx.request(method, url, **kwargs)
+            resp.raise_for_status()
+            return True
+        except httpx.HTTPStatusError:
+            return False  # 4xx/5xx → definitely unreachable
+        except httpx.RequestError as exc:
+            logger.debug("URL check %s %s failed: %s", method, url, exc)
+            continue  # connection/network error → try next method
+    return False
 
 
 @dataclass

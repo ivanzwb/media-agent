@@ -19,7 +19,10 @@ from fastapi.staticfiles import StaticFiles
 from app.config import Config
 from app.db import connect, init_db
 from app.discovery import discover_from_url, discover_from_keyword
-from app.feeds import load_feeds, save_feeds, update_feeds, SourceConfig, Topic, FeedsConfig
+from app.feeds import (
+    check_url_connectivity, load_feeds, save_feeds, update_feeds,
+    SourceConfig, Topic, FeedsConfig,
+)
 from app.images.base import get_image_provider
 from app.llm.base import get_provider, get_rewrite_provider, Message, LLMProvider
 from app.llm.providers import cli as cli_provider
@@ -493,7 +496,8 @@ def create_app(config: Config | None = None,
         if not row:
             return {"ok": False, "error": "文章不存在"}
         try:
-            art = scrape_single(row["url"], row["source_name"] or "")
+            art = scrape_single(row["url"], row["source_name"] or "",
+                                proxy=store.config.fetch_proxy)
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": f"抓取失败：{e}"}
         if not art or not art.content_md:
@@ -1201,22 +1205,29 @@ def create_app(config: Config | None = None,
                     max_pages: str = Form("1"),
                     render_js: str = Form("")):
         topic_list = [t.strip() for t in topics.split(",") if t.strip()]
+        proxy = _resolve_proxy()
+        reachable = check_url_connectivity(url, proxy=proxy)
         def _do_add(cfg):
-            cfg.add_source(SourceConfig(
+            src = SourceConfig(
                 name=name, type=type, url=url, topics=topic_list, mode=mode,
                 include_pattern=include_pattern or None,
                 exclude_pattern=exclude_pattern or None,
                 max_pages=_to_int(max_pages, 1),
-                render_js=render_js in ("1", "on", "true")))
+                render_js=render_js in ("1", "on", "true"),
+                enabled=reachable)
+            cfg.add_source(src)
         update_feeds(feeds_path, _do_add)
         return RedirectResponse(url="/sources", status_code=303)
 
     def _append_sources(found):
         added = 0
+        proxy = _resolve_proxy()
         def _do_append(cfg):
             nonlocal added
             for s in found:
                 if cfg.add_source(s) is not None:
+                    if not check_url_connectivity(s.url, proxy=proxy):
+                        s.enabled = False
                     added += 1
         update_feeds(feeds_path, _do_append)
         return added
@@ -1251,6 +1262,14 @@ def create_app(config: Config | None = None,
         return {"status": "ok", **data}
 
     # ---- smart topic recommendation ----
+
+    def _resolve_proxy() -> str | None:
+        """Resolve the fetch proxy from Config, or None if not configured."""
+        try:
+            rc = Config.load(store=get_store())
+            return rc.fetch_proxy
+        except Exception:
+            return None
 
     def _resolve_provider(rc: Config | None = None) -> LLMProvider:
         """Get LLM provider respecting cli_tool: Agent (opencode/codex/copilot)

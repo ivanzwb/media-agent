@@ -44,7 +44,8 @@ def _to_dt(entry) -> datetime | None:
     return None
 
 
-def parse_feed(xml: str, source_name: str, enrich: bool = True) -> list[Article]:
+def parse_feed(xml: str, source_name: str, enrich: bool = True,
+               proxy: str | None = None) -> list[Article]:
     """Parse an RSS/Atom feed and return a list of Articles.
 
     When *enrich* is True (the default), the parser fetches each article's
@@ -53,6 +54,9 @@ def parse_feed(xml: str, source_name: str, enrich: bool = True) -> list[Article]
     feed provided, the page text replaces the feed content.  This ensures
     articles from feeds that only carry short summaries (e.g. NVIDIA
     Developer Blog) still get the full body.
+
+    If *proxy* is set (e.g. ``http://127.0.0.1:7890``), all HTTP calls go
+    through that proxy — useful for bypassing Cloudflare/WAF or GFW blocks.
     """
     feed = feedparser.parse(xml)
     now = datetime.now(timezone.utc)
@@ -67,7 +71,7 @@ def parse_feed(xml: str, source_name: str, enrich: bool = True) -> list[Article]
         # ── enrich: try to get full article from the original URL ──────
         if enrich and link:
             try:
-                full = _fetch_full_article(link)
+                full = _fetch_full_article(link, proxy=proxy)
                 if full and len(full) > len(body_html) * 1.5:
                     body_html = full
             except Exception:
@@ -88,15 +92,24 @@ def parse_feed(xml: str, source_name: str, enrich: bool = True) -> list[Article]
     return articles
 
 
-def _fetch_full_article(url: str, timeout: float = 15.0) -> str | None:
+def _fetch_full_article(url: str, timeout: float = 15.0,
+                        proxy: str | None = None) -> str | None:
     """Download the web page at *url* and extract its main text content.
 
     Returns the extracted content as HTML (preserving structure) or None on
     failure.  Uses trafilatura (primary) with readability-lxml as fallback.
+
+    If *proxy* is set (e.g. ``http://127.0.0.1:7890``), all HTTP calls go
+    through that proxy — useful for bypassing Cloudflare/WAF or GFW blocks.
     """
     try:
-        resp = httpx.get(url, timeout=timeout, follow_redirects=True,
-                         headers={"User-Agent": _UA_STR})
+        if proxy:
+            with httpx.Client(proxy=proxy, timeout=timeout,
+                              follow_redirects=True) as client:
+                resp = client.get(url, headers={"User-Agent": _UA_STR})
+        else:
+            resp = httpx.get(url, timeout=timeout, follow_redirects=True,
+                             headers={"User-Agent": _UA_STR})
         resp.raise_for_status()
         html = resp.text
     except Exception:
@@ -138,21 +151,30 @@ def _ua_header(attempt: int) -> dict[str, str]:
     return {"User-Agent": _ROTATED_UAS[idx]}
 
 
-def fetch_feed(url: str, source_name: str, timeout: float = 20.0) -> list[Article]:
+def fetch_feed(url: str, source_name: str, timeout: float = 20.0,
+               proxy: str | None = None) -> list[Article]:
     """Fetch and parse an RSS/Atom feed, with retry+backoff on transient errors.
 
     Transient failures (timeouts, connection errors, 5xx, 429) are retried up
     to ``_RSS_RETRIES`` times with exponential backoff.  Permanent failures
     (4xx other than 429) are raised immediately without retrying.
     User-Agent is rotated on each retry attempt.
+
+    If *proxy* is set (e.g. ``http://127.0.0.1:7890``), all HTTP calls go
+    through that proxy — useful for bypassing Cloudflare/WAF or GFW blocks.
     """
     last_exc: Exception | None = None
     for attempt in range(_RSS_RETRIES + 1):
         try:
-            resp = httpx.get(url, timeout=timeout, follow_redirects=True,
-                             headers=_ua_header(attempt))
+            if proxy:
+                with httpx.Client(proxy=proxy, timeout=timeout,
+                                  follow_redirects=True) as client:
+                    resp = client.get(url, headers=_ua_header(attempt))
+            else:
+                resp = httpx.get(url, timeout=timeout, follow_redirects=True,
+                                 headers=_ua_header(attempt))
             resp.raise_for_status()
-            return parse_feed(resp.text, source_name)
+            return parse_feed(resp.text, source_name, proxy=proxy)
         except httpx.HTTPStatusError as exc:
             last_exc = exc
             code = exc.response.status_code

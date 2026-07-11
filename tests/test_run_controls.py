@@ -39,7 +39,7 @@ def test_collect_sources_caps_per_source(monkeypatch):
         SourceConfig(name="X", type="rss", url="https://x.com/feed")])
     many = [art(f"a{i}") for i in range(5)]
     monkeypatch.setattr("app.pipeline.orchestrator.fetch_feed",
-                        lambda url, name: many)
+                        lambda url, name, **kwargs: many)
     out = collect_sources(feeds, max_per_source=2)
     assert len(out) == 2
 
@@ -53,7 +53,7 @@ def test_collect_sources_staggers_requests(monkeypatch):
     monkeypatch.setattr("app.pipeline.orchestrator.random.uniform",
                         lambda lo, hi: 0.8)  # deterministic
     monkeypatch.setattr("app.pipeline.orchestrator.fetch_feed",
-                        lambda url, name: [art("x")])
+                        lambda url, name, **kwargs: [art("x")])
     feeds = FeedsConfig(topics=[], sources=[
         SourceConfig(name="A", type="rss", url="https://a.com/feed"),
         SourceConfig(name="B", type="rss", url="https://b.com/feed"),
@@ -78,7 +78,7 @@ def test_run_pipeline_applies_controls(tmp_path, monkeypatch):
     items = [art("recent1", days_old=1), art("recent2", days_old=2),
              art("old", days_old=90)]
     monkeypatch.setattr("app.pipeline.orchestrator.fetch_feed",
-                        lambda url, name: items)
+                        lambda url, name, **kwargs: items)
     provider = MockProvider(responses=[
         json.dumps({"title_candidates": ["t"], "body_md": "b"}),
         json.dumps({"flagged_claims": []})] * 5)

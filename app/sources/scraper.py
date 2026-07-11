@@ -259,14 +259,36 @@ def _render_with_playwright(url: str, timeout: float) -> str | None:
             return None
 
 
+def _client_get(url: str, timeout: float, headers: dict[str, str],
+                proxy: str | None = None) -> httpx.Response:
+    """Fetch a URL via HTTP GET with timeout, follow-redirects, and optional proxy.
+
+    When *proxy* is set (e.g. ``http://127.0.0.1:7890``), all HTTP calls go
+    through that proxy — useful for bypassing Cloudflare/WAF or GFW blocks.
+
+    When *proxy* is ``None``, falls back to ``httpx.get()`` for compatibility
+    with downstream tests that patch ``httpx.get`` directly.
+    """
+    if proxy:
+        with httpx.Client(proxy=proxy, timeout=timeout,
+                          follow_redirects=True) as client:
+            return client.get(url, headers=headers)
+    return httpx.get(url, timeout=timeout, follow_redirects=True,
+                     headers=headers)
+
+
 def _fetch_html(url: str, render_js: bool = False,
-                timeout: float = 20.0, retries: int = 3) -> str:
+                timeout: float = 20.0, retries: int = 3,
+                proxy: str | None = None) -> str:
     """Fetch page HTML. With render_js, use Playwright (if available) for
     SPA/SSR sites, falling back to a plain httpx request.
 
     Transient failures (timeouts, connection errors, 5xx, 429) are retried up
     to ``retries`` times with exponential backoff. Permanent failures (4xx
     other than 429) are raised immediately without retrying.
+
+    If *proxy* is set (e.g. ``http://127.0.0.1:7890``), all HTTP calls go
+    through that proxy — useful for bypassing Cloudflare/WAF or GFW blocks.
     """
     if render_js:
         html = _render_with_playwright(url, timeout)
@@ -275,8 +297,7 @@ def _fetch_html(url: str, render_js: bool = False,
             # Always also fetch the plain HTML and keep whichever yields
             # more content after extraction.
             try:
-                resp = httpx.get(url, timeout=timeout, follow_redirects=True,
-                                 headers=_UA)
+                resp = _client_get(url, timeout, _UA, proxy=proxy)
                 resp.raise_for_status()
                 plain = resp.text
             except Exception:
@@ -297,8 +318,7 @@ def _fetch_html(url: str, render_js: bool = False,
     for attempt in range(1, retries + 1):
         try:
             ua = _ROTATED_UAS[(attempt - 1) % len(_ROTATED_UAS)]
-            resp = httpx.get(url, timeout=timeout, follow_redirects=True,
-                             headers={"User-Agent": ua})
+            resp = _client_get(url, timeout, {"User-Agent": ua}, proxy=proxy)
             resp.raise_for_status()
             return resp.text
         except httpx.HTTPStatusError as exc:
@@ -338,12 +358,16 @@ def _pagination_links(html: str, base_url: str) -> list[str]:
 
 def _discover_via_feeds_and_sitemap(
         base_url: str, page_html: str, include_pattern: str | None,
-        exclude_pattern: str | None, timeout: float = 20.0) -> list[str]:
+        exclude_pattern: str | None, timeout: float = 20.0,
+        proxy: str | None = None) -> list[str]:
     """Fallback article discovery (②-2/②-3) when HTML link scraping found
     nothing: try the page's declared RSS/Atom feeds, then the site sitemap.
 
     RSS/Atom entries are curated lists of articles, so the ``_is_non_article``
     URL heuristic is *not* applied to them; sitemap URLs are broader, so it is.
+
+    If *proxy* is set (e.g. ``http://127.0.0.1:7890``), all HTTP calls go
+    through that proxy — useful for bypassing Cloudflare/WAF or GFW blocks.
     """
     found: list[str] = []
     seen: set[str] = set()
@@ -363,7 +387,8 @@ def _discover_via_feeds_and_sitemap(
     try:
         for feed_url in feed_discovery.find_feed_urls(page_html or "", base_url):
             try:
-                xml = _fetch_html(feed_url, render_js=False, timeout=timeout)
+                xml = _fetch_html(feed_url, render_js=False, timeout=timeout,
+                                  proxy=proxy)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("feed fetch failed %s: %s", feed_url, exc)
                 continue
@@ -378,7 +403,8 @@ def _discover_via_feeds_and_sitemap(
     if not found:
         try:
             def _fetch(u: str) -> str:
-                return _fetch_html(u, render_js=False, timeout=timeout)
+                return _fetch_html(u, render_js=False, timeout=timeout,
+                                   proxy=proxy)
             for link in feed_discovery.sitemap_urls(
                     base_url, _fetch, include_pattern=include_pattern):
                 if _accept(link, drop_non_article=True):
@@ -449,8 +475,9 @@ def _is_article_content(data: dict) -> bool:
 
 
 def scrape_single(url: str, source_name: str, timeout: float = 20.0,
-                  render_js: bool = True) -> Article | None:
-    html = _fetch_html(url, render_js=render_js, timeout=timeout)
+                  render_js: bool = True,
+                  proxy: str | None = None) -> Article | None:
+    html = _fetch_html(url, render_js=render_js, timeout=timeout, proxy=proxy)
     data = extract_from_html(html, url=url)
 
     # Auto-fallback (②-1 / ①-4): if a non-rendered fetch produced no usable
@@ -459,7 +486,8 @@ def scrape_single(url: str, source_name: str, timeout: float = 20.0,
     if not render_js and (not _is_article_content(data)
                           or not data.get("published_at")):
         try:
-            html2 = _fetch_html(url, render_js=True, timeout=timeout)
+            html2 = _fetch_html(url, render_js=True, timeout=timeout,
+                                proxy=proxy)
         except Exception:  # noqa: BLE001
             html2 = ""
         if html2 and html2 != html:
@@ -488,7 +516,8 @@ def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
                 exclude_pattern: str | None = None,
                 max_articles: int = 10, delay: float = 1.0,
                 max_pages: int = 3, render_js: bool = True,
-                timeout: float = 20.0) -> list[Article]:
+                timeout: float = 20.0,
+                proxy: str | None = None) -> list[Article]:
     # Discover article links across the list page and (optionally) its
     # paginated siblings, then scrape each discovered article.
     article_links: list[str] = []
@@ -507,7 +536,8 @@ def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
         visited_pages.add(page_url)
         pages += 1
         try:
-            html = _fetch_html(page_url, render_js=render_js, timeout=timeout)
+            html = _fetch_html(page_url, render_js=render_js, timeout=timeout,
+                               proxy=proxy)
         except Exception as exc:  # noqa: BLE001
             logger.warning("scrape_list: failed to fetch list page %s: %s",
                            page_url, exc)
@@ -533,7 +563,7 @@ def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
     if not article_links:
         for link in _discover_via_feeds_and_sitemap(
                 url, seed_html, include_pattern, exclude_pattern,
-                timeout=timeout):
+                timeout=timeout, proxy=proxy):
             if link in seen_links or link.rstrip("/") == source_normalized:
                 continue
             seen_links.add(link)
@@ -543,7 +573,7 @@ def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
     for link in article_links[:max_articles]:
         try:
             art = scrape_single(link, source_name, render_js=render_js,
-                                timeout=timeout)
+                                timeout=timeout, proxy=proxy)
             if art:
                 articles.append(art)
             else:

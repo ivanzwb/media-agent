@@ -36,7 +36,7 @@ def test_run_pipeline_end_to_end(tmp_path, monkeypatch):
                               topics=["AI"])])
 
     monkeypatch.setattr("app.pipeline.orchestrator.collect_sources",
-                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None: fake_articles())
+                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None, proxy=None: fake_articles())
 
     rewrite_json = json.dumps({"title_candidates": ["爆款标题"],
                                "body_md": "## 钩子\n正文"})
@@ -58,7 +58,7 @@ def test_run_pipeline_skips_duplicates(tmp_path, monkeypatch):
     cfg, store = build(tmp_path)
     feeds = FeedsConfig(topics=[Topic(name="AI", keywords=["GPT"])], sources=[])
     monkeypatch.setattr("app.pipeline.orchestrator.collect_sources",
-                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None: fake_articles())
+                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None, proxy=None: fake_articles())
     provider = MockProvider(responses=[
         json.dumps({"title_candidates": ["t"], "body_md": "b"}),
         json.dumps({"flagged_claims": []})])
@@ -74,7 +74,7 @@ def test_run_pipeline_skips_same_title_source(tmp_path, monkeypatch):
 
     # First run: saves article with URL-A
     monkeypatch.setattr("app.pipeline.orchestrator.collect_sources",
-                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None: [
+                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None, proxy=None: [
         Article(title="Same Title", content_md="body", url="https://x.com/url-a",
                 source_name="Test Source", source_type="rss", published_at=None,
                 images=[], raw_summary=None,
@@ -88,7 +88,7 @@ def test_run_pipeline_skips_same_title_source(tmp_path, monkeypatch):
 
     # Second run: same title+source, different URL → should be skipped
     monkeypatch.setattr("app.pipeline.orchestrator.collect_sources",
-                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None: [
+                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None, proxy=None: [
         Article(title="Same Title", content_md="body", url="https://x.com/url-b",
                 source_name="Test Source", source_type="rss", published_at=None,
                 images=[], raw_summary=None,
@@ -214,7 +214,7 @@ def test_collect_sources_continues_after_failure(tmp_path, monkeypatch):
         response=httpx.Response(404, request=httpx.Request("GET", "https://broken.example.com/feed")),
     )
 
-    def mock_fetch(src):
+    def mock_fetch(src, proxy=None):
         if src.name == "Broken":
             raise exc
         return [good_article]
@@ -271,7 +271,7 @@ def test_run_pipeline_handles_source_failure(tmp_path, monkeypatch):
     )
 
     monkeypatch.setattr("app.pipeline.orchestrator.collect_sources",
-                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None: [])
+                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None, proxy=None: [])
 
     provider = MockProvider(responses=[
         json.dumps({"title_candidates": ["t"], "body_md": "b"}),

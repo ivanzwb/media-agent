@@ -249,7 +249,7 @@ def test_parse_feed_enrich_mixed_results():
     xml = FIXTURE.read_text(encoding="utf-8")
     long_content = "<p>Rich body" + "x" * 500 + "</p>"
 
-    def side_effect(url):
+    def side_effect(url, **kwargs):
         if "new-model" in url:
             return long_content  # enrich first article
         return None             # second article fetch fails
