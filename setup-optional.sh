@@ -150,9 +150,10 @@ if [ -f "$MODEL_DIR/model.pt" ]; then
 else
     echo "  Downloading CosyVoice2-0.5B model (~1.5 GB, first time only)..."
     mkdir -p "$MODEL_DIR"
-    "$PYTHON" -m pip install "huggingface_hub[cli]" --quiet
-    "$PYTHON" -m huggingface_hub.cli download \
-        FunAudioLLM/CosyVoice2-0.5B --local-dir "$MODEL_DIR"
+    # Note: `huggingface_hub[cli]` extra no longer exists in >=1.23.0,
+    # and `-m huggingface_hub.cli download` fails because cli is a package.
+    "$PYTHON" -m pip install huggingface_hub --quiet
+    "$PYTHON" -c "from huggingface_hub import snapshot_download; snapshot_download('FunAudioLLM/CosyVoice2-0.5B', local_dir='$MODEL_DIR')"
     echo "  [OK] Model downloaded"
 fi
 

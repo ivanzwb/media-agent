@@ -179,10 +179,12 @@ echo   Downloading CosyVoice2-0.5B model (~1.5 GB, first time only)...
 echo   This may take a while depending on your internet speed...
 if not exist "%MODEL_DIR%" mkdir "%MODEL_DIR%"
 
-:: Try using huggingface-cli first, fall back to direct download
-"%COSYVOICE_DIR%python.exe" -m pip install "huggingface_hub[cli]" --quiet
-"%COSYVOICE_DIR%python.exe" -m huggingface_hub.cli download ^
-    FunAudioLLM/CosyVoice2-0.5B --local-dir "%MODEL_DIR%"
+:: Use huggingface_hub.snapshot_download to download the model.
+:: Note: `huggingface_hub[cli]` extra no longer exists in >=1.23.0,
+:: and `-m huggingface_hub.cli download` fails because cli is a package.
+"%COSYVOICE_DIR%python.exe" -m pip install huggingface_hub --quiet
+"%COSYVOICE_DIR%python.exe" -c ^
+"from huggingface_hub import snapshot_download; snapshot_download('FunAudioLLM/CosyVoice2-0.5B', local_dir=r'%MODEL_DIR%')"
 if %errorlevel% neq 0 (
     echo   [FAIL] Model download failed
     echo.
