@@ -5,7 +5,7 @@ import {
 } from "antd";
 import { RobotOutlined } from "@ant-design/icons";
 import MDEditor, { commands, type ICommand } from "@uiw/react-md-editor";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, getJson, postForm } from "../api/client";
 import SceneEditor from "../components/SceneEditor";
@@ -124,6 +124,41 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     const ta = editorRef.current?.querySelector<HTMLTextAreaElement>(".w-md-editor-text-input");
     if (!ta) return "";
     return body.slice(ta.selectionStart ?? 0, ta.selectionEnd ?? 0);
+  }
+
+  // ── Undo / redo history (controlled textarea breaks native Ctrl+Z) ──
+  const pastRef = useRef<string[]>([]);
+  const futureRef = useRef<string[]>([]);
+  const lastPushRef = useRef(0);
+  function handleChange(v: string | undefined) {
+    const next = v ?? "";
+    const now = Date.now();
+    // Coalesce rapid keystrokes into one history entry (300ms window).
+    if (now - lastPushRef.current > 300) {
+      pastRef.current.push(body);
+      if (pastRef.current.length > 300) pastRef.current.shift();
+      futureRef.current = [];
+    }
+    lastPushRef.current = now;
+    setBody(next);
+  }
+  function undo() {
+    if (!pastRef.current.length) return;
+    futureRef.current.push(body);
+    setBody(pastRef.current.pop()!);
+    lastPushRef.current = 0;
+  }
+  function redo() {
+    if (!futureRef.current.length) return;
+    pastRef.current.push(body);
+    setBody(futureRef.current.pop()!);
+    lastPushRef.current = 0;
+  }
+  function onEditorKeyDown(e: ReactKeyboardEvent) {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const k = e.key.toLowerCase();
+    if (k === "z" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); undo(); }
+    else if (k === "y" || (k === "z" && e.shiftKey)) { e.preventDefault(); e.stopPropagation(); redo(); }
   }
 
   async function rewrite() {
@@ -307,8 +342,8 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
             <Input placeholder="文章中文标题" value={titleCn} onChange={(e) => setTitleCn(e.target.value)} style={{ marginBottom: 8 }} />
             <Input.TextArea placeholder="候选标题（每行一个）" value={titleCands} onChange={(e) => setTitleCands(e.target.value)} rows={2} style={{ marginBottom: 8 }} />
 
-            <div ref={editorRef} data-color-mode="light">
-              <MDEditor value={body} onChange={(v) => setBody(v || "")} height={560}
+            <div ref={editorRef} data-color-mode="light" onKeyDownCapture={onEditorKeyDown}>
+              <MDEditor value={body} onChange={handleChange} height={560}
                 preview="live" commands={editorCommands} />
             </div>
           </Card>
