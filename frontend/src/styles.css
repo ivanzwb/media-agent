@@ -6,6 +6,16 @@ body {
 }
 .ma-content { padding: 24px; min-width: 1200px; width: min(88vw, 1600px); margin: 0 auto; height: 100%; display: flex; flex-direction: column; }
 
+/* ── DraftEdit: lock page at 100vh, only editor scrollbar ── */
+body:has(.ma-draft-edit),
+body:has(.ma-draft-edit) #root,
+body:has(.ma-draft-edit) .ant-layout {
+  overflow: hidden; height: 100vh;
+}
+body:has(.ma-draft-edit) .ma-content {
+  overflow: hidden;
+}
+
 /* ── DraftEdit: full-height tab content ── */
 .ma-draft-edit { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .ma-draft-edit > .ant-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
