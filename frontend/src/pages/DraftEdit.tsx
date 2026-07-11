@@ -4,7 +4,7 @@ import {
   Input, Alert, Modal, Drawer, Tooltip, Divider, FloatButton,
 } from "antd";
 import { RobotOutlined } from "@ant-design/icons";
-import MDEditor from "@uiw/react-md-editor";
+import MDEditor, { commands, type ICommand } from "@uiw/react-md-editor";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, getJson, postForm } from "../api/client";
@@ -214,6 +214,41 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   const styleOptions = [{ value: "", label: "默认（全局）" },
     ...(styleData?.styles || []).map((s) => ({ value: s.id, label: s.name + (s.is_builtin ? "" : "（自定义）") }))];
 
+  const { data: tplData } = useQuery({
+    queryKey: ["editor-templates"],
+    queryFn: () => getJson<{ templates: { id: string; name: string; markdown: string }[] }>("/api/editor/templates"),
+  });
+
+  // Custom buttons injected into the MDEditor toolbar (mirrors trunk).
+  const label = (t: string): ICommand["icon"] => (<span style={{ fontSize: 12, padding: "0 2px" }}>{t}</span>);
+  const styleCommands: ICommand[] = [
+    { name: "hl", keyCommand: "hl", buttonProps: { title: "高亮" }, icon: label("高亮"),
+      execute: (s, api) => api.replaceSelection(`==${s.selectedText || "高亮"}==`) },
+    { name: "color", keyCommand: "color", buttonProps: { title: "彩色字" }, icon: label("彩色字"),
+      execute: (s, api) => { const c = prompt("颜色（如 #e67514）", "#e67514"); if (c) api.replaceSelection(`{color:${c}}${s.selectedText || "彩色文字"}{/color}`); } },
+    { name: "center", keyCommand: "center", buttonProps: { title: "居中" }, icon: label("居中"),
+      execute: (s, api) => api.replaceSelection(`\n:::center\n${s.selectedText || "居中文字"}\n:::\n\n`) },
+    { name: "tip", keyCommand: "tip", buttonProps: { title: "提示卡片" }, icon: label("提示卡片"),
+      execute: (s, api) => api.replaceSelection(`\n:::tip\n💡 ${s.selectedText || "提示内容"}\n:::\n\n`) },
+    { name: "quote2", keyCommand: "quote2", buttonProps: { title: "引用" }, icon: label("引用"),
+      execute: (s, api) => api.replaceSelection((s.selectedText || "引用文字").split("\n").map((l) => `> ${l}`).join("\n")) },
+  ];
+  const templateGroup: ICommand = commands.group(
+    (tplData?.templates || []).map((t) => ({
+      name: t.id, keyCommand: t.id, buttonProps: { title: t.name }, icon: label(t.name),
+      execute: (_s: any, api: any) => api.replaceSelection(`\n${t.markdown}\n`),
+    })),
+    { name: "template", groupName: "template", buttonProps: { title: "套用模板" }, icon: label("套用模板 ▾") },
+  );
+  const panelCommand: ICommand = {
+    name: "panel", keyCommand: "panel", buttonProps: { title: "组件面板" }, icon: label("组件面板 ▸"),
+    execute: () => setDrawerOpen(true),
+  };
+  const editorCommands: ICommand[] = [
+    ...commands.getCommands(), commands.divider,
+    ...styleCommands, commands.divider, templateGroup, panelCommand,
+  ];
+
   return (
     <>
       {data.flagged_claims?.length > 0 && (
@@ -272,17 +307,9 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
             <Input placeholder="文章中文标题" value={titleCn} onChange={(e) => setTitleCn(e.target.value)} style={{ marginBottom: 8 }} />
             <Input.TextArea placeholder="候选标题（每行一个）" value={titleCands} onChange={(e) => setTitleCands(e.target.value)} rows={2} style={{ marginBottom: 8 }} />
 
-            <Space wrap style={{ marginBottom: 8 }}>
-              <Button size="small" onClick={() => wrapSelection("==", "==", "高亮")}>高亮</Button>
-              <Button size="small" onClick={() => { const c = prompt("颜色（如 #e67514）", "#e67514"); if (c) wrapSelection(`{color:${c}}`, "{/color}", "彩色文字"); }}>彩色字</Button>
-              <Button size="small" onClick={() => insertAtCursor("\n:::center\n居中文字\n:::\n\n")}>居中</Button>
-              <Button size="small" onClick={() => insertAtCursor("\n:::tip\n💡 提示内容\n:::\n\n")}>提示卡片</Button>
-              <Button size="small" onClick={() => insertAtCursor("\n> 引用文字\n\n")}>引用</Button>
-              <Button size="small" type="primary" onClick={() => setDrawerOpen(true)}>组件面板 ▸</Button>
-            </Space>
-
             <div ref={editorRef} data-color-mode="light">
-              <MDEditor value={body} onChange={(v) => setBody(v || "")} height={560} preview="live" />
+              <MDEditor value={body} onChange={(v) => setBody(v || "")} height={560}
+                preview="live" commands={editorCommands} />
             </div>
           </Card>
         </Col>
