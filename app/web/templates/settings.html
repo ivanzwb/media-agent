@@ -550,6 +550,24 @@ function cancelRecording() {
     </div>
 
     <div class="field">
+      <label class="check">
+        <input type="checkbox" name="download_images" value="1"
+               {{ download_images_checked }}/>
+        本地化图片 <span class="env-hint">MEDIA_AGENT_DOWNLOAD_IMAGES</span>
+      </label>
+      <span class="field-desc">归档时把文章中的图片下载到本地，避免防盗链失效。关闭后正文引用保留远程 URL</span>
+    </div>
+
+    <div class="field">
+      <label class="check">
+        <input type="checkbox" name="download_videos" value="1"
+               {{ download_videos_checked }}/>
+        本地化视频 <span class="env-hint">MEDIA_AGENT_DOWNLOAD_VIDEOS</span>
+      </label>
+      <span class="field-desc">归档时把文章中的视频下载到本地（需 yt-dlp），避免防盗链失效。关闭后正文引用保留远程 URL</span>
+    </div>
+
+    <div class="field">
       <label for="video_fit">讲解视频画面适配 <span class="env-hint">MEDIA_AGENT_VIDEO_FIT_MODE</span></label>
       <select name="video_fit" id="video_fit" style="max-width:240px">
         <option value="fit" {{ 'selected' if video_fit == 'fit' else '' }}>fit（完整显示，黑边填充）</option>

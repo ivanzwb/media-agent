@@ -255,7 +255,9 @@ def create_app(config: Config | None = None,
             feeds_cfg, store, provider, image_provider=image_provider,
             record=True, max_age_days=run_config.max_age_days,
             max_per_source=run_config.max_per_source,
-            download_media=True, progress=progress,
+            download_images=run_config.download_images,
+            download_videos=run_config.download_videos,
+            progress=progress,
             rewrite_gate=_rewrite_gate, style=style)
 
     # ---- background run state (for live progress / logs) ----
@@ -442,7 +444,9 @@ def create_app(config: Config | None = None,
         # Auto-localize media after refetch
         localized = 0
         try:
-            localize_article(art, store.config)
+            localize_article(art, store.config,
+                             download_images=store.config.download_images,
+                             download_videos=store.config.download_videos)
             localized = sum(1 for u in art.images + art.videos if u.startswith("/media/"))
         except Exception:                          # noqa: BLE001
             pass
@@ -1825,6 +1829,8 @@ def create_app(config: Config | None = None,
             ops.begin(op_key, "localize", article_id, op_conn)
             try:
                 stats = localize_one(article_id, get_store(), config,
+                                     download_images=config.download_images,
+                                     download_videos=config.download_videos,
                                      progress=_mlz_log)
                 with mlz_lock:
                     mlz_state["stats"] = stats
@@ -2293,6 +2299,8 @@ def create_app(config: Config | None = None,
         db_sensitive_words = store.get_setting("sensitive_words") or ""
         db_promotion_footer = store.get_setting("promotion_footer") or ""
         db_cli_tool = store.get_setting("cli_tool") or ""
+        db_download_images = store.get_setting("download_images") or ""
+        db_download_videos = store.get_setting("download_videos") or ""
 
         # API key: indicate whether set, mask the value
         api_key_val = store.get_setting("llm_api_key")
@@ -2356,6 +2364,10 @@ def create_app(config: Config | None = None,
             "sensitive_words": db_sensitive_words or (config.sensitive_words or ""),
             "promotion_footer": db_promotion_footer or (config.promotion_footer or ""),
             "cli_tool": db_cli_tool or (config.cli_tool or "auto"),
+            "download_images": (db_download_images or "1") not in ("0", "false", "no", ""),
+            "download_videos": (db_download_videos or "1") not in ("0", "false", "no", ""),
+            "download_images_checked": "checked" if (db_download_images or "1") not in ("0", "false", "no", "") else "",
+            "download_videos_checked": "checked" if (db_download_videos or "1") not in ("0", "false", "no", "") else "",
             "api_key_set": api_key_set,
             "api_key_masked": masked,
             "img_key_set": img_key_set,
@@ -2400,10 +2412,12 @@ def create_app(config: Config | None = None,
                        wechat_appid: str = Form(""),
                        wechat_appsecret: str = Form(""),
                        wechat_author: str = Form(""),
-                       cli_tool: str = Form(""),
-                       rewrite_style: str = Form(""),
-                       schedule_cron: str = Form(""),
-                      schedule_enabled: str = Form("0")):
+                       download_images: str = Form("0"),
+                       download_videos: str = Form("0"),
+                        cli_tool: str = Form(""),
+                        rewrite_style: str = Form(""),
+                        schedule_cron: str = Form(""),
+                       schedule_enabled: str = Form("0")):
         store = get_store()
 
         # String config fields: save if non-empty, delete if empty
@@ -2486,6 +2500,12 @@ def create_app(config: Config | None = None,
                     store.delete_setting("download_workers")
             except ValueError:
                 pass
+
+        # Media localization options
+        store.set_setting("download_images",
+                          "1" if download_images in ("1", "on", "true") else "0")
+        store.set_setting("download_videos",
+                          "1" if download_videos in ("1", "on", "true") else "0")
 
         # Default rewrite style: validate against the registry; empty or the
         # builtin default clears the setting (falls back to deep-tech).
