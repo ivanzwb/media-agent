@@ -30,4 +30,6 @@ build/
 # Frontend (React SPA)
 node_modules/
 frontend/dist/
+frontend/.vite/
+.vite/
 *.tsbuildinfo

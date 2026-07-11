@@ -37,9 +37,10 @@ export default function Settings() {
       const v = await form.getFieldsValue();
       const keyFields = ["llm_api_key", "image_api_key", "tts_api_key", "wechat_appsecret"];
       const payload: Record<string, any> = {};
+      const boolFields = ["schedule_enabled", "download_images", "download_videos"];
       for (const [k, val] of Object.entries(v)) {
         if (keyFields.includes(k)) { if (val) payload[k] = val; continue; }
-        if (k === "schedule_enabled") { payload[k] = val ? "1" : "0"; continue; }
+        if (boolFields.includes(k)) { payload[k] = val ? "1" : "0"; continue; }
         payload[k] = val ?? "";
       }
       await postForm("/settings", payload);
@@ -69,6 +70,7 @@ export default function Settings() {
         promotion_footer: data.promotion_footer,
         wechat_appid: data.wechat_appid, wechat_author: data.wechat_author,
         rewrite_style: data.rewrite_style,
+        download_images: data.download_images, download_videos: data.download_videos,
         schedule_cron: data.schedule_cron, schedule_enabled: data.schedule_enabled,
         llm_api_key: "", image_api_key: "", tts_api_key: "", wechat_appsecret: "",
       }}>
@@ -121,6 +123,14 @@ export default function Settings() {
           <Form.Item name="max_age_days" label="最大天数（留空不限）"><Input /></Form.Item>
           <Form.Item name="max_per_source" label="每来源最多抓取（留空不限）"><Input /></Form.Item>
           <Form.Item name="download_workers" label={`并发下载数（默认 ${data.default_workers}）`}><Input /></Form.Item>
+          <Form.Item name="download_images" label="本地化图片" valuePropName="checked"
+            tooltip="归档时把文章图片下载到本地，避免防盗链失效；关闭则保留远程 URL（MEDIA_AGENT_DOWNLOAD_IMAGES）">
+            <Switch />
+          </Form.Item>
+          <Form.Item name="download_videos" label="本地化视频" valuePropName="checked"
+            tooltip="归档时把文章视频下载到本地（需 yt-dlp）；关闭则保留远程 URL（MEDIA_AGENT_DOWNLOAD_VIDEOS）">
+            <Switch />
+          </Form.Item>
           <Form.Item name="video_fit" label="视频适配">
             <Select options={["fit", "crop", "blur"].map((v) => ({ value: v }))} />
           </Form.Item>
