@@ -15,6 +15,16 @@ jobs:
         with:
           python-version: "3.11"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build frontend (React SPA)
+        run: |
+          npm ci
+          npm run build
+        working-directory: frontend
+
       - name: Install deps
         run: |
           pip install -r requirements.txt
@@ -39,6 +49,7 @@ jobs:
             --name "media-agent" `
             --add-data "app/web/templates;app/web/templates" `
             --add-data "app/web/static;app/web/static" `
+            --add-data "frontend/dist;frontend/dist" `
             --add-data "app/licensing/public_key.b64;app/licensing" `
             --add-data "packaging/python-embed-win64.zip;packaging" `
             --add-data "packaging/get-pip.py;packaging" `
@@ -127,6 +138,16 @@ jobs:
         with:
           python-version: "3.11"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build frontend (React SPA)
+        run: |
+          npm ci
+          npm run build
+        working-directory: frontend
+
       - name: Install deps
         run: |
           pip install -r requirements.txt
@@ -146,6 +167,7 @@ jobs:
             --name "media-agent" \
             --add-data "app/web/templates:app/web/templates" \
             --add-data "app/web/static:app/web/static" \
+            --add-data "frontend/dist:frontend/dist" \
             --add-data "app/licensing/public_key.b64:app/licensing" \
             --add-data "packaging/python-embed-macos.tar.gz:packaging" \
             --add-data "packaging/get-pip.py:packaging" \

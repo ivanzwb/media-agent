@@ -35,6 +35,19 @@ for (const p of ["/sources", "/drafts", "/archive", "/settings"]) {
 
 export default defineConfig({
   plugins: [react()],
-  build: { outDir: "dist", emptyOutDir: true },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    chunkSizeWarningLimit: 1200,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom", "react-router-dom"],
+          antd: ["antd", "@ant-design/icons"],
+          editor: ["@uiw/react-md-editor", "marked"],
+        },
+      },
+    },
+  },
   server: { port: 5173, proxy },
 });
