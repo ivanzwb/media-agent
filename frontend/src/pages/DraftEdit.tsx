@@ -7,6 +7,7 @@ import MDEditor from "@uiw/react-md-editor";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, getJson, postForm } from "../api/client";
+import SceneEditor from "../components/SceneEditor";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -347,6 +348,7 @@ function VideoTab({ data }: { data: DraftData }) {
   const [narrating, setNarrating] = useState(false);
   const [synth, setSynth] = useState(false);
   const [hasVideo, setHasVideo] = useState(data.has_video);
+  const [voice, setVoice] = useState<string | undefined>(undefined);
 
   const { data: voices } = useQuery({ queryKey: ["voices"], queryFn: () => getJson<{ voices: any[] }>("/api/voices") });
 
@@ -378,7 +380,8 @@ function VideoTab({ data }: { data: DraftData }) {
       <Paragraph type="secondary">基于正文自动生成口播分镜脚本并逐段配音，再合成 mp4（需本地 ffmpeg）。</Paragraph>
       <Space wrap>
         <Text>TTS 音色：</Text>
-        <Select style={{ width: 220 }} placeholder="选择音色" options={(voices?.voices || []).map((v: any) => ({ value: v.id, label: v.name || v.id }))} />
+        <Select style={{ width: 220 }} placeholder="选择音色" value={voice} onChange={setVoice}
+          options={(voices?.voices || []).map((v: any) => ({ value: v.id, label: v.name || v.id }))} />
         <Button type="primary" className="pro-feature" loading={narrating} onClick={genNarration}>
           {data.has_narration ? "重新生成讲解脚本+配音" : "生成讲解脚本+配音"}
         </Button>
@@ -402,7 +405,8 @@ function VideoTab({ data }: { data: DraftData }) {
           </div>
         </div>
       )}
-      <Text type="secondary">注：分镜逐段编辑（scene editor）将在后续补齐。</Text>
+      <Divider>分镜编辑</Divider>
+      <SceneEditor draftId={data.id} ttsVoice={voice} />
     </Space>
   );
 }
