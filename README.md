@@ -39,6 +39,22 @@
 
 > 版权提示：把第三方视频片段剪入自己的成片并发布可能涉及版权，请自行注明出处或取得授权；AI 生成图建议标注「AI 生成」。
 
+## 一键启动
+
+确保已安装 [Node.js](https://nodejs.org) 和 Python 3.11+ 后：
+
+```bash
+# Windows：双击 start.bat
+start.bat
+
+# macOS / Linux：
+bash start.sh
+```
+
+脚本会自动完成：创建 Python 虚拟环境 → 安装依赖 → 构建前端 SPA → 启动 Web 服务。首次运行需下载 npm 包，耗时约 1-2 分钟。
+
+启动后访问 **http://127.0.0.1:8000** 即可打开 Web 界面（基于 React SPA）。
+
 ## 安装
 
 需要 Python 3.11+（已在 3.12 验证）。
@@ -91,6 +107,8 @@ macOS:    media-agent/media-agent serve
 # Windows：双击 build-win.bat → dist\media-agent-win64.zip
 # macOS：   bash build-mac.sh  → dist/media-agent/
 ```
+
+开发时也可用 `start.bat` / `start.sh` 一键构建前端并启动服务（见「一键启动」）。
 
 CI 自动构建：推送带 `v*` 的 tag 即触发 GitHub Actions，同时输出 Win + Mac 两版到 Release。
 
@@ -219,10 +237,12 @@ app/
 ├─ platforms/           # 平台同步（wechat / xiaohongshu / toutiao / zhihu）— 可插拔架构
 ├─ pipeline/            # classifier / rewriter / sanitizer / localize / recommender(+热度)
 │                       #   / script / narration / images / adapter / video / orchestrator
-└─ web/                 # FastAPI 服务 + 模板 + 静态资源
+├─ web/                 # FastAPI 服务 + 静态资源 + React SPA 挂载
+frontend/               # React SPA 源码（Vite + Ant Design + React Router）
 tests/                  # pytest（160 个测试）
 feeds.yaml  requirements.txt
 build-win.bat build-mac.sh  # 本地打包脚本
+start.bat start.sh      # 一键启动脚本（构建前端 + 启动服务）
 ```
 
 ### `tools/` — 许可与加固

@@ -12,6 +12,22 @@ if %errorlevel% neq 0 (
 )
 echo Python OK
 
+:: Check Node.js
+where node >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [ERROR] Node.js not found. Install from https://nodejs.org
+    pause & exit /b 1
+)
+echo Node.js OK
+
+:: Build React SPA
+echo Building frontend...
+cd frontend
+call npm install --silent
+call npm run build
+cd ..
+echo Frontend built
+
 :: Install deps
 echo Installing dependencies...
 pip install -r requirements.txt
@@ -26,7 +42,7 @@ echo Building...
 pyinstaller --onedir ^
     --collect-all "app" ^
     --name "media-agent" ^
-    --add-data "app/web/templates;app/web/templates" ^
+    --add-data "frontend/dist;frontend/dist" ^
     --add-data "app/web/static;app/web/static" ^
     --add-data "app/licensing/public_key.b64;app/licensing" ^
     --exclude-module "torch" ^

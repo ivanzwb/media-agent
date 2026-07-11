@@ -5,6 +5,13 @@ echo "=== Media Agent macOS Build ==="
 # Check Python
 python3 -c "import sys; assert sys.version_info >= (3,11), 'Need Python 3.11+'; print(f'Python {sys.version_info.major}.{sys.version_info.minor} OK')"
 
+# Build React SPA
+echo "Building frontend..."
+cd frontend
+npm install --silent
+npm run build
+cd ..
+
 # Install deps
 pip3 install -r requirements.txt
 pip3 install "click<8.2" pyinstaller fish-audio-sdk playwright
@@ -13,7 +20,7 @@ pip3 install "click<8.2" pyinstaller fish-audio-sdk playwright
 pyinstaller --onedir \
     --collect-all "app" \
     --name "media-agent" \
-    --add-data "app/web/templates:app/web/templates" \
+    --add-data "frontend/dist:frontend/dist" \
     --add-data "app/web/static:app/web/static" \
     --add-data "app/licensing/public_key.b64:app/licensing" \
     --exclude-module "torch" \
