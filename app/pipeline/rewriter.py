@@ -5,6 +5,7 @@ import re
 
 from app.llm.base import LLMProvider, Message
 from app.models import Article, Draft
+from app.pipeline.anti_slop import ANTI_SLOP_SYSTEM_INSTRUCTION, post_process
 
 REWRITE_SYSTEM = (
     "你是科技媒体主编，负责将英文技术文章改写为深度中文自媒体报道。"
@@ -13,7 +14,8 @@ REWRITE_SYSTEM = (
     "目标：用最通俗的语言讲最硬的科技，让非技术读者也能看懂。"
     "绝不在原文基础上添加夸张描述或自己的判断。"
     "不确定的内容不要写。\n\n"
-    "⚠️ 只输出到 stdout，不得在磁盘上创建或修改任何文件。"
+    "⚠️ 只输出到 stdout，不得在磁盘上创建或修改任何文件。\n\n"
+    + ANTI_SLOP_SYSTEM_INSTRUCTION
 )
 
 REWRITE_INSTRUCTION = (
@@ -75,7 +77,11 @@ REWRITE_INSTRUCTION = (
     "- 不得夸大原文的数字、结论或影响力\n"
     "- 不得添加个人评价（如「这是一个了不起的创新」）\n"
     "- 不得不确定原文是否提及就写「据 X 报道/分析」\n"
-    "- 引用原文一定要准确对应，不要混淆不同来源的信息\n\n"
+    "- 引用原文一定要准确对应，不要混淆不同来源的信息\n"
+    "- 严禁 AI 腔：不要空泛开头（随着、近年来）、不要假深刻（不仅是…更是）、"
+    "不要报告套话（赋能、抓手、闭环）、不要科技博客体（干货满满、保姆级教程）、"
+    "不要公众号体（愿我们都能）、不要假口语（说实话、懂的都懂）、"
+    "不要机械结构（总的来说、综上所述）、不要结尾升华。\n\n"
     "### 图文结合\n\n"
     "{manifest}\n\n"
     "### 图片/视频插入规则\n\n"
@@ -572,7 +578,7 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
         # Convert the str.format template ({{/}} escaped) to replace-form.
         instruction_tmpl = REWRITE_INSTRUCTION.replace("{{", "{").replace("}}", "}")
     else:
-        system_prompt = style.prompt
+        system_prompt = style.prompt + "\n\n" + ANTI_SLOP_SYSTEM_INSTRUCTION
         instruction_tmpl = style.instruction
 
     # Promotion block: if provided, tells the LLM to generate a
@@ -633,6 +639,9 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
                 else:
                     title_candidates = [article.title]
                     body_md = raw
+
+    # Post-process: remove AI slop patterns from the LLM output
+    body_md = post_process(body_md)
 
     # Replace any stray [[IMG:N]] / [[VID:N]] tokens the LLM may have output
     body_md = _apply_placeholders(body_md, media_map)

@@ -23,6 +23,7 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from app.pipeline.anti_slop import ANTI_SLOP_SYSTEM_INSTRUCTION
 from app.pipeline.rewriter import REWRITE_INSTRUCTION, REWRITE_SYSTEM
 
 if TYPE_CHECKING:
@@ -69,6 +70,7 @@ _COMMON_RULES = (
     "- 短句、短段落，手机友好。长难句拆成 2-3 个短句。\n"
     "- 结尾注明原文标题、来源，以及（若原文提供）日期。\n"
     "{promotion_block}\n\n"
+    + ANTI_SLOP_SYSTEM_INSTRUCTION + "\n\n"
 )
 
 _MEDIA_AND_OUTPUT = (
