@@ -180,6 +180,7 @@ def _download_set(urls, dest: Path, folder: str, fn, workers: int,
 
 
 def localize_article(article: Article, config: Config, progress=None,
+                     download_images: bool = True,
                      download_videos: bool = True,
                      max_images: int = 20) -> Article:
     """Download an article's images and videos into data/media/<hash>/ and
@@ -195,9 +196,12 @@ def localize_article(article: Article, config: Config, progress=None,
     imgs = (article.images or [])[:max_images]
     emit(f"图片 {len(imgs)} 张，视频 {len(article.videos or [])} 个"
          f"（并发 {workers}）")
-    article.images = _download_set(imgs, dest, folder, _download_image,
-                                    workers, emit,
-                                    source_url=article.url)
+    if download_images:
+        article.images = _download_set(imgs, dest, folder, _download_image,
+                                        workers, emit,
+                                        source_url=article.url)
+    else:
+        emit("  图片本地化已禁用，跳过")
 
     # Replace remote image URLs in the article body with local paths so
     # the body's <img> tags and the images front-matter don't duplicate.
@@ -216,11 +220,14 @@ def localize_article(article: Article, config: Config, progress=None,
         article.videos = _download_set(article.videos, dest, folder,
                                        _download_video, vworkers, emit,
                                        source_url=article.url)
+    elif not download_videos and article.videos:
+        emit("  视频本地化已禁用，跳过")
 
     return article
 
 
 def localize_one(article_id: int, store, config: Config, progress=None,
+                 download_images: bool = True,
                  download_videos: bool = True) -> dict:
     """Localize a single archived article's media (used before transcribing)."""
     emit = progress or _noop
@@ -265,6 +272,7 @@ def localize_one(article_id: int, store, config: Config, progress=None,
         fetched_at=datetime.now(timezone.utc), videos=list(orig_videos))
     emit(f"本地化：{(row['title'] or '')[:40]}")
     localize_article(art, config, progress=lambda m: emit("  " + m),
+                     download_images=download_images,
                      download_videos=download_videos)
 
     # Replace any newly-localized remote URLs inside the article body too, so

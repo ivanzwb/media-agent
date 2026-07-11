@@ -137,7 +137,8 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
                  record: bool = False,
                  max_age_days: int | None = None,
                  max_per_source: int | None = None,
-                 download_media: bool = False,
+                 download_images: bool = True,
+                 download_videos: bool = True,
                  progress=None,
                  rewrite_gate=None,
                  style=None) -> dict:
@@ -164,10 +165,12 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
             if store.exists_by_title_source(art.title, art.source_name):
                 continue
             art.topic = classify(art, feeds.topics, provider)
-            if download_media:
+            if download_images or download_videos:
                 emit(f"下载媒体到本地：{art.title[:40]}", stats)
                 try:
                     localize_article(art, store.config,
+                                     download_images=download_images,
+                                     download_videos=download_videos,
                                      progress=lambda m: emit(m, stats))
                 except Exception as e:  # noqa: BLE001
                     emit(f"  媒体本地化失败（保留远程链接）：{e}", stats)

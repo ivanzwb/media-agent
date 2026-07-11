@@ -57,6 +57,8 @@ class Config:
     wechat_appsecret: str | None = None  # WeChat Official Account AppSecret
     wechat_author: str | None = None     # default author shown on published 图文
     rewrite_style: str | None = None     # default rewrite style id (see app.pipeline.styles)
+    download_images: bool = True          # download article images to local
+    download_videos: bool = True          # download article videos to local
     cli_tool: str | None = None          # "auto" | "opencode" | "codex" | "copilot" | "none"
     cli_timeout: int = 500               # CLI agent timeout in seconds
 
@@ -125,6 +127,8 @@ class Config:
             wechat_appsecret=os.environ.get("MEDIA_AGENT_WECHAT_APPSECRET"),
             wechat_author=os.environ.get("MEDIA_AGENT_WECHAT_AUTHOR"),
             rewrite_style=os.environ.get("MEDIA_AGENT_REWRITE_STYLE"),
+            download_images=os.environ.get("MEDIA_AGENT_DOWNLOAD_IMAGES", "1") not in ("0", "false", "no"),
+            download_videos=os.environ.get("MEDIA_AGENT_DOWNLOAD_VIDEOS", "1") not in ("0", "false", "no"),
             cli_tool=os.environ.get("MEDIA_AGENT_CLI_TOOL", "none"),
             cli_timeout=_int_env("MEDIA_AGENT_CLI_TIMEOUT") or 500,
         )
@@ -188,6 +192,14 @@ class Config:
             parsed = _int_str(cli_to)
             if parsed is not None:
                 self.cli_timeout = parsed
+
+        # Boolean fields
+        di = store.get_setting("download_images")
+        if di is not None:
+            self.download_images = di.strip() not in ("0", "false", "no", "")
+        dv = store.get_setting("download_videos")
+        if dv is not None:
+            self.download_videos = dv.strip() not in ("0", "false", "no", "")
 
     def ensure_dirs(self) -> None:
         for d in (self.archive_dir, self.drafts_dir, self.images_dir,
