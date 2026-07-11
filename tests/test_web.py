@@ -64,11 +64,13 @@ def test_api_stats(tmp_path):
 def test_archive_lists_and_filters(tmp_path):
     client, store, _ = make_client(tmp_path)
     seed(store)
-    r = client.get("/archive")
-    assert r.status_code == 200
-    assert "GPT-5 breakthrough" in r.text
-    r2 = client.get("/archive?topic=AI")
-    assert "GPT-5 breakthrough" in r2.text
+    # Data now comes from the JSON API (page route serves the React shell).
+    data = client.get("/api/archive").json()
+    titles = [a["title"] for g in data["groups"] for a in g["articles"]]
+    assert "GPT-5 breakthrough" in titles
+    data2 = client.get("/api/archive?topic=AI").json()
+    titles2 = [a["title"] for g in data2["groups"] for a in g["articles"]]
+    assert "GPT-5 breakthrough" in titles2
 
 
 def test_publish_wechat_requires_credentials(tmp_path):
@@ -223,10 +225,11 @@ def test_license_status_and_activate(tmp_path, monkeypatch):
 def test_draft_edit_and_save(tmp_path):
     client, store, _ = make_client(tmp_path)
     art, draft = seed(store)
-    r = client.get(f"/drafts/{draft.id}/edit")
-    assert r.status_code == 200
-    assert "正文内容" in r.text
-    assert "可疑说法X" in r.text  # flagged claims shown
+    # Page serves the SPA shell; content comes from the JSON API.
+    data = client.get(f"/api/draft/{draft.id}").json()
+    assert data["ok"]
+    assert "正文内容" in data["body_md"]
+    assert "可疑说法X" in data["flagged_claims"]  # flagged claims present
 
     r2 = client.post(f"/drafts/{draft.id}", data={
         "title_candidates": "新标题A\n新标题B",
@@ -309,19 +312,21 @@ def test_trigger_run(tmp_path):
 def test_archive_shows_rewrite_state(tmp_path):
     client, store, _ = make_client(tmp_path)
     art, _draft = seed(store)
-    r = client.get("/archive")
-    assert r.status_code == 200
-    assert "已转写" in r.text  # seeded article already has a draft
+    # seeded article already has a draft -> present in draft_map
+    data = client.get("/api/archive").json()
+    assert str(art.id) in data["draft_map"]
 
 
 def test_draft_edit_has_tabs(tmp_path):
     client, store, _ = make_client(tmp_path)
     _art, draft = seed(store)
+    # Page route serves the SPA shell (React renders the tabs client-side).
     r = client.get(f"/drafts/{draft.id}/edit")
     assert r.status_code == 200
-    assert 'id="tab-article"' in r.text
-    assert 'id="tab-video"' in r.text
-    assert "文章内容" in r.text and "讲解视频" in r.text
+    assert 'id="root"' in r.text
+    # The draft data API backs the editor.
+    data = client.get(f"/api/draft/{draft.id}").json()
+    assert data["ok"] and "statuses" in data
 
 
 def test_archive_view_renders_original(tmp_path):
@@ -488,9 +493,12 @@ def test_import_config_applies_feeds_and_skips_secrets(tmp_path):
 
 def test_settings_ok(tmp_path):
     client, store, _ = make_client(tmp_path)
+    # Page serves the SPA shell; settings values come from the JSON API.
     r = client.get("/settings")
     assert r.status_code == 200
-    assert "LLM Provider" in r.text
+    assert 'id="root"' in r.text
+    data = client.get("/api/settings").json()
+    assert "llm_provider" in data and "rewrite_styles" in data
 
 
 def test_settings_save_schedule(tmp_path):

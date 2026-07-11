@@ -52,6 +52,9 @@ from app.licensing import features as LF, gates as LG
 _BASE = Path(__file__).parent
 _TEMPLATES = _BASE / "templates"
 _STATIC = _BASE / "static"
+# Built React SPA (frontend/dist). When present it replaces the Jinja UI;
+# otherwise the app falls back to server-rendered templates (tests, un-built).
+_SPA_DIST = _BASE.parent.parent / "frontend" / "dist"
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +222,17 @@ def create_app(config: Config | None = None,
     templates = Jinja2Templates(directory=str(_TEMPLATES))
     app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
+    # ── React SPA serving (when frontend/dist is built) ──────────────────
+    _spa_index = _SPA_DIST / "index.html"
+    _spa_enabled = _spa_index.exists()
+    if _spa_enabled and (_SPA_DIST / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=str(_SPA_DIST / "assets")),
+                  name="spa-assets")
+
+    def _serve_spa():
+        """Return the SPA index.html when built, else None (Jinja fallback)."""
+        return FileResponse(str(_spa_index)) if _spa_enabled else None
+
     def get_store() -> Store:
         conn = connect(config.db_path)
         init_db(conn)
@@ -371,6 +385,9 @@ def create_app(config: Config | None = None,
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
+        spa = _serve_spa()
+        if spa:
+            return spa
         store = get_store()
         stats = store.dashboard_stats()
         runs = store.list_runs(limit=10)
@@ -423,6 +440,9 @@ def create_app(config: Config | None = None,
     @app.get("/archive", response_class=HTMLResponse)
     def archive(request: Request, topic: str | None = None,
                 source: str | None = None):
+        spa = _serve_spa()
+        if spa:
+            return spa
         store = get_store()
         articles = store.list_articles(limit=200, topic=topic, source=source)
         topics = store.list_topics()
@@ -826,6 +846,9 @@ def create_app(config: Config | None = None,
 
     @app.get("/drafts", response_class=HTMLResponse)
     def drafts_list(request: Request, status: str | None = None):
+        spa = _serve_spa()
+        if spa:
+            return spa
         from datetime import datetime, timezone, timedelta
         CST = timezone(timedelta(hours=8))
         store = get_store()
@@ -933,6 +956,9 @@ def create_app(config: Config | None = None,
     @app.get("/drafts/{draft_id}/edit", response_class=HTMLResponse)
     def draft_edit(request: Request, draft_id: int,
                    from_: str | None = Query(None, alias="from")):
+        spa = _serve_spa()
+        if spa:
+            return spa
         store = get_store()
         row = store.get_draft(draft_id)
         body = store.read_draft_body(draft_id)
@@ -1243,6 +1269,9 @@ def create_app(config: Config | None = None,
 
     @app.get("/sources", response_class=HTMLResponse)
     def sources_page(request: Request):
+        spa = _serve_spa()
+        if spa:
+            return spa
         cfg = load_feeds(feeds_path) if feeds_path.exists() else None
         store = get_store()
         raw_hot = store.get_setting("hotness_data")
@@ -2443,6 +2472,9 @@ def create_app(config: Config | None = None,
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request, response: Response):
+        spa = _serve_spa()
+        if spa:
+            return spa
         store = get_store()
         # Prevent browser caching so saved settings always appear
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -2775,5 +2807,18 @@ def create_app(config: Config | None = None,
             "version": version or "(版本信息不可用)",
             "label": label,
         }
+
+    # SPA catch-all: serve index.html for client-side deep links that aren't
+    # explicit API/asset routes (registered last so real routes win).
+    if _spa_enabled:
+        @app.get("/{full_path:path}", response_class=HTMLResponse)
+        def spa_fallback(full_path: str):
+            if full_path.startswith((
+                    "api/", "static/", "assets/", "images/", "media/",
+                    "videos/", "voices-audio/", "run", "clear/", "export",
+                    "import", "sources/", "drafts/", "archive/", "settings",
+                    "voices")):
+                return JSONResponse({"detail": "Not Found"}, status_code=404)
+            return FileResponse(str(_spa_index))
 
     return app
