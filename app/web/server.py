@@ -2520,6 +2520,56 @@ def create_app(config: Config | None = None,
             "license_labels": LF.LABELS,
             "active": "settings"})
 
+    @app.get("/api/settings")
+    def api_settings():
+        store = get_store()
+
+        def _mask(v):
+            if not (v and v.strip()):
+                return {"set": False, "masked": ""}
+            m = v[:4] + "..." + v[-4:] if len(v) > 8 else "****"
+            return {"set": True, "masked": m}
+
+        def _get(k):
+            return store.get_setting(k) or ""
+
+        return {
+            "llm_provider": _get("llm_provider") or config.llm_provider,
+            "llm_model": _get("llm_model") or (config.llm_model or ""),
+            "llm_api_base": _get("llm_api_base") or (config.llm_api_base or ""),
+            "image_provider": _get("image_provider") or (config.image_provider or "mock"),
+            "image_api_base": _get("image_api_base") or (config.image_api_base or ""),
+            "image_model": _get("image_model") or (config.image_model or ""),
+            "tts_provider": _get("tts_provider") or (config.tts_provider or "kitten"),
+            "tts_api_base": _get("tts_api_base") or (config.tts_api_base or ""),
+            "tts_model": _get("tts_model") or (config.tts_model or ""),
+            "tts_voice": _get("tts_voice") or (config.tts_voice or ""),
+            "voices": list_voices(config),
+            "data_dir": str(config.data_dir),
+            "max_age_days": _get("max_age_days") or (str(config.max_age_days) if config.max_age_days else ""),
+            "max_per_source": _get("max_per_source") or (str(config.max_per_source) if config.max_per_source else ""),
+            "download_workers": _get("download_workers") or (str(config.download_workers) if config.download_workers else ""),
+            "default_workers": os.cpu_count() or 4,
+            "video_fit": _get("video_fit") or (config.video_fit or "fit"),
+            "video_brand_name": _get("video_brand_name") or (config.video_brand_name or "Media Agent"),
+            "sensitive_level": _get("sensitive_level") or (config.sensitive_level or "standard"),
+            "sensitive_words": _get("sensitive_words") or (config.sensitive_words or ""),
+            "promotion_footer": _get("promotion_footer") or (config.promotion_footer or ""),
+            "cli_tool": _get("cli_tool") or (config.cli_tool or "auto"),
+            "wechat_appid": _get("wechat_appid") or (config.wechat_appid or ""),
+            "wechat_author": _get("wechat_author") or (config.wechat_author or ""),
+            "schedule_cron": store.get_setting("schedule_cron", ""),
+            "schedule_enabled": store.get_setting("schedule_enabled", "0") == "1",
+            "llm_api_key": _mask(store.get_setting("llm_api_key")),
+            "image_api_key": _mask(store.get_setting("image_api_key")),
+            "tts_api_key": _mask(store.get_setting("tts_api_key")),
+            "wechat_appsecret": _mask(store.get_setting("wechat_appsecret")),
+            "rewrite_styles": [s.to_public() for s in rewrite_styles.all_styles(store)],
+            "rewrite_style": rewrite_styles.get_default_style_id(store),
+            "license": license_mgr.status_dict(),
+            "license_labels": LF.LABELS,
+        }
+
     @app.post("/settings")
     def settings_save(llm_provider: str = Form(""),
                       llm_api_key: str = Form(""),

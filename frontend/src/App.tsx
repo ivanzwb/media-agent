@@ -4,6 +4,7 @@ import Dashboard from "./pages/Dashboard";
 import Sources from "./pages/Sources";
 import Drafts from "./pages/Drafts";
 import Archive from "./pages/Archive";
+import Settings from "./pages/Settings";
 import Placeholder from "./pages/Placeholder";
 
 export default function App() {
@@ -15,7 +16,7 @@ export default function App() {
         <Route path="/drafts" element={<Drafts />} />
         <Route path="/drafts/:id/edit" element={<Placeholder title="编辑草稿" />} />
         <Route path="/sources" element={<Sources />} />
-        <Route path="/settings" element={<Placeholder title="设置" />} />
+        <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Placeholder title="未找到页面" />} />
       </Route>
     </Routes>
