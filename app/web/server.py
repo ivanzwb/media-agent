@@ -813,6 +813,44 @@ def create_app(config: Config | None = None,
             "statuses": ["drafted", "reviewing", "approved", "published"],
             "active": "drafts"})
 
+    @app.get("/api/drafts")
+    def api_drafts(status: str | None = None):
+        from datetime import datetime, timezone, timedelta
+        CST = timezone(timedelta(hours=8))
+        store = get_store()
+        drafts = store.list_drafts(status=status)
+        out = []
+        for d in drafts:
+            item = dict(d)
+            if not item.get("title_cn"):
+                body = store.read_draft_body(item["id"])
+                candidates = body.get("title_candidates", []) or []
+                item["display_title"] = candidates[0] if candidates else None
+            else:
+                item["display_title"] = None
+            item["draft_filename"] = os.path.basename(item.get("draft_path", ""))
+            raw = item.get("updated_at", "")
+            if raw:
+                try:
+                    dt = datetime.fromisoformat(str(raw))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    item["updated_at"] = dt.astimezone(CST).strftime("%Y-%m-%d %H:%M")
+                except Exception:  # noqa: BLE001
+                    pass
+            out.append({
+                "id": item.get("id"), "status": item.get("status"),
+                "title_cn": item.get("title_cn"),
+                "display_title": item.get("display_title"),
+                "score": item.get("score"),
+                "draft_filename": item.get("draft_filename"),
+                "draft_path": item.get("draft_path"),
+                "article_published_at": item.get("article_published_at"),
+                "updated_at": item.get("updated_at"),
+            })
+        return {"drafts": out,
+                "statuses": ["drafted", "reviewing", "approved", "published"]}
+
     @app.get("/drafts/{draft_id}/edit", response_class=HTMLResponse)
     def draft_edit(request: Request, draft_id: int,
                    from_: str | None = Query(None, alias="from")):
@@ -1136,6 +1174,25 @@ def create_app(config: Config | None = None,
             "hotness": hotness,
             "hotness_updated": hotness_updated,
         })
+
+    @app.get("/api/feeds")
+    def api_feeds():
+        """Topics + sources as JSON for the SPA."""
+        cfg = load_feeds(feeds_path) if feeds_path.exists() else None
+        if cfg is None:
+            return {"topics": [], "sources": []}
+        return {
+            "topics": [{"name": t.name, "keywords": t.keywords}
+                       for t in cfg.topics],
+            "sources": [{
+                "name": s.name, "type": s.type, "url": s.url,
+                "topics": s.topics, "mode": s.mode,
+                "include_pattern": s.include_pattern,
+                "exclude_pattern": s.exclude_pattern,
+                "max_pages": s.max_pages, "render_js": s.render_js,
+                "enabled": s.enabled,
+            } for s in cfg.sources],
+        }
 
     @app.post("/sources/add")
     def sources_add(name: str = Form(...), type: str = Form("rss"),

@@ -19,3 +19,4 @@ body {
   font-family: Menlo, Consolas, monospace; font-size: 12px; white-space: pre-wrap;
   background: #1e1e1e; color: #cfcfcf;
 }
+.disabled-row { opacity: 0.5; }
