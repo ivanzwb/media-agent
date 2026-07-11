@@ -27,3 +27,7 @@ license.bin
 dist/
 build/
 *.egg-info/
+# Frontend (React SPA)
+node_modules/
+frontend/dist/
+*.tsbuildinfo

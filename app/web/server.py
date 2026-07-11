@@ -387,6 +387,39 @@ def create_app(config: Config | None = None,
     def api_stats():
         return get_store().dashboard_stats()
 
+    @app.get("/api/dashboard")
+    def api_dashboard():
+        """All dashboard data for the SPA in one call."""
+        store = get_store()
+        runs = [dict(r) for r in store.list_runs(limit=10)]
+        drafts = [dict(d) for d in store.list_drafts()[:10]]
+        raw_hot = store.get_setting("hotness_data")
+        hotness = json.loads(raw_hot) if raw_hot else None
+        return {
+            "stats": store.dashboard_stats(),
+            "runs": [{"started_at": r.get("started_at"),
+                      "status": r.get("status"),
+                      "stats_json": r.get("stats_json")} for r in runs],
+            "drafts": [{"id": d.get("id"), "status": d.get("status"),
+                        "draft_path": d.get("draft_path")} for d in drafts],
+            "hotness": hotness,
+            "hotness_updated": store.get_setting("hotness_updated_at"),
+        }
+
+    @app.post("/api/refresh-hotness")
+    def api_refresh_hotness():
+        store = get_store()
+        cfg = load_feeds(feeds_path) if feeds_path.exists() else None
+        try:
+            data = compute_hotness(store, feeds_cfg=cfg,
+                                   provider=_resolve_provider())
+        except Exception:
+            data = compute_hotness(store)
+        store.set_setting("hotness_data", json.dumps(data))
+        store.set_setting("hotness_updated_at",
+                          datetime.now(timezone.utc).isoformat())
+        return {"status": "ok", **data}
+
     @app.get("/archive", response_class=HTMLResponse)
     def archive(request: Request, topic: str | None = None,
                 source: str | None = None):
