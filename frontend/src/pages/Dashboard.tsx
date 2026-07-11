@@ -63,7 +63,6 @@ export default function Dashboard() {
               <Progress percent={Math.min(100, it.score)} showInfo={false}
                 style={{ width: 120 }} strokeColor="#07C160" />
               <span style={{ width: 40 }}>{it.score}</span>
-              <span style={{ color: "#999" }}>{it.recent}篇/周 · {it.total}篇</span>
             </Space>
           </List.Item>
         )}
