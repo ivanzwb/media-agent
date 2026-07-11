@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI, Form, Query, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+
 
 from app.config import Config
 from app.db import connect, init_db
@@ -50,10 +50,9 @@ from app.licensing import LicenseManager
 from app.licensing import features as LF, gates as LG
 
 _BASE = Path(__file__).parent
-_TEMPLATES = _BASE / "templates"
 _STATIC = _BASE / "static"
-# Built React SPA (frontend/dist). When present it replaces the Jinja UI;
-# otherwise the app falls back to server-rendered templates (tests, un-built).
+# Built React SPA (frontend/dist). When present it serves the UI;
+# otherwise a placeholder is displayed asking to build the frontend.
 _SPA_DIST = _BASE.parent.parent / "frontend" / "dist"
 
 logger = logging.getLogger(__name__)
@@ -219,7 +218,6 @@ def create_app(config: Config | None = None,
 
     app = FastAPI(title="Media Agent", lifespan=lifespan)
     app.state.license = license_mgr          # same object the routes gate on
-    templates = Jinja2Templates(directory=str(_TEMPLATES))
     app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
     # ── React SPA serving (when frontend/dist is built) ──────────────────
@@ -230,8 +228,15 @@ def create_app(config: Config | None = None,
                   name="spa-assets")
 
     def _serve_spa():
-        """Return the SPA index.html when built, else None (Jinja fallback)."""
-        return FileResponse(str(_spa_index)) if _spa_enabled else None
+        """Return the SPA index.html when built, else a build prompt."""
+        if _spa_enabled:
+            return FileResponse(str(_spa_index))
+        return HTMLResponse(
+            "<html><body style='font-family:sans-serif;padding:2em'>"
+            "<h1>前端未构建</h1><p>请运行：</p>"
+            "<pre>cd frontend && npm install && npm run build</pre>"
+            "<p>然后刷新此页面。</p></body></html>",
+            status_code=200)
 
     def get_store() -> Store:
         conn = connect(config.db_path)
@@ -384,21 +389,8 @@ def create_app(config: Config | None = None,
                     timespec="seconds")
 
     @app.get("/", response_class=HTMLResponse)
-    def dashboard(request: Request):
-        spa = _serve_spa()
-        if spa:
-            return spa
-        store = get_store()
-        stats = store.dashboard_stats()
-        runs = store.list_runs(limit=10)
-        drafts = store.list_drafts()[:10]
-        raw_hot = store.get_setting("hotness_data")
-        hotness = json.loads(raw_hot) if raw_hot else None
-        hotness_updated = store.get_setting("hotness_updated_at")
-        return templates.TemplateResponse(request, "dashboard.html", {
-            "stats": stats, "runs": runs, "drafts": drafts,
-            "hotness": hotness, "hotness_updated": hotness_updated,
-            "active": "dashboard"})
+    def dashboard():
+        return _serve_spa()
 
     @app.get("/api/stats")
     def api_stats():
@@ -438,33 +430,8 @@ def create_app(config: Config | None = None,
         return {"status": "ok", **data}
 
     @app.get("/archive", response_class=HTMLResponse)
-    def archive(request: Request, topic: str | None = None,
-                source: str | None = None):
-        spa = _serve_spa()
-        if spa:
-            return spa
-        store = get_store()
-        articles = store.list_articles(limit=200, topic=topic, source=source)
-        topics = store.list_topics()
-        sources = store.list_sources()
-        # Group articles by date (YYYY-MM-DD) for collapsible date nodes.
-        from collections import OrderedDict
-        groups: list[tuple[str, list]] = []
-        by_date: dict[str, list] = OrderedDict()
-        for a in articles:
-            dt = a["published_at"] or a["fetched_at"]
-            date_key = dt[:10] if dt else "未知日期"
-            by_date.setdefault(date_key, []).append(a)
-        for date_key in sorted(by_date, reverse=True):
-            # Sort day's articles by source_name so same source clusters together
-            day_articles = sorted(by_date[date_key], key=lambda a: a["source_name"] or "")
-            groups.append((date_key, day_articles))
-        return templates.TemplateResponse(request, "archive.html", {
-            "articles": articles, "topics": topics, "sources": sources,
-            "draft_map": store.drafts_by_article(),
-            "current_topic": topic, "current_source": source,
-            "active": "archive",
-            "date_groups": groups})
+    def archive():
+        return _serve_spa()
 
     @app.get("/api/archive")
     def api_archive(topic: str | None = None, source: str | None = None):
@@ -510,18 +477,12 @@ def create_app(config: Config | None = None,
         }
 
     @app.get("/archive/{article_id}/view", response_class=HTMLResponse)
-    def archive_view(request: Request, article_id: int):
+    def archive_view(article_id: int):
         store = get_store()
         row = store.get_article(article_id)
         if not row:
             return HTMLResponse("文章不存在", status_code=404)
-        body = store.read_article_body(article_id)
-        return templates.TemplateResponse(request, "article_view.html", {
-            "article": row, "meta": body,
-            "content_md": body.get("content_md", ""),
-            "images": body.get("images", []) or [],
-            "videos": body.get("videos", []) or [],
-            "active": "archive"})
+        return _serve_spa()
 
     @app.post("/archive/{article_id}/refetch")
     def archive_refetch(article_id: int):
@@ -845,39 +806,8 @@ def create_app(config: Config | None = None,
                              for m in editor_components.materials()]}
 
     @app.get("/drafts", response_class=HTMLResponse)
-    def drafts_list(request: Request, status: str | None = None):
-        spa = _serve_spa()
-        if spa:
-            return spa
-        from datetime import datetime, timezone, timedelta
-        CST = timezone(timedelta(hours=8))
-        store = get_store()
-        drafts = store.list_drafts(status=status)
-        enriched = []
-        for d in drafts:
-            item = dict(d)
-            if not item.get("title_cn"):
-                body = store.read_draft_body(item["id"])
-                candidates = body.get("title_candidates", []) or []
-                item["display_title"] = candidates[0] if candidates else None
-            else:
-                item["display_title"] = None
-            item["draft_filename"] = os.path.basename(item.get("draft_path", ""))
-            # Convert updated_at UTC → local (CST)
-            raw = item.get("updated_at", "")
-            if raw:
-                try:
-                    dt = datetime.fromisoformat(str(raw))
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    item["updated_at"] = dt.astimezone(CST).strftime("%Y-%m-%d %H:%M")
-                except Exception:                          # noqa: BLE001
-                    pass
-            enriched.append(item)
-        return templates.TemplateResponse(request, "drafts.html", {
-            "drafts": enriched, "current_status": status,
-            "statuses": ["drafted", "reviewing", "approved", "published"],
-            "active": "drafts"})
+    def drafts_list():
+        return _serve_spa()
 
     @app.get("/api/drafts")
     def api_drafts(status: str | None = None):
@@ -954,36 +884,8 @@ def create_app(config: Config | None = None,
         }
 
     @app.get("/drafts/{draft_id}/edit", response_class=HTMLResponse)
-    def draft_edit(request: Request, draft_id: int,
-                   from_: str | None = Query(None, alias="from")):
-        spa = _serve_spa()
-        if spa:
-            return spa
-        store = get_store()
-        row = store.get_draft(draft_id)
-        body = store.read_draft_body(draft_id)
-        title_candidates = body.get("title_candidates", []) or []
-        # Fetch article metadata for refetch/rewrite buttons
-        article = store.get_article(row["article_id"]) if row and row["article_id"] else None
-        return templates.TemplateResponse(request, "draft_edit.html", {
-            "draft": row, "meta": body,
-            "article_id": row["article_id"] if row else None,
-            "article_published_at": article["published_at"] if article else None,
-            "title_candidates_text": "\n".join(title_candidates),
-            "body_md": body.get("body_md", ""),
-            "title_cn": body.get("title_cn") or (title_candidates[0] if title_candidates else ""),
-            "flagged_claims": body.get("flagged_claims", []) or [],
-            "sensitive_hits": body.get("sensitive_hits", []) or [],
-            "narration": load_narration(draft_id, config),
-            "has_video": video_path(draft_id, config) is not None,
-            "statuses": ["drafted", "reviewing", "approved", "published"],
-            "video_brand_name": config.video_brand_name or "Media Agent",
-            "article_title": (title_candidates[0] if title_candidates else ""),
-            "tts_provider": config.tts_provider,
-            "tts_voice": config.tts_voice,
-            "platforms": list_platforms(),
-            "from_page": from_ or "drafts",
-            "active": "drafts"})
+    def draft_edit(draft_id: int):
+        return _serve_spa()
 
     @app.post("/drafts/{draft_id}")
     def draft_save(draft_id: int, title_candidates: str = Form(""),
@@ -1268,20 +1170,8 @@ def create_app(config: Config | None = None,
         return RedirectResponse(url="/settings?imported=1", status_code=303)
 
     @app.get("/sources", response_class=HTMLResponse)
-    def sources_page(request: Request):
-        spa = _serve_spa()
-        if spa:
-            return spa
-        cfg = load_feeds(feeds_path) if feeds_path.exists() else None
-        store = get_store()
-        raw_hot = store.get_setting("hotness_data")
-        hotness = json.loads(raw_hot) if raw_hot else None
-        hotness_updated = store.get_setting("hotness_updated_at")
-        return templates.TemplateResponse(request, "sources.html", {
-            "feeds": cfg, "active": "sources",
-            "hotness": hotness,
-            "hotness_updated": hotness_updated,
-        })
+    def sources_page():
+        return _serve_spa()
 
     @app.get("/api/feeds")
     def api_feeds():
@@ -2471,122 +2361,8 @@ def create_app(config: Config | None = None,
         return JSONResponse({"ok": True, "status": license_mgr.status_dict()})
 
     @app.get("/settings", response_class=HTMLResponse)
-    def settings_page(request: Request, response: Response):
-        spa = _serve_spa()
-        if spa:
-            return spa
-        store = get_store()
-        # Prevent browser caching so saved settings always appear
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-        # Read DB overrides to pre-fill the form
-        db_llm_provider = store.get_setting("llm_provider") or ""
-        db_llm_model = store.get_setting("llm_model") or ""
-        db_llm_api_base = store.get_setting("llm_api_base") or ""
-        db_image_provider = store.get_setting("image_provider") or ""
-        db_image_api_base = store.get_setting("image_api_base") or ""
-        db_image_model = store.get_setting("image_model") or ""
-        db_tts_provider = store.get_setting("tts_provider") or ""
-        db_tts_api_base = store.get_setting("tts_api_base") or ""
-        db_tts_model = store.get_setting("tts_model") or ""
-        db_tts_voice = store.get_setting("tts_voice") or ""
-        db_max_age_days = store.get_setting("max_age_days") or ""
-        db_max_per_source = store.get_setting("max_per_source") or ""
-        db_download_workers = store.get_setting("download_workers") or ""
-        db_video_fit = store.get_setting("video_fit") or ""
-        db_video_brand_name = store.get_setting("video_brand_name") or ""
-        db_sensitive_level = store.get_setting("sensitive_level") or ""
-        db_sensitive_words = store.get_setting("sensitive_words") or ""
-        db_promotion_footer = store.get_setting("promotion_footer") or ""
-        db_cli_tool = store.get_setting("cli_tool") or ""
-        db_download_images = store.get_setting("download_images") or ""
-        db_download_videos = store.get_setting("download_videos") or ""
-
-        # API key: indicate whether set, mask the value
-        api_key_val = store.get_setting("llm_api_key")
-        api_key_set = bool(api_key_val and api_key_val.strip())
-        if api_key_set:
-            masked = api_key_val[:4] + "..." + api_key_val[-4:] if len(api_key_val) > 8 else "****"
-        else:
-            masked = ""
-
-        # Image API key mask
-        img_key_val = store.get_setting("image_api_key")
-        img_key_set = bool(img_key_val and img_key_val.strip())
-        if img_key_set:
-            img_masked = img_key_val[:4] + "..." + img_key_val[-4:] if len(img_key_val) > 8 else "****"
-        else:
-            img_masked = ""
-
-        # TTS API key mask
-        tts_key_val = store.get_setting("tts_api_key")
-        tts_key_set = bool(tts_key_val and tts_key_val.strip())
-        if tts_key_set:
-            tts_masked = tts_key_val[:4] + "..." + tts_key_val[-4:] if len(tts_key_val) > 8 else "****"
-        else:
-            tts_masked = ""
-
-        # WeChat AppSecret mask
-        wx_secret_val = store.get_setting("wechat_appsecret")
-        wx_secret_set = bool(wx_secret_val and wx_secret_val.strip())
-        if wx_secret_set:
-            wx_secret_masked = (wx_secret_val[:4] + "..." + wx_secret_val[-4:]
-                                if len(wx_secret_val) > 8 else "****")
-        else:
-            wx_secret_masked = ""
-
-        return templates.TemplateResponse(request, "settings.html", {
-            "llm_provider": db_llm_provider or config.llm_provider,
-            "llm_model": db_llm_model or (config.llm_model or ""),
-            "llm_api_base": db_llm_api_base or (config.llm_api_base or ""),
-            "image_provider": db_image_provider or (config.image_provider or "mock"),
-            "image_api_base": db_image_api_base or (config.image_api_base or ""),
-            "image_model": db_image_model or (config.image_model or ""),
-            "tts_provider": db_tts_provider or (config.tts_provider or "kitten"),
-            "tts_api_base": db_tts_api_base or (config.tts_api_base or ""),
-            "tts_model": db_tts_model or (config.tts_model or ""),
-            "tts_voice": db_tts_voice or (config.tts_voice or ""),
-            "tts_voice_display": _voice_display_name(db_tts_voice, config),
-            "tts_key_set": tts_key_set,
-            "tts_key_masked": tts_masked,
-            "voices": list_voices(config),
-            "data_dir": str(config.data_dir),
-            "max_age_days": db_max_age_days if db_max_age_days and db_max_age_days != "0" else (
-                str(config.max_age_days) if config.max_age_days is not None and config.max_age_days > 0 else ""),
-            "max_per_source": db_max_per_source if db_max_per_source and db_max_per_source != "0" else (
-                str(config.max_per_source) if config.max_per_source is not None and config.max_per_source > 0 else ""),
-            "download_workers": db_download_workers if db_download_workers and db_download_workers != "0" else (
-                str(config.download_workers) if config.download_workers else ""),
-            "default_workers": os.cpu_count() or 4,
-            "video_fit": db_video_fit or (config.video_fit or "fit"),
-            "video_brand_name": db_video_brand_name or (config.video_brand_name or "Media Agent"),
-            "sensitive_level": db_sensitive_level or (config.sensitive_level or "standard"),
-            "sensitive_words": db_sensitive_words or (config.sensitive_words or ""),
-            "promotion_footer": db_promotion_footer or (config.promotion_footer or ""),
-            "cli_tool": db_cli_tool or (config.cli_tool or "auto"),
-            "download_images": (db_download_images or "1") not in ("0", "false", "no", ""),
-            "download_videos": (db_download_videos or "1") not in ("0", "false", "no", ""),
-            "download_images_checked": "checked" if (db_download_images or "1") not in ("0", "false", "no", "") else "",
-            "download_videos_checked": "checked" if (db_download_videos or "1") not in ("0", "false", "no", "") else "",
-            "api_key_set": api_key_set,
-            "api_key_masked": masked,
-            "img_key_set": img_key_set,
-            "img_key_masked": img_masked,
-            "wechat_appid": (store.get_setting("wechat_appid") or
-                             (config.wechat_appid or "")),
-            "wechat_author": (store.get_setting("wechat_author") or
-                              (config.wechat_author or "")),
-            "wx_secret_set": wx_secret_set,
-            "wx_secret_masked": wx_secret_masked,
-            "schedule_cron": store.get_setting("schedule_cron", ""),
-            "schedule_enabled": store.get_setting("schedule_enabled", "0") == "1",
-            "rewrite_styles": [s.to_public() for s in
-                               rewrite_styles.all_styles(store)],
-            "rewrite_style": rewrite_styles.get_default_style_id(store),
-            "license": license_mgr.status_dict(),
-            "license_labels": LF.LABELS,
-            "active": "settings"})
+    def settings_page():
+        return _serve_spa()
 
     @app.get("/api/settings")
     def api_settings():
