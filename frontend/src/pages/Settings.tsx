@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App as AntApp, Button, Card, Divider, Form, Input, InputNumber, Select,
-  Space, Switch, Tag, Typography, List, Upload, Popconfirm, Tabs,
+  Space, Switch, Tag, Typography, List, Upload, Popconfirm, Tabs, Modal,
 } from "antd";
 import { UploadOutlined, AudioOutlined, StopOutlined, CheckOutlined, CloseOutlined } from "@ant-design/icons";
 import { useState, useRef, useEffect } from "react";
@@ -244,20 +244,73 @@ function LicenseCard({ lic, labels, onChange }: { lic: any; labels: Record<strin
 function RewriteStyleManager({ styles, onChange }: { styles: StylePub[]; onChange: () => void; }) {
   const { message } = AntApp.useApp();
   const customs = styles.filter((s) => !s.is_builtin);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<StylePub | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [form] = Form.useForm();
+
+  async function openCreate() {
+    setEditing(null); form.resetFields(); setModalOpen(true);
+  }
+  async function openEdit(s: StylePub) {
+    setEditing(s); form.setFieldsValue(s); setModalOpen(true);
+  }
   async function del(id: string) {
     await api.delete(`/api/rewrite-styles/${encodeURIComponent(id)}`);
     message.success("已删除"); onChange();
   }
+  async function onSubmit() {
+    const v = await form.validateFields();
+    setSaving(true);
+    try {
+      const url = editing
+        ? `/api/rewrite-styles/${encodeURIComponent(editing.id)}`
+        : "/api/rewrite-styles";
+      const method = editing ? api.put : api.post;
+      const fd = new FormData();
+      fd.append("name", v.name);
+      fd.append("description", v.description || "");
+      fd.append("prompt", v.prompt || "");
+      fd.append("instruction", v.instruction);
+      await method(url, fd);
+      message.success(editing ? "已更新" : "已创建");
+      setModalOpen(false); onChange();
+    } catch { message.error("操作失败"); }
+    finally { setSaving(false); }
+  }
+
   return (
     <div>
-      <Text type="secondary">自定义风格（{customs.length}）：</Text>
+      <Space style={{ marginBottom: 8 }}>
+        <Text strong>自定义风格</Text>
+        <Button size="small" type="primary" onClick={openCreate}>新建风格</Button>
+      </Space>
       <List size="small" dataSource={customs} locale={{ emptyText: "暂无自定义风格" }}
         renderItem={(s) => (
-          <List.Item actions={[<Popconfirm key="d" title="删除该风格？" onConfirm={() => del(s.id)}><a>删除</a></Popconfirm>]}>
-            <List.Item.Meta title={s.name} description={s.description} />
+          <List.Item actions={[
+            <a key="e" onClick={() => openEdit(s)}>编辑</a>,
+            <Popconfirm key="d" title="删除该风格？" onConfirm={() => del(s.id)}><a>删除</a></Popconfirm>,
+          ]}>
+            <List.Item.Meta title={s.name} description={s.description || s.instruction} />
           </List.Item>
         )} />
-      <Text type="secondary">（在归档/草稿页转写时可临时切换风格；新建自定义风格可在草稿编辑器中保存）</Text>
+      <Modal title={editing ? "编辑风格" : "新建风格"} open={modalOpen}
+        onCancel={() => setModalOpen(false)} onOk={onSubmit} confirmLoading={saving}>
+        <Form form={form} layout="vertical">
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: "请输入风格名称" }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="description" label="描述">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item name="instruction" label="改写指令" rules={[{ required: true, message: "请输入改写指令" }]}>
+            <Input.TextArea rows={4} placeholder="例：用口语化、幽默的风格改写，多使用比喻和网络流行语" />
+          </Form.Item>
+          <Form.Item name="prompt" label="系统提示词（可选）" tooltip="留空则使用默认改写提示词">
+            <Input.TextArea rows={6} placeholder="覆盖默认改写 prompt，一般不需要填写" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }
