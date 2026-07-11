@@ -446,6 +446,49 @@ def create_app(config: Config | None = None,
             "active": "archive",
             "date_groups": groups})
 
+    @app.get("/api/archive")
+    def api_archive(topic: str | None = None, source: str | None = None):
+        from collections import OrderedDict
+        store = get_store()
+        articles = store.list_articles(limit=200, topic=topic, source=source)
+        by_date: dict[str, list] = OrderedDict()
+        for a in articles:
+            dt = a["published_at"] or a["fetched_at"]
+            date_key = dt[:10] if dt else "未知日期"
+            by_date.setdefault(date_key, []).append(a)
+        groups = []
+        for date_key in sorted(by_date, reverse=True):
+            day = sorted(by_date[date_key], key=lambda a: a["source_name"] or "")
+            groups.append({"date": date_key, "articles": [{
+                "id": a["id"], "title": a["title"], "url": a["url"],
+                "topic": a["topic"], "source_name": a["source_name"],
+                "published_at": a["published_at"], "fetched_at": a["fetched_at"],
+            } for a in day]})
+        return {
+            "groups": groups,
+            "topics": store.list_topics(),
+            "draft_map": {str(k): v for k, v in store.drafts_by_article().items()},
+        }
+
+    @app.get("/api/archive/{article_id}/view")
+    def api_archive_view(article_id: int):
+        store = get_store()
+        row = store.get_article(article_id)
+        if not row:
+            return JSONResponse({"ok": False, "error": "文章不存在"}, status_code=404)
+        body = store.read_article_body(article_id)
+        return {
+            "ok": True,
+            "article": {
+                "title": row["title"], "url": row["url"],
+                "source_name": row["source_name"], "topic": row["topic"],
+                "published_at": row["published_at"], "fetched_at": row["fetched_at"],
+            },
+            "content_md": body.get("content_md", ""),
+            "images": body.get("images", []) or [],
+            "videos": body.get("videos", []) or [],
+        }
+
     @app.get("/archive/{article_id}/view", response_class=HTMLResponse)
     def archive_view(request: Request, article_id: int):
         store = get_store()
