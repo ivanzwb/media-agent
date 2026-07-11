@@ -5,7 +5,7 @@ import {
 } from "antd";
 import { RobotOutlined } from "@ant-design/icons";
 import MDEditor, { commands, type ICommand } from "@uiw/react-md-editor";
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, getJson, postForm } from "../api/client";
 import SceneEditor from "../components/SceneEditor";
@@ -39,6 +39,23 @@ export default function DraftEdit() {
   const [theme, setTheme] = useState("default");
   const [loaded, setLoaded] = useState(false);
 
+  // Dynamic editor height: fill remaining viewport
+  const [editorHeight, setEditorHeight] = useState(600);
+  const draftRef = useRef<HTMLDivElement>(null);
+  const calcHeight = useCallback(() => {
+    if (!draftRef.current) return;
+    // Account for header (~46px), .ma-content padding (48px), title row (~40px),
+    // tabs bar (~40px), toolbar/inputs (~120px), warnings (~60px), and gaps (~30px)
+    setEditorHeight(Math.max(300, draftRef.current.clientHeight - 310));
+  }, []);
+  useEffect(() => {
+    calcHeight();
+    window.addEventListener("resize", calcHeight);
+    const observer = new ResizeObserver(calcHeight);
+    if (draftRef.current) observer.observe(draftRef.current);
+    return () => { window.removeEventListener("resize", calcHeight); observer.disconnect(); };
+  }, [data, calcHeight]);
+
   useEffect(() => {
     if (data && !loaded) {
       setBody(data.body_md);
@@ -61,8 +78,8 @@ export default function DraftEdit() {
   }
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-      <Space style={{ justifyContent: "space-between", width: "100%" }}>
+    <div ref={draftRef} className="ma-draft-edit">
+      <Space style={{ justifyContent: "space-between", width: "100%", flexShrink: 0 }}>
         <Title level={2} style={{ margin: 0 }}>编辑草稿 #{draftId}</Title>
         <Button onClick={() => navigate(-1)}>返回列表</Button>
       </Space>
@@ -73,19 +90,19 @@ export default function DraftEdit() {
             <ArticleTab data={data} body={body} setBody={setBody} titleCn={titleCn}
               setTitleCn={setTitleCn} titleCands={titleCands} setTitleCands={setTitleCands}
               status={status} setStatus={setStatus} theme={theme} setTheme={setTheme}
-              onSave={save} />
+              onSave={save} editorHeight={editorHeight} />
           ),
         },
         {
           key: "video", label: "讲解视频", children: <VideoTab data={data} />,
         },
       ]} />
-    </Space>
+    </div>
   );
 }
 
 function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setTitleCands,
-  status, setStatus, theme, setTheme, onSave }: any) {
+  status, setStatus, theme, setTheme, onSave, editorHeight }: any) {
   const qc = useQueryClient();
   const { message } = AntApp.useApp();
   const editorRef = useRef<HTMLDivElement>(null);
@@ -285,9 +302,9 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   ];
 
   return (
-    <>
+    <div className="ma-draft-article-tab">
       {data.flagged_claims?.length > 0 && (
-        <Collapse size="small" style={{ marginBottom: 12, background: "#fffbe6", borderColor: "#ffe58f" }}
+        <Collapse size="small" style={{ marginBottom: 12, background: "#fffbe6", borderColor: "#ffe58f", flexShrink: 0 }}
           items={[{
             key: "1",
             label: <span style={{ color: "#ad6800" }}>⚠ 事实校验存疑（{data.flagged_claims.length} 项）</span>,
@@ -295,7 +312,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
           }]} />
       )}
       {data.sensitive_hits?.length > 0 && (
-        <Collapse size="small" style={{ marginBottom: 12, background: "#fffbe6", borderColor: "#ffe58f" }}
+        <Collapse size="small" style={{ marginBottom: 12, background: "#fffbe6", borderColor: "#ffe58f", flexShrink: 0 }}
           items={[{
             key: "1",
             label: <span style={{ color: "#ad6800" }}>🛡 已过滤敏感/违禁词（{data.sensitive_hits.length} 项）</span>,
@@ -303,7 +320,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
           }]} />
       )}
 
-      <Row gutter={16}>
+      <Row gutter={16} style={{ flex: 1, minHeight: 0 }}>
         <Col span={6}>
           <Card size="small" title="封面">
             {data.cover_image
@@ -327,9 +344,9 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
           )}
         </Col>
 
-        <Col span={18}>
+        <Col span={18} className="ma-draft-right-col">
           <Card size="small" styles={{ body: { paddingBottom: 8 } }}>
-            <Space wrap style={{ marginBottom: 12 }}>
+            <Space wrap style={{ marginBottom: 12, flexShrink: 0 }}>
               <Select value={status} onChange={setStatus} style={{ width: 120 }}
                 options={data.statuses.map((s: string) => ({ value: s }))} />
               <Button type="primary" onClick={onSave}>保存</Button>
@@ -345,11 +362,11 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
               {platform && <Button size="small" onClick={onCopyHtml} title="复制当前平台美化 HTML 到剪贴板">复制HTML</Button>}
             </Space>
 
-            <Input placeholder="文章中文标题" value={titleCn} onChange={(e) => setTitleCn(e.target.value)} style={{ marginBottom: 8 }} />
-            <Input.TextArea placeholder="候选标题（每行一个）" value={titleCands} onChange={(e) => setTitleCands(e.target.value)} rows={2} style={{ marginBottom: 8 }} />
+            <Input placeholder="文章中文标题" value={titleCn} onChange={(e) => setTitleCn(e.target.value)} style={{ marginBottom: 8, flexShrink: 0 }} />
+            <Input.TextArea placeholder="候选标题（每行一个）" value={titleCands} onChange={(e) => setTitleCands(e.target.value)} rows={2} style={{ marginBottom: 8, flexShrink: 0 }} />
 
-            <div ref={editorRef} data-color-mode="light" onKeyDownCapture={onEditorKeyDown}>
-              <MDEditor value={body} onChange={handleChange} height={560}
+            <div ref={editorRef} className="ma-editor-wrap" data-color-mode="light" onKeyDownCapture={onEditorKeyDown}>
+              <MDEditor value={body} onChange={handleChange} height={editorHeight}
                 preview="live" commands={editorCommands} />
             </div>
           </Card>
@@ -361,7 +378,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
         onApplied={(md) => { setBody(md); setAgentOpen(false); }} />
       <FloatButton icon={<RobotOutlined />} type="primary" tooltip="Agent 编辑"
         onClick={() => setAgentOpen(true)} />
-    </>
+    </div>
   );
 }
 
