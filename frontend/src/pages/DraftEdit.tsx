@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App as AntApp, Button, Card, Col, Row, Select, Space, Tabs, Tag, Typography,
-  Input, Alert, Modal, Drawer, Tooltip, Divider, FloatButton,
+  Input, Collapse, Modal, Drawer, Tooltip, Divider, FloatButton,
 } from "antd";
 import { RobotOutlined } from "@ant-design/icons";
 import MDEditor, { commands, type ICommand } from "@uiw/react-md-editor";
@@ -287,14 +287,20 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   return (
     <>
       {data.flagged_claims?.length > 0 && (
-        <Alert type="warning" showIcon style={{ marginBottom: 12 }}
-          message={`事实校验存疑（${data.flagged_claims.length} 项）`}
-          description={<ul style={{ margin: 0 }}>{data.flagged_claims.map((c: string, i: number) => <li key={i}>{c}</li>)}</ul>} />
+        <Collapse size="small" style={{ marginBottom: 12, background: "#fffbe6", borderColor: "#ffe58f" }}
+          items={[{
+            key: "1",
+            label: <span style={{ color: "#ad6800" }}>⚠ 事实校验存疑（{data.flagged_claims.length} 项）</span>,
+            children: <ul style={{ margin: 0, paddingLeft: 20 }}>{data.flagged_claims.map((c: string, i: number) => <li key={i}>{c}</li>)}</ul>,
+          }]} />
       )}
       {data.sensitive_hits?.length > 0 && (
-        <Alert type="warning" showIcon style={{ marginBottom: 12 }}
-          message={`已过滤敏感/违禁词（${data.sensitive_hits.length} 项）`}
-          description={data.sensitive_hits.join("、")} />
+        <Collapse size="small" style={{ marginBottom: 12, background: "#fffbe6", borderColor: "#ffe58f" }}
+          items={[{
+            key: "1",
+            label: <span style={{ color: "#ad6800" }}>🛡 已过滤敏感/违禁词（{data.sensitive_hits.length} 项）</span>,
+            children: data.sensitive_hits.join("、"),
+          }]} />
       )}
 
       <Row gutter={16}>
