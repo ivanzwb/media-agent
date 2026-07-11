@@ -3,8 +3,8 @@ import {
   App as AntApp, Button, Card, Divider, Form, Input, InputNumber, Select,
   Space, Switch, Tag, Typography, List, Upload, Popconfirm, Tabs,
 } from "antd";
-import { UploadOutlined } from "@ant-design/icons";
-import { useState } from "react";
+import { UploadOutlined, AudioOutlined, StopOutlined, CheckOutlined, CloseOutlined } from "@ant-design/icons";
+import { useState, useRef, useEffect } from "react";
 import { api, getJson, postForm } from "../api/client";
 
 const { Title, Text, Paragraph } = Typography;
@@ -274,6 +274,7 @@ function VoiceManager({ voices, onChange }: { voices: Voice[]; onChange: () => v
           try { await api.post("/voices", fd); message.success("已上传"); onChange(); onSuccess?.({}); }
           catch (e) { message.error("上传失败"); onError?.(e as any); }
         }}><Button size="small" icon={<UploadOutlined />}>上传音频样本</Button></Upload>
+        <VoiceRecorder onSave={() => { onChange(); message.success("录音已保存"); }} />
       </Space>
       <List size="small" dataSource={voices} locale={{ emptyText: "暂无声音样本" }}
         renderItem={(v) => (
@@ -282,6 +283,98 @@ function VoiceManager({ voices, onChange }: { voices: Voice[]; onChange: () => v
             <Popconfirm key="d" title="删除该声音？" onConfirm={() => del(v.id)}><a>删除</a></Popconfirm>,
           ]}>{v.name || v.id}</List.Item>
         )} />
+    </div>
+  );
+}
+
+function VoiceRecorder({ onSave }: { onSave: () => void }) {
+  const { message } = AntApp.useApp();
+  const [open, setOpen] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [blob, setBlob] = useState<Blob | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const mediaRecorder = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+
+  useEffect(() => {
+    return () => { // cleanup on unmount
+      timerRef.current && clearInterval(timerRef.current);
+      streamRef.current?.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
+  async function openPanel() {
+    setOpen(true); setBlob(null); setAudioUrl(null); setElapsed(0);
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = s;
+    } catch (e: any) {
+      message.error("无法访问麦克风：" + (e.message || ""));
+    }
+  }
+  function closePanel() {
+    setOpen(false); setRecording(false); setElapsed(0); setBlob(null); setAudioUrl(null);
+    timerRef.current && clearInterval(timerRef.current); timerRef.current = null;
+    streamRef.current?.getTracks().forEach(t => t.stop()); streamRef.current = null;
+  }
+  function toggleRecord() {
+    if (recording) { stopRecord(); return; }
+    const s = streamRef.current; if (!s) return;
+    chunksRef.current = [];
+    const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
+    const mr = new MediaRecorder(s, { mimeType: mime });
+    mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+    mr.onstop = () => {
+      const b = new Blob(chunksRef.current, { type: mr.mimeType });
+      setBlob(b); setAudioUrl(URL.createObjectURL(b));
+    };
+    mr.start();
+    mediaRecorder.current = mr;
+    setRecording(true);
+    const start = Date.now();
+    timerRef.current = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 200);
+  }
+  function stopRecord() {
+    mediaRecorder.current?.stop(); setRecording(false);
+    timerRef.current && clearInterval(timerRef.current); timerRef.current = null;
+  }
+  async function saveRecording() {
+    if (!blob) return;
+    setSaving(true);
+    try {
+      const fd = new FormData();
+      fd.append("blob", blob, "recording.webm");
+      await api.post("/api/voices/record", fd);
+      onSave();
+      closePanel();
+    } catch { message.error("保存失败"); }
+    finally { setSaving(false); }
+  }
+
+  const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+
+  if (!open) return <Button size="small" icon={<AudioOutlined />} onClick={openPanel}>麦克风录音</Button>;
+
+  return (
+    <div style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      {!blob ? (
+        <Button size="small" onClick={toggleRecord}
+          icon={recording ? <StopOutlined /> : <AudioOutlined />}
+          danger={recording}>
+          {recording ? `停止录音 ${fmt(elapsed)}` : "开始录制"}
+        </Button>
+      ) : (
+        <>
+          <audio src={audioUrl!} controls style={{ height: 32, maxWidth: 200 }} />
+          <Button size="small" type="primary" icon={<CheckOutlined />}
+            loading={saving} onClick={saveRecording}>保存</Button>
+        </>
+      )}
+      <Button size="small" icon={<CloseOutlined />} onClick={closePanel}>取消</Button>
     </div>
   );
 }
