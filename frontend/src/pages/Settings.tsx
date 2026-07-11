@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App as AntApp, Button, Card, Divider, Form, Input, InputNumber, Select,
-  Space, Switch, Tag, Typography, List, Upload, Popconfirm,
+  Space, Switch, Tag, Typography, List, Upload, Popconfirm, Tabs,
 } from "antd";
 import { UploadOutlined } from "@ant-design/icons";
 import { useState } from "react";
@@ -53,11 +53,9 @@ export default function Settings() {
   const lic = data.license;
 
   return (
-    <Space direction="vertical" size="large" style={{ width: "100%" }}>
+    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
       <Title level={2} style={{ margin: 0 }}>设置</Title>
       <Paragraph type="secondary">配置可在此覆盖（存数据库，优先级高于环境变量）。数据目录：<code>{data.data_dir}</code></Paragraph>
-
-      <LicenseCard lic={lic} labels={data.license_labels} onChange={() => qc.invalidateQueries({ queryKey: ["settings", "license"] })} />
 
       <Form form={form} layout="vertical" initialValues={{
         llm_provider: data.llm_provider, llm_model: data.llm_model, llm_api_base: data.llm_api_base,
@@ -74,109 +72,139 @@ export default function Settings() {
         schedule_cron: data.schedule_cron, schedule_enabled: data.schedule_enabled,
         llm_api_key: "", image_api_key: "", tts_api_key: "", wechat_appsecret: "",
       }}>
-        <Card title="LLM" size="small" style={{ marginBottom: 16 }}>
-          <Form.Item name="llm_provider" label="Provider"><Input placeholder="mock / openai / anthropic …" /></Form.Item>
-          <Form.Item name="llm_model" label="模型"><Input /></Form.Item>
-          <Form.Item name="llm_api_base" label="API Base"><Input /></Form.Item>
-          <Form.Item name="llm_api_key" label={<>API Key {data.llm_api_key.set && <Tag color="green">已设置 {data.llm_api_key.masked}</Tag>}</>}>
-            <Input.Password placeholder={data.llm_api_key.set ? "留空则保持不变" : "输入 API Key"} />
-          </Form.Item>
-        </Card>
+        <Tabs defaultActiveKey="model" items={[
+          {
+            key: "license", label: "授权", forceRender: true, children: (
+              <LicenseCard lic={lic} labels={data.license_labels} onChange={refetch} />
+            ),
+          },
+          {
+            key: "model", label: "模型", forceRender: true, children: (
+              <>
+                <Card title="LLM" size="small" style={{ marginBottom: 16 }}>
+                  <Form.Item name="llm_provider" label="Provider"><Input placeholder="mock / openai / anthropic …" /></Form.Item>
+                  <Form.Item name="llm_model" label="模型"><Input /></Form.Item>
+                  <Form.Item name="llm_api_base" label="API Base"><Input /></Form.Item>
+                  <Form.Item name="llm_api_key" label={<>API Key {data.llm_api_key.set && <Tag color="green">已设置 {data.llm_api_key.masked}</Tag>}</>}>
+                    <Input.Password placeholder={data.llm_api_key.set ? "留空则保持不变" : "输入 API Key"} />
+                  </Form.Item>
+                </Card>
+                <Card title="图片" size="small" style={{ marginBottom: 16 }}>
+                  <Form.Item name="image_provider" label="Provider"><Input placeholder="mock / openai …" /></Form.Item>
+                  <Form.Item name="image_model" label="模型"><Input /></Form.Item>
+                  <Form.Item name="image_api_base" label="API Base"><Input /></Form.Item>
+                  <Form.Item name="image_api_key" label={<>API Key {data.image_api_key.set && <Tag color="green">已设置 {data.image_api_key.masked}</Tag>}</>}>
+                    <Input.Password placeholder={data.image_api_key.set ? "留空则保持不变" : "输入 API Key"} />
+                  </Form.Item>
+                </Card>
+                <Card title="Agent（优先于 LLM Provider）" size="small">
+                  <Form.Item name="cli_tool" label="CLI Agent">
+                    <Select options={["auto", "opencode", "claude", "codex", "copilot", "cursor-agent", "none"].map((v) => ({ value: v }))} />
+                  </Form.Item>
+                </Card>
+              </>
+            ),
+          },
+          {
+            key: "voice", label: "语音", forceRender: true, children: (
+              <Card title="TTS 与声音库" size="small">
+                <Form.Item name="tts_provider" label="Provider"><Input placeholder="kitten / cosyvoice / fishaudio …" /></Form.Item>
+                <Form.Item name="tts_api_base" label="API Base"><Input /></Form.Item>
+                <Form.Item name="tts_model" label="模型"><Input /></Form.Item>
+                <Form.Item name="tts_voice" label="音色">
+                  <Select allowClear showSearch options={(data.voices || []).map((v) => ({ value: v.id, label: v.name || v.id }))} />
+                </Form.Item>
+                <Form.Item name="tts_api_key" label={<>API Key {data.tts_api_key.set && <Tag color="green">已设置 {data.tts_api_key.masked}</Tag>}</>}>
+                  <Input.Password placeholder={data.tts_api_key.set ? "留空则保持不变" : "输入 API Key"} />
+                </Form.Item>
+                <Divider />
+                <VoiceManager voices={data.voices || []} onChange={refetch} />
+              </Card>
+            ),
+          },
+          {
+            key: "content", label: "内容与风格", forceRender: true, children: (
+              <>
+                <Card title="转写风格" size="small" style={{ marginBottom: 16 }}>
+                  <Form.Item name="rewrite_style" label="全局默认风格">
+                    <Select options={(data.rewrite_styles || []).map((s) => ({ value: s.id, label: s.name + (s.is_builtin ? "" : "（自定义）") }))} />
+                  </Form.Item>
+                  <RewriteStyleManager styles={data.rewrite_styles || []} onChange={refetch} />
+                </Card>
+                <Card title="敏感词" size="small" style={{ marginBottom: 16 }}>
+                  <Form.Item name="sensitive_level" label="过滤级别">
+                    <Select options={["off", "basic", "standard", "strict"].map((v) => ({ value: v }))} />
+                  </Form.Item>
+                  <Form.Item name="sensitive_words" label="自定义敏感词（逗号/换行分隔）"><Input.TextArea rows={3} /></Form.Item>
+                </Card>
+                <Card title="推广文案" size="small">
+                  <Form.Item name="promotion_footer" label="推广文案（追加到草稿末尾）"><Input.TextArea rows={3} /></Form.Item>
+                </Card>
+              </>
+            ),
+          },
+          {
+            key: "collect", label: "采集与定时", forceRender: true, children: (
+              <>
+                <Card title="采集" size="small" style={{ marginBottom: 16 }}>
+                  <Form.Item name="max_age_days" label="最大天数（留空不限）"><Input /></Form.Item>
+                  <Form.Item name="max_per_source" label="每来源最多抓取（留空不限）"><Input /></Form.Item>
+                  <Form.Item name="download_workers" label={`并发下载数（默认 ${data.default_workers}）`}><Input /></Form.Item>
+                  <Form.Item name="download_images" label="本地化图片" valuePropName="checked"
+                    tooltip="归档时把文章图片下载到本地，避免防盗链失效；关闭则保留远程 URL（MEDIA_AGENT_DOWNLOAD_IMAGES）">
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item name="download_videos" label="本地化视频" valuePropName="checked"
+                    tooltip="归档时把文章视频下载到本地（需 yt-dlp）；关闭则保留远程 URL（MEDIA_AGENT_DOWNLOAD_VIDEOS）">
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item name="video_fit" label="视频适配">
+                    <Select options={["fit", "crop", "blur"].map((v) => ({ value: v }))} />
+                  </Form.Item>
+                  <Form.Item name="video_brand_name" label="视频品牌名"><Input /></Form.Item>
+                </Card>
+                <Card title="定时" size="small">
+                  <Form.Item name="schedule_cron" label="Cron 表达式"><Input placeholder="如 0 8 * * *" /></Form.Item>
+                  <Form.Item name="schedule_enabled" label="启用定时" valuePropName="checked"><Switch /></Form.Item>
+                </Card>
+              </>
+            ),
+          },
+          {
+            key: "wechat", label: "公众号", forceRender: true, children: (
+              <Card title="公众号" size="small">
+                <Form.Item name="wechat_appid" label="AppID"><Input /></Form.Item>
+                <Form.Item name="wechat_appsecret" label={<>AppSecret {data.wechat_appsecret.set && <Tag color="green">已设置 {data.wechat_appsecret.masked}</Tag>}</>}>
+                  <Input.Password placeholder={data.wechat_appsecret.set ? "留空则保持不变" : "输入 AppSecret"} />
+                </Form.Item>
+                <Form.Item name="wechat_author" label="默认作者"><Input /></Form.Item>
+              </Card>
+            ),
+          },
+          {
+            key: "io", label: "导入导出", forceRender: true, children: (
+              <Card title="导出 / 导入配置" size="small">
+                <Space>
+                  <Button href="/export">导出配置</Button>
+                  <Upload accept="application/json,.json" showUploadList={false}
+                    customRequest={async ({ file, onSuccess, onError }) => {
+                      const fd = new FormData(); fd.append("file", file as File);
+                      try { await api.post("/import", fd); message.success("导入成功"); refetch(); onSuccess?.({}); }
+                      catch (e) { message.error("导入失败"); onError?.(e as any); }
+                    }}>
+                    <Button icon={<UploadOutlined />}>导入配置</Button>
+                  </Upload>
+                </Space>
+              </Card>
+            ),
+          },
+        ]} />
 
-        <Card title="图片" size="small" style={{ marginBottom: 16 }}>
-          <Form.Item name="image_provider" label="Provider"><Input placeholder="mock / openai …" /></Form.Item>
-          <Form.Item name="image_model" label="模型"><Input /></Form.Item>
-          <Form.Item name="image_api_base" label="API Base"><Input /></Form.Item>
-          <Form.Item name="image_api_key" label={<>API Key {data.image_api_key.set && <Tag color="green">已设置 {data.image_api_key.masked}</Tag>}</>}>
-            <Input.Password placeholder={data.image_api_key.set ? "留空则保持不变" : "输入 API Key"} />
-          </Form.Item>
-        </Card>
-
-        <Card title="Agent（优先于 LLM Provider）" size="small" style={{ marginBottom: 16 }}>
-          <Form.Item name="cli_tool" label="CLI Agent">
-            <Select options={["auto", "opencode", "claude", "codex", "copilot", "cursor-agent", "none"].map((v) => ({ value: v }))} />
-          </Form.Item>
-        </Card>
-
-        <Card title="TTS 与声音库" size="small" style={{ marginBottom: 16 }}>
-          <Form.Item name="tts_provider" label="Provider"><Input placeholder="kitten / cosyvoice / fishaudio …" /></Form.Item>
-          <Form.Item name="tts_api_base" label="API Base"><Input /></Form.Item>
-          <Form.Item name="tts_model" label="模型"><Input /></Form.Item>
-          <Form.Item name="tts_voice" label="音色">
-            <Select allowClear showSearch options={(data.voices || []).map((v) => ({ value: v.id, label: v.name || v.id }))} />
-          </Form.Item>
-          <Form.Item name="tts_api_key" label={<>API Key {data.tts_api_key.set && <Tag color="green">已设置 {data.tts_api_key.masked}</Tag>}</>}>
-            <Input.Password placeholder={data.tts_api_key.set ? "留空则保持不变" : "输入 API Key"} />
-          </Form.Item>
-          <Divider />
-          <VoiceManager voices={data.voices || []} onChange={refetch} />
-        </Card>
-
-        <Card title="敏感词" size="small" style={{ marginBottom: 16 }}>
-          <Form.Item name="sensitive_level" label="过滤级别">
-            <Select options={["off", "basic", "standard", "strict"].map((v) => ({ value: v }))} />
-          </Form.Item>
-          <Form.Item name="sensitive_words" label="自定义敏感词（逗号/换行分隔）"><Input.TextArea rows={3} /></Form.Item>
-        </Card>
-
-        <Card title="采集" size="small" style={{ marginBottom: 16 }}>
-          <Form.Item name="max_age_days" label="最大天数（留空不限）"><Input /></Form.Item>
-          <Form.Item name="max_per_source" label="每来源最多抓取（留空不限）"><Input /></Form.Item>
-          <Form.Item name="download_workers" label={`并发下载数（默认 ${data.default_workers}）`}><Input /></Form.Item>
-          <Form.Item name="download_images" label="本地化图片" valuePropName="checked"
-            tooltip="归档时把文章图片下载到本地，避免防盗链失效；关闭则保留远程 URL（MEDIA_AGENT_DOWNLOAD_IMAGES）">
-            <Switch />
-          </Form.Item>
-          <Form.Item name="download_videos" label="本地化视频" valuePropName="checked"
-            tooltip="归档时把文章视频下载到本地（需 yt-dlp）；关闭则保留远程 URL（MEDIA_AGENT_DOWNLOAD_VIDEOS）">
-            <Switch />
-          </Form.Item>
-          <Form.Item name="video_fit" label="视频适配">
-            <Select options={["fit", "crop", "blur"].map((v) => ({ value: v }))} />
-          </Form.Item>
-          <Form.Item name="video_brand_name" label="视频品牌名"><Input /></Form.Item>
-        </Card>
-
-        <Card title="转写风格" size="small" style={{ marginBottom: 16 }}>
-          <Form.Item name="rewrite_style" label="全局默认风格">
-            <Select options={(data.rewrite_styles || []).map((s) => ({ value: s.id, label: s.name + (s.is_builtin ? "" : "（自定义）") }))} />
-          </Form.Item>
-          <RewriteStyleManager styles={data.rewrite_styles || []} onChange={refetch} />
-        </Card>
-
-        <Card title="定时" size="small" style={{ marginBottom: 16 }}>
-          <Form.Item name="schedule_cron" label="Cron 表达式"><Input placeholder="如 0 8 * * *" /></Form.Item>
-          <Form.Item name="schedule_enabled" label="启用定时" valuePropName="checked"><Switch /></Form.Item>
-        </Card>
-
-        <Card title="公众号" size="small" style={{ marginBottom: 16 }}>
-          <Form.Item name="wechat_appid" label="AppID"><Input /></Form.Item>
-          <Form.Item name="wechat_appsecret" label={<>AppSecret {data.wechat_appsecret.set && <Tag color="green">已设置 {data.wechat_appsecret.masked}</Tag>}</>}>
-            <Input.Password placeholder={data.wechat_appsecret.set ? "留空则保持不变" : "输入 AppSecret"} />
-          </Form.Item>
-          <Form.Item name="wechat_author" label="默认作者"><Input /></Form.Item>
-        </Card>
-
-        <Card title="推广文案" size="small" style={{ marginBottom: 16 }}>
-          <Form.Item name="promotion_footer" label="推广文案（追加到草稿末尾）"><Input.TextArea rows={3} /></Form.Item>
-        </Card>
-
-        <Button type="primary" loading={saving} onClick={onSave} size="large">保存设置</Button>
+        <div style={{ position: "sticky", bottom: 0, background: "#f5f6f8", padding: "12px 0", borderTop: "1px solid #eee" }}>
+          <Button type="primary" loading={saving} onClick={onSave} size="large">保存设置</Button>
+          <Text type="secondary" style={{ marginLeft: 12 }}>保存对所有标签页的更改生效</Text>
+        </div>
       </Form>
-
-      <Card title="导出 / 导入配置" size="small">
-        <Space>
-          <Button href="/export">导出配置</Button>
-          <Upload accept="application/json,.json" showUploadList={false}
-            customRequest={async ({ file, onSuccess, onError }) => {
-              const fd = new FormData(); fd.append("file", file as File);
-              try { await api.post("/import", fd); message.success("导入成功"); refetch(); onSuccess?.({}); }
-              catch (e) { message.error("导入失败"); onError?.(e as any); }
-            }}>
-            <Button icon={<UploadOutlined />}>导入配置</Button>
-          </Upload>
-        </Space>
-      </Card>
     </Space>
   );
 }
