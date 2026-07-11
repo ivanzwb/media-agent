@@ -25,13 +25,26 @@ fi
 echo "[OK] Node.js ($(node --version))"
 
 # ── 3. Install Python deps ──
+# On Windows (Git Bash / MINGW), the venv activation path differs.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    VENV_ACTIVATE=".venv/Scripts/activate"
+    VENV_PY=".venv/Scripts/python.exe"
+    ;;
+  *)
+    VENV_ACTIVATE=".venv/bin/activate"
+    VENV_PY=".venv/bin/python"
+    ;;
+esac
+
 if [ -d .venv ]; then
     echo "[SKIP] Python venv already exists"
 else
     echo "[..] Creating Python venv..."
     $PY -m venv .venv
 fi
-source .venv/bin/activate
+# shellcheck disable=SC1090
+source "$VENV_ACTIVATE"
 pip install -q -r requirements.txt 2>/dev/null
 echo "[OK] Python dependencies"
 
