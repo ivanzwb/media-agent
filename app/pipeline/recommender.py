@@ -333,8 +333,8 @@ def suggest_keywords(subtopic: str, provider: LLMProvider,
 
 
 def suggest_sources(topic: str, provider: LLMProvider,
-                    limit: int = 8) -> list[dict]:
-    """Recommend frontier companies / orgs (with their news/blog URLs)
+                    limit: int = 20) -> list[dict]:
+    """Recommend frontier companies / orgs / media (with their news/blog URLs)
     for a topic, so the caller can auto-discover feeds from them."""
     topic = topic.strip()
     if not topic:
@@ -342,16 +342,12 @@ def suggest_sources(topic: str, provider: LLMProvider,
 
     prompt = (
         "你是行业研究员。针对给定主题，列出该领域全球最前沿、最值得关注的"
-        "公司 / 研究机构 / 实验室，并给出它们发布新闻或博客的官方网址"
-        "（尽量是 blog / news / research 页面）。\n"
-        "注意：如果主题涉及 AI / 人工智能 / 大模型，必须同时覆盖以下两类：\n"
-        "1) 海外公司：OpenAI, Anthropic, Google DeepMind, Meta AI, Mistral, xAI, "
-        "Hugging Face 等；\n"
-        "2) 国内公司：DeepSeek（深度求索）, 智谱 AI（GLM）, 阿里通义千问（Qwen）, "
-        "月之暗面（Kimi）, 百川智能（Baichuan）, MiniMax（稀宇科技）, "
-        "零一万物（01.AI/Yi）, 阶跃星辰（Stepfun）, 百度（文心一言）, "
-        "字节跳动（豆包/火山引擎）, 科大讯飞（星火）等。\n"
-        "两类来源要包含，尽量完整，不要只推荐海外公司。\n"
+        "公司 / 研究机构 / 实验室 / 行业媒体，并给出它们发布新闻或博客的官方网址"
+        "（尽量是 blog / news / research / rss 页面）。\n"
+        "\n"
+        "重要：无论什么主题，中外来源都要兼顾，至少一半应为国内来源"
+        "（包含国内公司、国内研究机构、国内行业媒体）。\n"
+        "\n"
         f"主题：{topic}\n"
         '只输出 JSON 数组，每个元素形如 '
         '{"name": "OpenAI", "url": "https://openai.com/news/"}，'

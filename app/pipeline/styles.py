@@ -201,8 +201,8 @@ def builtin_styles() -> list[RewriteStyle]:
     styles: list[RewriteStyle] = [
         RewriteStyle(
             id=DEFAULT_STYLE_ID,
-            name="深度科技报道",
-            description="像《极客公园》《硅星人》的中文深度技术报道，故事化叙述 + 中文数字编号章节",
+            name="深度报道",
+            description="故事化叙述 + 中文数字编号章节的深度报道风格",
             prompt=REWRITE_SYSTEM,
             instruction=_deep_tech_instruction(),
             is_builtin=True,

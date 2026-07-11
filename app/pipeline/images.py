@@ -43,7 +43,7 @@ def attach_cover(draft: Draft, provider: ImageProvider, images_dir) -> Draft:
     name = f"cover-{slugify(title)[:40] or 'cover'}.png"
     out = images_dir / name
     try:
-        provider.generate(prompt=f"科技自媒体封面图：{title}", out_path=out)
+        provider.generate(prompt=f"自媒体封面图：{title}", out_path=out)
         draft.cover_image = name
     except Exception:
         draft.cover_image = None
@@ -58,5 +58,5 @@ def inject_image_prompt(draft: Draft, prompt: str | None = None) -> str:
     """
     title = (draft.title_candidates[0] if draft.title_candidates
              else "cover")
-    p = prompt or f"科技自媒体封面图：{title}"
+    p = prompt or f"自媒体封面图：{title}"
     return f"\n\n:::image-prompt\n{p}\n:::\n"
