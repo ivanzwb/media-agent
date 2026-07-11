@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App as AntApp, Button, Card, Col, Row, Select, Space, Tabs, Tag, Typography,
-  Input, Alert, Modal, Drawer, Tooltip, Divider,
+  Input, Alert, Modal, Drawer, Tooltip, Divider, FloatButton,
 } from "antd";
+import { RobotOutlined } from "@ant-design/icons";
 import MDEditor from "@uiw/react-md-editor";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -92,6 +93,8 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   const [agentOpen, setAgentOpen] = useState(false);
   const [rewriting, setRewriting] = useState(false);
   const [rewriteStyle, setRewriteStyle] = useState("");
+  const [platform, setPlatform] = useState("");
+  const TOUTIAO_URL = "https://mp.toutiao.com/profile_v4/graphic/publish";
 
   const { data: styleData } = useQuery({
     queryKey: ["rewrite-styles"],
@@ -116,6 +119,11 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     const next = body.slice(0, s) + before + sel + after + body.slice(e);
     setBody(next);
     setTimeout(() => ta.focus(), 0);
+  }
+  function getSelection(): string {
+    const ta = editorRef.current?.querySelector<HTMLTextAreaElement>(".w-md-editor-text-input");
+    if (!ta) return "";
+    return body.slice(ta.selectionStart ?? 0, ta.selectionEnd ?? 0);
   }
 
   async function rewrite() {
@@ -145,13 +153,14 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   async function publishWeChat(mode: "draft" | "publish") {
     await onSave();
     message.loading({ content: "推送公众号中…", key: "wx" });
-    const r = await postForm<{ ok: boolean; error?: string }>(`/drafts/${data.id}/publish/wechat`, { mode, kind: "article", theme });
+    const r = await postForm<{ ok: boolean; error?: string }>(`/drafts/${data.id}/publish/wechat`, { mode, kind: "article", theme: "default" });
     if (r.ok) message.success({ content: mode === "draft" ? "已推送到草稿箱" : "已发布", key: "wx" });
     else message.error({ content: r.error || "推送失败", key: "wx" });
   }
 
-  async function copyStyledHtml(platform: "wechat" | "toutiao", openUrl?: string) {
-    const r = await postForm<{ ok: boolean; html?: string; error?: string }>(`/drafts/${data.id}/styled-html`, { platform, theme: platform === "wechat" ? theme : "default" });
+  // theme selector removed on trunk — the component system replaces it.
+  async function copyStyledHtml(plat: "wechat" | "toutiao", openUrl?: string) {
+    const r = await postForm<{ ok: boolean; html?: string; error?: string }>(`/drafts/${data.id}/styled-html`, { platform: plat, theme: "default" });
     if (!r.ok || !r.html) { message.error(r.error || "生成失败"); return; }
     try {
       if ((window as any).ClipboardItem) {
@@ -165,11 +174,42 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     if (openUrl) window.open(openUrl, "_blank", "noopener");
   }
 
-  async function adapt(platform: string) {
+  // Adapt to a platform's style, copy title+body to clipboard, open its page.
+  async function adaptCopy(pid: string) {
     message.loading({ content: "适配中…", key: "adapt" });
-    try { await postForm(`/drafts/${data.id}/adapt`, { platform }); message.success({ content: "已生成适配文案", key: "adapt" }); }
-    catch { message.error({ content: "适配失败", key: "adapt" }); }
+    try {
+      const d = await postForm<{ title_candidates?: string[]; body_md?: string; publish_url?: string }>(`/drafts/${data.id}/adapt`, { platform: pid });
+      const title = (d.title_candidates && d.title_candidates[0]) || "";
+      await navigator.clipboard.writeText(`${title}\n\n${d.body_md || ""}`).catch(() => {});
+      message.success({ content: "已适配并复制", key: "adapt" });
+      if (d.publish_url) window.open(d.publish_url, "_blank", "noopener");
+    } catch { message.error({ content: "适配失败", key: "adapt" }); }
   }
+
+  // Per-platform dynamic action buttons (mirrors trunk _platformActions).
+  function platformActionsFor(pid: string): { label: string; primary?: boolean; title?: string; onClick: () => void }[] {
+    switch (pid) {
+      case "wechat": return [
+        { label: "推送草稿箱", primary: true, title: "先保存草稿，再推送图文到公众号草稿箱", onClick: () => publishWeChat("draft") },
+        { label: "直接发布", title: "创建草稿并直接发布（不可撤回）", onClick: () => publishWeChat("publish") },
+      ];
+      case "toutiao": return [
+        { label: "复制并打开头条", primary: true, title: "复制美化 HTML 并打开头条图文发布页", onClick: () => copyStyledHtml("toutiao", TOUTIAO_URL) },
+      ];
+      case "xiaohongshu": return [
+        { label: "适配并复制", primary: true, title: "适配为小红书风格并复制到剪贴板", onClick: () => adaptCopy("xiaohongshu") },
+      ];
+      case "zhihu": return [
+        { label: "适配并复制", primary: true, title: "适配为知乎风格并复制到剪贴板", onClick: () => adaptCopy("zhihu") },
+      ];
+      default: return [];
+    }
+  }
+  function onCopyHtml() {
+    if (platform === "toutiao") copyStyledHtml("toutiao", TOUTIAO_URL);
+    else copyStyledHtml("wechat");
+  }
+  const platformActions = platformActionsFor(platform);
 
   const styleOptions = [{ value: "", label: "默认（全局）" },
     ...(styleData?.styles || []).map((s) => ({ value: s.id, label: s.name + (s.is_builtin ? "" : "（自定义）") }))];
@@ -218,18 +258,15 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
                 options={data.statuses.map((s: string) => ({ value: s }))} />
               <Button type="primary" onClick={onSave}>保存</Button>
               <Divider type="vertical" />
-              <Text type="secondary">同步到平台：</Text>
-              {data.platforms.map((p: any) => <Button key={p.id} size="small" onClick={() => adapt(p.id)}>{p.label}</Button>)}
-              <Divider type="vertical" />
-              <Text type="secondary">公众号：</Text>
-              <Select size="small" value={theme} onChange={setTheme} style={{ width: 130 }}
-                options={data.wechat_themes.map((t: any) => ({ value: t.id, label: t.name }))} />
-              <Button size="small" className="pro-feature" onClick={() => publishWeChat("draft")}>推送草稿箱</Button>
-              <Button size="small" className="pro-feature" onClick={() => publishWeChat("publish")}>直接发布</Button>
-              <Button size="small" className="pro-feature" onClick={() => copyStyledHtml("wechat")}>复制美化HTML</Button>
-              <Divider type="vertical" />
-              <Button size="small" className="pro-feature" onClick={() => copyStyledHtml("toutiao", "https://mp.toutiao.com/profile_v4/graphic/publish")}>复制并打开头条</Button>
-              <Button size="small" onClick={() => setAgentOpen(true)}>Agent 修改</Button>
+              <Text type="secondary">平台：</Text>
+              <Select style={{ width: 130 }} placeholder="选择平台…" allowClear
+                value={platform || undefined} onChange={(v) => setPlatform(v || "")}
+                options={data.platforms.map((p: any) => ({ value: p.id, label: p.label }))} />
+              {platformActions.map((a, i) => (
+                <Button key={i} size="small" className="pro-feature"
+                  type={a.primary ? "primary" : "default"} title={a.title} onClick={a.onClick}>{a.label}</Button>
+              ))}
+              {platform && <Button size="small" onClick={onCopyHtml} title="复制当前平台美化 HTML 到剪贴板">复制HTML</Button>}
             </Space>
 
             <Input placeholder="文章中文标题" value={titleCn} onChange={(e) => setTitleCn(e.target.value)} style={{ marginBottom: 8 }} />
@@ -251,29 +288,49 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
         </Col>
       </Row>
 
-      <ComponentDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onInsert={insertAtCursor} />
+      <ComponentDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onInsert={insertAtCursor} getSelection={getSelection} />
       <AgentModal open={agentOpen} draftId={data.id} onClose={() => setAgentOpen(false)}
         onApplied={(md) => { setBody(md); setAgentOpen(false); }} />
+      <FloatButton icon={<RobotOutlined />} type="primary" tooltip="Agent 编辑"
+        onClick={() => setAgentOpen(true)} />
     </>
   );
 }
 
-function ComponentDrawer({ open, onClose, onInsert }: { open: boolean; onClose: () => void; onInsert: (t: string) => void; }) {
+function ComponentDrawer({ open, onClose, onInsert, getSelection }: { open: boolean; onClose: () => void; onInsert: (t: string) => void; getSelection: () => string; }) {
+  const qc = useQueryClient();
+  const { message } = AntApp.useApp();
   const { data: comps } = useQuery({
     queryKey: ["editor-components"], enabled: open,
     queryFn: () => getJson<{ categories: string[]; components: any[] }>("/api/editor/components"),
-  });
-  const { data: tpls } = useQuery({
-    queryKey: ["editor-templates"], enabled: open,
-    queryFn: () => getJson<{ templates: any[] }>("/api/editor/templates"),
   });
   const { data: mats } = useQuery({
     queryKey: ["editor-materials"], enabled: open,
     queryFn: () => getJson<{ materials: any[] }>("/api/editor/materials"),
   });
   const [q, setQ] = useState("");
+  const [cat, setCat] = useState("");
+  const [cc, setCc] = useState({ id: "", name: "", category: "", markdown: "" });
   const filtered = (comps?.components || []).filter((c) =>
-    !q || (c.name + " " + (c.tags || []).join(" ") + " " + c.category).toLowerCase().includes(q.toLowerCase()));
+    (!cat || c.category === cat) &&
+    (!q || (c.name + " " + (c.tags || []).join(" ") + " " + c.category).toLowerCase().includes(q.toLowerCase())));
+  const customs = (comps?.components || []).filter((c) => !c.is_builtin);
+
+  async function saveCustom() {
+    const fd = new FormData();
+    fd.set("name", cc.name); fd.set("category", cc.category || "自定义"); fd.set("markdown", cc.markdown);
+    const url = cc.id ? `/api/editor/components/${encodeURIComponent(cc.id)}` : "/api/editor/components";
+    const r = await fetch(url, { method: cc.id ? "PUT" : "POST", body: fd });
+    const d = await r.json();
+    if (!r.ok || !d.ok) { message.error(d.error || "保存失败"); return; }
+    setCc({ id: "", name: "", category: "", markdown: "" });
+    qc.invalidateQueries({ queryKey: ["editor-components"] });
+    message.success("已保存组件");
+  }
+  async function delCustom(id: string) {
+    await fetch(`/api/editor/components/${encodeURIComponent(id)}`, { method: "DELETE" });
+    qc.invalidateQueries({ queryKey: ["editor-components"] });
+  }
 
   return (
     <Drawer open={open} onClose={onClose} title="组件面板" width={400}>
@@ -281,6 +338,12 @@ function ComponentDrawer({ open, onClose, onInsert }: { open: boolean; onClose: 
         { key: "c", label: "组件库", children: (
           <>
             <Input.Search placeholder="搜索组件…" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 8 }} />
+            <Space wrap style={{ marginBottom: 8 }}>
+              <Tag.CheckableTag checked={!cat} onChange={() => setCat("")}>全部</Tag.CheckableTag>
+              {(comps?.categories || []).map((c) => (
+                <Tag.CheckableTag key={c} checked={cat === c} onChange={() => setCat(c)}>{c}</Tag.CheckableTag>
+              ))}
+            </Space>
             <Space direction="vertical" style={{ width: "100%" }}>
               {filtered.map((c) => (
                 <Card key={c.id} size="small" styles={{ body: { padding: 8 } }}>
@@ -293,24 +356,38 @@ function ComponentDrawer({ open, onClose, onInsert }: { open: boolean; onClose: 
             </Space>
           </>
         ) },
-        { key: "t", label: "模板库", children: (
-          <Space direction="vertical" style={{ width: "100%" }}>
-            {(tpls?.templates || []).map((t) => (
-              <Card key={t.id} size="small" styles={{ body: { padding: 8 } }}>
-                <Space style={{ justifyContent: "space-between", width: "100%" }}>
-                  <b>{t.name}</b>
-                  <Button size="small" type="primary" onClick={() => onInsert("\n" + t.markdown + "\n")}>应用</Button>
-                </Space>
-              </Card>
-            ))}
-          </Space>
-        ) },
         { key: "m", label: "素材库", children: (
           <Space wrap>
             {(mats?.materials || []).map((m) => (
               <Tooltip key={m.id} title={m.name}>
                 <Button onClick={() => onInsert(m.markdown + " ")} style={{ fontSize: 18 }}>{m.markdown}</Button>
               </Tooltip>
+            ))}
+          </Space>
+        ) },
+        { key: "custom", label: "自定义", children: (
+          <Space direction="vertical" style={{ width: "100%" }}>
+            <Text type="secondary">把常用片段存为自定义组件。</Text>
+            <Input placeholder="组件名称" value={cc.name} onChange={(e) => setCc({ ...cc, name: e.target.value })} />
+            <Input placeholder="分类（默认：自定义）" value={cc.category} onChange={(e) => setCc({ ...cc, category: e.target.value })} />
+            <Input.TextArea rows={4} placeholder="组件 Markdown 内容（可含 :::tip 等指令）" value={cc.markdown} onChange={(e) => setCc({ ...cc, markdown: e.target.value })} />
+            <Space>
+              <Button size="small" onClick={() => setCc({ ...cc, markdown: getSelection() })}>用选中文字填充</Button>
+              <Button size="small" type="primary" onClick={saveCustom}>保存组件</Button>
+              <Button size="small" onClick={() => setCc({ id: "", name: "", category: "", markdown: "" })}>清空</Button>
+            </Space>
+            <Divider style={{ margin: "8px 0" }} />
+            {customs.map((c) => (
+              <Card key={c.id} size="small" styles={{ body: { padding: 8 } }}>
+                <Space style={{ justifyContent: "space-between", width: "100%" }}>
+                  <b>{c.name}</b>
+                  <Space>
+                    <Button size="small" onClick={() => onInsert(c.markdown)}>插入</Button>
+                    <Button size="small" onClick={() => setCc({ id: c.id, name: c.name, category: c.category, markdown: c.markdown })}>编辑</Button>
+                    <Button size="small" danger onClick={() => delCustom(c.id)}>删除</Button>
+                  </Space>
+                </Space>
+              </Card>
             ))}
           </Space>
         ) },
