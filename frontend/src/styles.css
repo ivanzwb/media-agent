@@ -18,7 +18,7 @@ body {
 .ma-draft-right-col .ant-card > .ant-card-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .ma-draft-right-col .ma-editor-wrap { flex: 1; min-height: 0; }
 .ma-run-panel {
-  position: fixed; right: 20px; bottom: 20px; width: 460px; max-width: 92vw;
+  position: fixed; right: 20px; bottom: 20px; width: 600px; max-width: 95vw;
   background: #1e1e1e; color: #ddd; border-radius: 10px; z-index: 1000;
   box-shadow: 0 8px 30px rgba(0,0,0,.35); overflow: hidden;
 }
