@@ -894,6 +894,42 @@ def create_app(config: Config | None = None,
         return {"drafts": out,
                 "statuses": ["drafted", "reviewing", "approved", "published"]}
 
+    @app.get("/api/draft/{draft_id}")
+    def api_draft(draft_id: int):
+        from app.wechat.formatter import list_themes as _list_themes
+        store = get_store()
+        row = store.get_draft(draft_id)
+        if not row:
+            return JSONResponse({"ok": False, "error": "草稿不存在"}, status_code=404)
+        body = store.read_draft_body(draft_id)
+        title_candidates = body.get("title_candidates", []) or []
+        article = store.get_article(row["article_id"]) if row["article_id"] else None
+        return {
+            "ok": True,
+            "id": draft_id,
+            "status": row["status"],
+            "title_cn": body.get("title_cn") or (title_candidates[0] if title_candidates else ""),
+            "title_candidates": title_candidates,
+            "body_md": body.get("body_md", ""),
+            "cover_image": body.get("cover_image"),
+            "source_url": body.get("source_url", ""),
+            "source_name": body.get("source_name", ""),
+            "flagged_claims": body.get("flagged_claims", []) or [],
+            "sensitive_hits": body.get("sensitive_hits", []) or [],
+            "article_id": row["article_id"],
+            "article_published_at": article["published_at"] if article else None,
+            "article_title": title_candidates[0] if title_candidates else "",
+            "has_video": video_path(draft_id, config) is not None,
+            "has_narration": bool(load_narration(draft_id, config)),
+            "video_brand_name": config.video_brand_name or "Media Agent",
+            "statuses": ["drafted", "reviewing", "approved", "published"],
+            "platforms": [{"id": p.id, "label": p.label,
+                           "publish_url": getattr(p, "publish_url", None),
+                           "video_publish_url": getattr(p, "video_publish_url", None)}
+                          for p in list_platforms()],
+            "wechat_themes": _list_themes("wechat"),
+        }
+
     @app.get("/drafts/{draft_id}/edit", response_class=HTMLResponse)
     def draft_edit(request: Request, draft_id: int,
                    from_: str | None = Query(None, alias="from")):
