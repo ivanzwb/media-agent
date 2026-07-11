@@ -1,6 +1,7 @@
 import { Button, Space } from "antd";
 import {
   PauseOutlined, CaretRightOutlined, StopOutlined, CloseOutlined,
+  MinusOutlined, UpOutlined,
 } from "@ant-design/icons";
 import { useRunStatus } from "../api/hooks";
 import { postForm } from "../api/client";
@@ -10,6 +11,7 @@ export default function RunPanel({
   open, onClose,
 }: { open: boolean; onClose: () => void }) {
   const [poll, setPoll] = useState(true);
+  const [minimized, setMinimized] = useState(false);
   const { data } = useRunStatus(open && poll);
 
   useEffect(() => {
@@ -54,10 +56,14 @@ export default function RunPanel({
               }}>停止</Button>
           )}
           <Button size="small" type="text" style={{ color: "#ddd" }}
-            icon={<CloseOutlined />} onClick={onClose} />
+            title={minimized ? "展开" : "最小化"}
+            icon={minimized ? <UpOutlined /> : <MinusOutlined />}
+            onClick={() => setMinimized((m) => !m)} />
+          <Button size="small" type="text" style={{ color: "#ddd" }}
+            title="关闭" icon={<CloseOutlined />} onClick={onClose} />
         </Space>
       </div>
-      <pre className="ma-run-logs">{(data.logs || []).join("\n")}</pre>
+      {!minimized && <pre className="ma-run-logs">{(data.logs || []).join("\n")}</pre>}
     </div>
   );
 }
