@@ -45,6 +45,8 @@ else
 fi
 # shellcheck disable=SC1090
 source "$VENV_ACTIVATE"
+# Re-capture PY now that venv is active so later calls use venv Python
+PY=$(command -v python3 || command -v python)
 pip install -q -r requirements.txt 2>/dev/null
 echo "[OK] Python dependencies"
 
