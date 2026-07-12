@@ -203,6 +203,24 @@ export default function Sources() {
     message.success(`已${enabled ? "启用" : "禁用"} ${r.data.updated} 个来源`);
     setSelSources([]); refetch();
   }
+  const [checking, setChecking] = useState(false);
+  async function checkAllReachability() {
+    setChecking(true);
+    try {
+      const r = await api.post("/sources/check-reachability");
+      const { total, disabled } = r.data;
+      if (disabled === 0) {
+        message.success(`全部 ${total} 个来源可达`);
+      } else {
+        message.warning(`${total} 个来源中 ${disabled} 个不可达，已禁用`);
+      }
+      refetch();
+    } catch {
+      message.error("检测失败");
+    } finally {
+      setChecking(false);
+    }
+  }
   async function batchDiscoverSelected() {
     for (const t of selTopics) await topicDiscover(t);
   }
@@ -304,6 +322,7 @@ export default function Sources() {
           <Button size="small" disabled={!selSources.length} onClick={() => batchToggleSources(true)}>批量启用</Button>
           <Button size="small" danger disabled={!selSources.length} onClick={() => batchToggleSources(false)}>批量禁用</Button>
           <Button danger size="small" disabled={!selSources.length} onClick={batchDeleteSources}>批量删除</Button>
+          <Button size="small" loading={checking} onClick={checkAllReachability}>检测可达性</Button>
         </Space>
         <Table rowKey="url" size="small" pagination={false} dataSource={sources}
           rowSelection={{ selectedRowKeys: selSources, onChange: (k) => setSelSources(k as string[]) }}

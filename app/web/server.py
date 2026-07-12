@@ -1502,6 +1502,47 @@ def create_app(config: Config | None = None,
         update_feeds(feeds_path, _do_toggle)
         return {"updated": updated}
 
+    @app.post("/sources/check-reachability")
+    async def sources_check_reachability():
+        """Check all enabled sources with 3 retries each; disable unreachable."""
+        from concurrent.futures import ThreadPoolExecutor
+        def _check_with_retries(url: str, retries: int = 3, timeout: float = 10.0) -> bool:
+            for attempt in range(retries):
+                if check_url_connectivity(url, timeout=timeout, proxy=_resolve_proxy()):
+                    return True
+            return False
+
+        cfg = load_feeds(feeds_path)
+        enabled_sources = [s for s in cfg.sources if s.enabled]
+        if not enabled_sources:
+            return {"total": 0, "disabled": 0, "results": []}
+
+        results: list[dict] = []
+
+        def _check(s):
+            ok = _check_with_retries(s.url)
+            return {"name": s.name, "url": s.url, "reachable": ok}
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(_check, s): s for s in enabled_sources}
+            for future in futures:
+                results.append(future.result())
+
+        disabled_urls = [r["url"] for r in results if not r["reachable"]]
+        if disabled_urls:
+            disabled_set = set(disabled_urls)
+            def _do_disable(cfg):
+                for s in cfg.sources:
+                    if s.url in disabled_set:
+                        s.enabled = False
+            update_feeds(feeds_path, _do_disable)
+
+        return {
+            "total": len(enabled_sources),
+            "disabled": len(disabled_urls),
+            "results": results,
+        }
+
     @app.post("/run")
     def trigger_run():
         with run_lock:
