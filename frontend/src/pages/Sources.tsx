@@ -356,12 +356,24 @@ export default function Sources() {
           rowSelection={{ selectedRowKeys: selSources, onChange: (k) => setSelSources(k as string[]) }}
           rowClassName={(s: Source) => (s.enabled ? "" : "disabled-row")}
           columns={[
-            { title: "名称", dataIndex: "name" },
-            { title: "类型", dataIndex: "type", width: 70 },
+            { title: "名称", dataIndex: "name", sorter: (a: Source, b: Source) => a.name.localeCompare(b.name) },
+            { title: "类型", dataIndex: "type", width: 80,
+              filters: [{ text: "rss", value: "rss" }, { text: "scrape", value: "scrape" }],
+              onFilter: (value, record: Source) => record.type === value,
+            },
             { title: "URL", dataIndex: "url", ellipsis: true, render: (v) => <a href={v} target="_blank" rel="noopener">{v}</a> },
-            { title: "主题", dataIndex: "topics", render: (v: string[]) => v.map((t) => <Tag key={t}>{t}</Tag>) },
-            { title: "模式", width: 70, render: (_, s: Source) => (s.type === "scrape" ? s.mode : "-") },
-            { title: "状态", width: 100, render: (_, s: Source) => (
+            { title: "主题", dataIndex: "topics",
+              filters: topics.map((t) => ({ text: t.name, value: t.name })),
+              onFilter: (value, record: Source) => record.topics.includes(value as string),
+              render: (v: string[]) => v.map((t) => <Tag key={t}>{t}</Tag>) },
+            { title: "模式", width: 80,
+              filters: [{ text: "single", value: "single" }, { text: "list", value: "list" }],
+              onFilter: (value, record: Source) => record.type === "scrape" && record.mode === value,
+              render: (_, s: Source) => (s.type === "scrape" ? s.mode : "-") },
+            { title: "状态", width: 100,
+              filters: [{ text: "已启用", value: true }, { text: "已禁用", value: false }],
+              onFilter: (value, record: Source) => record.enabled === value,
+              render: (_, s: Source) => (
               <Space size={2}>
                 <Button size="small" type={s.enabled ? "primary" : "default"} disabled={s.enabled} onClick={() => toggleSource(s.url)}>启用</Button>
                 <Button size="small" danger={!s.enabled} disabled={!s.enabled} onClick={() => toggleSource(s.url)}>禁用</Button>
