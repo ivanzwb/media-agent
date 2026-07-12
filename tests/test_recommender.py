@@ -1,5 +1,3 @@
-from unittest.mock import patch
-
 from app.llm.providers.mock import MockProvider
 from app.pipeline.recommender import (
     suggest_subtopics, suggest_keywords, suggest_sources)
@@ -54,9 +52,7 @@ def test_empty_input_returns_empty():
     assert suggest_keywords("  ", MockProvider()) == []
 
 
-@patch("app.pipeline.recommender.search_web", return_value=[])
-@patch("app.pipeline.recommender.check_url_connectivity", return_value=True)
-def test_suggest_sources_parses_objects_and_dedupes(mock_connect, mock_search):
+def test_suggest_sources_parses_objects_and_dedupes():
     provider = MockProvider(responses=[
         '[{"name": "OpenAI", "url": "https://openai.com/news/"},'
         ' {"name": "Dup", "url": "https://openai.com/news"},'
@@ -70,18 +66,14 @@ def test_suggest_sources_parses_objects_and_dedupes(mock_connect, mock_search):
     assert out[0]["name"] == "OpenAI"
 
 
-@patch("app.pipeline.recommender.search_web", return_value=[])
-@patch("app.pipeline.recommender.check_url_connectivity", return_value=True)
-def test_suggest_sources_seed_fallback(mock_connect, mock_search):
+def test_suggest_sources_seed_fallback():
     out = suggest_sources("AI", MockProvider())
     names = [o["name"] for o in out]
     assert "OpenAI" in names
     assert all(o["url"].startswith("http") for o in out)
 
 
-@patch("app.pipeline.recommender.search_web", return_value=[])
-@patch("app.pipeline.recommender.check_url_connectivity", return_value=True)
-def test_suggest_sources_ignores_items_without_url(mock_connect, mock_search):
+def test_suggest_sources_ignores_items_without_url():
     provider = MockProvider(responses=['[{"name": "NoUrl"}, {"foo": "bar"}]'])
     assert suggest_sources("AI", provider) == suggest_sources(
         "AI", MockProvider())  # falls back to seed when nothing usable

@@ -62,37 +62,10 @@ def discover_from_url(url: str, topics: list[str] | None = None,
 
 
 def search_web(query: str, max_results: int = 5, fetch=None) -> list[str]:
-    """Search the web via DuckDuckGo HTML (primary) with Bing fallback.
-
-    Uses a circuit breaker: if DuckDuckGo fails, it is skipped for the
-    rest of the process lifetime to avoid burning 8+ s per query.
-    """
-    results = _search_ddg(query, max_results, fetch)
-    if not results:
-        results = _search_bing(query, max_results, fetch)
-    return results
-
-
-# Circuit breaker: set to True after DDG fails once (process lifetime).
-_ddg_down: bool = False
-
-
-def _search_ddg(query: str, max_results: int, fetch=None) -> list[str]:
-    """DuckDuckGo HTML scraping (fast, no API key)."""
-    global _ddg_down  # noqa: PLW0603
-    if _ddg_down:
-        return []
     search_url = "https://html.duckduckgo.com/html/?q=" + quote(query)
     try:
-        if fetch is not None:
-            html = fetch(search_url)
-        else:
-            resp = httpx.get(search_url, timeout=8.0, follow_redirects=True,
-                             headers=_UA)
-            resp.raise_for_status()
-            html = resp.text
+        html = _get(search_url, fetch)
     except Exception:
-        _ddg_down = True
         return []
     results: list[str] = []
     for m in re.finditer(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"',
@@ -103,48 +76,6 @@ def _search_ddg(query: str, max_results: int, fetch=None) -> list[str]:
             href = unquote(redirect.group(1))
         if href.startswith("http") and href not in results:
             results.append(href)
-        if len(results) >= max_results:
-            break
-    if not results:
-        _ddg_down = True
-    return results
-
-
-# Domains to exclude from Bing results (Bing internal + common junk)
-_BING_SKIP = re.compile(
-    r"(?:bing\.com|microsoft\.com|go\.microsoft\.com|"
-    r"google\.com|googleapis\.com|gstatic\.com|"
-    r"facebook\.com|twitter\.com|youtube\.com|"
-    r"javascript:|mailto:|#)",
-    re.IGNORECASE,
-)
-
-
-def _search_bing(query: str, max_results: int, fetch=None) -> list[str]:
-    """Bing web scraping as fallback when DuckDuckGo is unavailable."""
-    bing_ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-               "AppleWebKit/537.36 (KHTML, like Gecko) "
-               "Chrome/131.0.0.0 Safari/537.36")
-    headers = {"User-Agent": bing_ua}
-    try:
-        resp = httpx.get(
-            "https://www.bing.com/search",
-            params={"q": query},
-            timeout=10.0,
-            follow_redirects=True,
-            headers=headers,
-        )
-        resp.raise_for_status()
-    except Exception:
-        return []
-    results: list[str] = []
-    seen: set[str] = set()
-    for m in re.finditer(r'href="(https?://[^"]+)"', resp.text):
-        url = unquote(m.group(1))
-        if _BING_SKIP.search(url) or url in seen:
-            continue
-        seen.add(url)
-        results.append(url)
         if len(results) >= max_results:
             break
     return results
