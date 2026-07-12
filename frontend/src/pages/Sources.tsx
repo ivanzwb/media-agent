@@ -464,7 +464,7 @@ function SourceEditModal({ source, onClose, onSaved }: { source: Source | null; 
       onOk={async () => {
         const v = await form.validateFields();
         await postForm("/sources/edit", {
-          url: source!.url, name: v.name, type: v.type,
+          url: source!.url, new_url: v.url, name: v.name, type: v.type,
           topics: v.topics || "", mode: v.mode || "single",
           include_pattern: v.include_pattern || "", exclude_pattern: v.exclude_pattern || "",
           max_pages: v.max_pages || 1, render_js: v.render_js ? "1" : "",
@@ -473,12 +473,13 @@ function SourceEditModal({ source, onClose, onSaved }: { source: Source | null; 
       }}>
       {source && (
         <Form form={form} layout="vertical" preserve={false} initialValues={{
-          name: source.name, type: source.type, topics: source.topics.join(", "),
+          url: source.url, name: source.name, type: source.type, topics: source.topics.join(", "),
           mode: source.mode, include_pattern: source.include_pattern || "",
           exclude_pattern: source.exclude_pattern || "", max_pages: source.max_pages || 1,
           render_js: source.render_js,
         }}>
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="url" label="URL" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="type" label="类型"><Select options={[{ value: "rss" }, { value: "scrape" }]} /></Form.Item>
           <Form.Item name="topics" label="主题（逗号分隔）"><Input /></Form.Item>
           {type === "scrape" && <>

@@ -1427,12 +1427,15 @@ def create_app(config: Config | None = None,
                      include_pattern: str = Form(""),
                      exclude_pattern: str = Form(""),
                      max_pages: str = Form("1"),
-                     render_js: str = Form("")):
+                     render_js: str = Form(""),
+                     new_url: str = Form("")):
         topic_list = [t.strip() for t in topics.split(",") if t.strip()]
         _url = url.strip()
+        _new_url = new_url.strip() or _url
         def _do_edit(cfg):
             for s in cfg.sources:
                 if s.url == _url:
+                    s.url = _new_url
                     s.name = name.strip()
                     s.type = type.strip()
                     s.topics = topic_list
