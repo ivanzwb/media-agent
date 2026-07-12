@@ -1314,7 +1314,9 @@ def create_app(config: Config | None = None,
 
     @app.post("/sources/suggest-sources")
     def sources_suggest_frontier(topic: str = Form(...)):
-        candidates = suggest_sources(topic.strip(), _resolve_provider())
+        proxy = _resolve_proxy()
+        candidates = suggest_sources(topic.strip(), _resolve_provider(),
+                                     proxy=proxy)
         return {"topic": topic.strip(), "candidates": candidates}
 
     @app.post("/sources/discover-add")

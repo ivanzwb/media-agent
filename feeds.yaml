@@ -893,7 +893,7 @@ sources:
   type: rss
   url: https://newsroom.intel.com/comments/feed
   topics: *id001
-  enabled: true
+  enabled: false
 - name: Qualcomm OnQ Blog | Stay Ahead of AI &amp; Industry Trends | Qualcomm
   type: scrape
   url: https://www.qualcomm.com/news/onq
@@ -907,7 +907,7 @@ sources:
   url: https://research.samsung.com/blog
   topics:
   - 6G研发
-  enabled: true
+  enabled: false
   mode: list
   include_pattern: /blog/
 - name: Latest News | Samsung Semiconductor Global
@@ -1067,7 +1067,7 @@ sources:
   url: http://feeds.feedburner.com/psblog
   topics: &id003
   - 虚拟现实
-  enabled: true
+  enabled: false
 - name: PS VR2 &#8211; PlayStation.Blog
   type: rss
   url: https://blog.playstation.com/tag/ps-vr2/feed/
@@ -1087,7 +1087,7 @@ sources:
   url: https://blog.vive.com/us/
   topics:
   - 虚拟现实
-  enabled: true
+  enabled: false
   mode: list
 - name: The Cloudflare Blog
   type: rss
@@ -1316,7 +1316,7 @@ sources:
   url: https://ai.meta.com/blog/
   topics:
   - 具身智能
-  enabled: true
+  enabled: false
   mode: list
   include_pattern: /blog/
 - name: Newsroom \ Anthropic
@@ -1365,7 +1365,7 @@ sources:
   url: https://www.rocketlabusa.com/updates/
   topics:
   - 商业航天
-  enabled: true
+  enabled: false
   mode: list
   include_pattern: /updates/
 - name: News Desk | ORNL
@@ -1525,7 +1525,7 @@ sources:
   url: https://blog.vive.com/
   topics:
   - AR/VR
-  enabled: true
+  enabled: false
   mode: list
 - name: News and Press - TAE Technologies
   type: rss
@@ -1633,25 +1633,25 @@ sources:
   url: https://openai.com/news/
   topics:
   - 人工智能
-  enabled: true
+  enabled: false
 - name: Mistral
   type: rss
   url: https://mistral.ai/news/
   topics:
   - 人工智能
-  enabled: true
+  enabled: false
 - name: xAI
   type: rss
   url: https://x.ai/blog/
   topics:
   - 人工智能
-  enabled: true
+  enabled: false
 - name: Hugging Face
   type: rss
   url: https://huggingface.co/blog
   topics:
   - 人工智能
-  enabled: true
+  enabled: false
 - name: Stability AI
   type: rss
   url: https://stability.ai/news
@@ -1663,7 +1663,7 @@ sources:
   url: https://quantumai.google/
   topics:
   - 量子计算
-  enabled: true
+  enabled: false
 - name: Microsoft Azure Quantum
   type: rss
   url: https://devblogs.microsoft.com/qsharp/
@@ -1681,19 +1681,19 @@ sources:
   url: https://www.quantinuum.com/news-and-blog
   topics:
   - 量子计算
-  enabled: true
+  enabled: false
 - name: IonQ
   type: rss
   url: https://ionq.com/posts
   topics:
   - 量子计算
-  enabled: true
+  enabled: false
 - name: Rigetti Computing
   type: rss
   url: https://www.rigetti.com/newsroom
   topics:
   - 量子计算
-  enabled: true
+  enabled: false
 - name: D-Wave Systems
   type: rss
   url: https://www.dwavesys.com/company/newsroom/
@@ -1705,7 +1705,7 @@ sources:
   url: https://synchron.com/newsroom
   topics:
   - 脑机接口
-  enabled: true
+  enabled: false
 - name: Blackrock Neurotech
   type: rss
   url: https://blackrockneurotech.com/news/
@@ -1723,7 +1723,7 @@ sources:
   url: https://precisionneuro.com/news/
   topics:
   - 脑机接口
-  enabled: true
+  enabled: false
 - name: BrainGate
   type: rss
   url: https://www.braingate.org/news/
@@ -1735,19 +1735,19 @@ sources:
   url: https://www.wysscenter.ch/news-media/
   topics:
   - 脑机接口
-  enabled: true
+  enabled: false
 - name: Kernel
   type: rss
   url: https://www.kernel.com/blog
   topics:
   - 脑机接口
-  enabled: true
+  enabled: false
 - name: TSMC
   type: rss
   url: https://pr.tsmc.com/english/news/
   topics:
   - 芯片制造
-  enabled: true
+  enabled: false
 - name: Intel Foundry
   type: rss
   url: https://www.intel.com/content/www/us/en/newsroom/topic/foundry
@@ -1765,19 +1765,19 @@ sources:
   url: https://www.umc.com/en/News
   topics:
   - 芯片制造
-  enabled: true
+  enabled: false
 - name: SMIC
   type: rss
   url: https://www.smics.com/en/SitePages/News
   topics:
   - 芯片制造
-  enabled: true
+  enabled: false
 - name: Hua Hong Semiconductor
   type: rss
   url: https://www.huahonggrace.com/en/news
   topics:
   - 芯片制造
-  enabled: true
+  enabled: false
 - name: YMTC
   type: rss
   url: https://www.ymtc.com/en/news.html
@@ -1789,25 +1789,25 @@ sources:
   url: https://waymo.com/blog/
   topics:
   - 自动驾驶
-  enabled: true
+  enabled: false
 - name: Cruise
   type: rss
   url: https://getcruise.com/news/
   topics:
   - 自动驾驶
-  enabled: true
+  enabled: false
 - name: Tesla
   type: rss
   url: https://www.tesla.com/blog
   topics:
   - 自动驾驶
-  enabled: true
+  enabled: false
 - name: Zoox
   type: rss
   url: https://zoox.com/newsroom/
   topics:
   - 自动驾驶
-  enabled: true
+  enabled: false
 - name: Nuro
   type: rss
   url: https://www.nuro.ai/blog
@@ -1825,13 +1825,13 @@ sources:
   url: https://blogs.nvidia.com/blog/category/drive/
   topics:
   - 自动驾驶
-  enabled: true
+  enabled: false
 - name: Meta Reality Labs
   type: rss
   url: https://about.meta.com/realitylabs/
   topics:
   - 虚拟现实
-  enabled: true
+  enabled: false
 - name: Apple Vision Pro Newsroom
   type: rss
   url: https://www.apple.com/newsroom/
@@ -1843,13 +1843,13 @@ sources:
   url: https://blog.playstation.com/category/psvr2/
   topics:
   - 虚拟现实
-  enabled: true
+  enabled: false
 - name: Pico
   type: rss
   url: https://www.pico.com/en/news.html
   topics:
   - 虚拟现实
-  enabled: true
+  enabled: false
 - name: Varjo
   type: rss
   url: https://varjo.com/blog/
@@ -1873,7 +1873,7 @@ sources:
   url: https://research.snap.com/news/
   topics:
   - 增强现实
-  enabled: true
+  enabled: false
 - name: Apple Vision Pro Newsroom
   type: rss
   url: https://www.apple.com/newsroom/topics/apple-vision-pro/
@@ -1885,13 +1885,13 @@ sources:
   url: https://blog.google/products/ar-vr/
   topics:
   - 增强现实
-  enabled: true
+  enabled: false
 - name: Niantic (Lightship ARDK)
   type: rss
   url: https://nianticlabs.com/news/
   topics:
   - 增强现实
-  enabled: true
+  enabled: false
 - name: 3GPP
   type: rss
   url: https://www.3gpp.org/news-events
@@ -1903,19 +1903,19 @@ sources:
   url: https://www.o-ran.org/news
   topics:
   - 5G通信
-  enabled: true
+  enabled: false
 - name: Ericsson
   type: rss
   url: https://www.ericsson.com/en/blog
   topics:
   - 5G通信
-  enabled: true
+  enabled: false
 - name: Nokia
   type: rss
   url: https://www.nokia.com/newsroom/
   topics:
   - 5G通信
-  enabled: true
+  enabled: false
 - name: ZTE
   type: rss
   url: https://www.zte.com.cn/global/about/newsroom/blog
@@ -1927,7 +1927,7 @@ sources:
   url: https://www.itu.int/en/mediacentre/Pages/newsroom.aspx
   topics:
   - 6G研发
-  enabled: true
+  enabled: false
 - name: ETSI
   type: rss
   url: https://www.etsi.org/newsroom/news
@@ -1957,7 +1957,7 @@ sources:
   url: http://www.imt2030.org.cn/
   topics:
   - 6G研发
-  enabled: true
+  enabled: false
 - name: one6G Association
   type: rss
   url: https://one6g.org/news/
@@ -1975,25 +1975,25 @@ sources:
   url: https://azure.microsoft.com/en-us/blog/category/iot/
   topics:
   - 物联网
-  enabled: true
+  enabled: false
 - name: Google Cloud IoT
   type: rss
   url: https://cloud.google.com/blog/topics/iot
   topics:
   - 物联网
-  enabled: true
+  enabled: false
 - name: Bosch IoT Suite
   type: rss
   url: https://bosch-iot-suite.com/blog/
   topics:
   - 物联网
-  enabled: true
+  enabled: false
 - name: Siemens Advanta
   type: rss
   url: https://www.siemens-advanta.com/insights/blog
   topics:
   - 物联网
-  enabled: true
+  enabled: false
 - name: Cisco IoT
   type: rss
   url: https://blogs.cisco.com/tag/internet-of-things
@@ -2005,13 +2005,13 @@ sources:
   url: https://www.ptc.com/en/blogs/iot
   topics:
   - 物联网
-  enabled: true
+  enabled: false
 - name: Arm IoT
   type: rss
   url: https://community.arm.com/arm-iot-blog/
   topics:
   - 物联网
-  enabled: true
+  enabled: false
 - name: Ethereum Foundation
   type: rss
   url: https://blog.ethereum.org/
@@ -2023,13 +2023,13 @@ sources:
   url: https://solana.com/news
   topics:
   - 区块链技术
-  enabled: true
+  enabled: false
 - name: Aptos Foundation
   type: rss
   url: https://aptosfoundation.org/blog
   topics:
   - 区块链技术
-  enabled: true
+  enabled: false
 - name: Mysten Labs (Sui)
   type: rss
   url: https://blog.sui.io/
@@ -2041,7 +2041,7 @@ sources:
   url: https://near.org/blog
   topics:
   - 区块链技术
-  enabled: true
+  enabled: false
 - name: Microsoft Azure
   type: rss
   url: https://azure.microsoft.com/en-us/blog/
@@ -2053,13 +2053,13 @@ sources:
   url: https://cloud.google.com/blog
   topics:
   - 云计算
-  enabled: true
+  enabled: false
 - name: Oracle Cloud Infrastructure
   type: rss
   url: https://blogs.oracle.com/cloud-infrastructure/
   topics:
   - 云计算
-  enabled: true
+  enabled: false
 - name: IBM Cloud
   type: rss
   url: https://www.ibm.com/blog/category/cloud/
@@ -2077,7 +2077,7 @@ sources:
   url: https://www.hashicorp.com/blog
   topics:
   - 云计算
-  enabled: true
+  enabled: false
 - name: Databricks
   type: rss
   url: https://www.databricks.com/blog
@@ -2089,37 +2089,37 @@ sources:
   url: https://x.ai/blog
   topics:
   - AI Agent
-  enabled: true
+  enabled: false
 - name: Figure AI
   type: rss
   url: https://www.figure.ai/blog
   topics:
   - 具身智能
-  enabled: true
+  enabled: false
 - name: 1X Technologies
   type: rss
   url: https://www.1x.tech/blog
   topics:
   - 具身智能
-  enabled: true
+  enabled: false
 - name: Agility Robotics
   type: rss
   url: https://agilityrobotics.com/blog
   topics:
   - 具身智能
-  enabled: true
+  enabled: false
 - name: Apptronik
   type: rss
   url: https://apptronik.com/news/
   topics:
   - 具身智能
-  enabled: true
+  enabled: false
 - name: Sanctuary AI
   type: rss
   url: https://sanctuary.ai/news/
   topics:
   - 具身智能
-  enabled: true
+  enabled: false
 - name: Boston Dynamics
   type: rss
   url: https://www.bostondynamics.com/blog
@@ -2131,31 +2131,31 @@ sources:
   url: https://www.tesla.com/en_eu/blog
   topics:
   - 机器人
-  enabled: true
+  enabled: false
 - name: 1X Technologies
   type: rss
   url: https://www.1x.tech/news
   topics:
   - 机器人
-  enabled: true
+  enabled: false
 - name: ANYbotics
   type: rss
   url: https://www.anybotics.com/news/
   topics:
   - 机器人
-  enabled: true
+  enabled: false
 - name: SpaceX
   type: rss
   url: https://www.spacex.com/updates/
   topics:
   - 商业航天
-  enabled: true
+  enabled: false
 - name: Blue Origin
   type: rss
   url: https://www.blueorigin.com/news
   topics:
   - 商业航天
-  enabled: true
+  enabled: false
 - name: Relativity Space
   type: rss
   url: https://www.relativityspace.com/news
@@ -2185,7 +2185,7 @@ sources:
   url: https://openai.com/blog/
   topics:
   - 生成式AI应用
-  enabled: true
+  enabled: false
 - name: BASF
   type: rss
   url: https://www.basf.com/global/en/media/news-releases.html
@@ -2215,13 +2215,13 @@ sources:
   url: https://www.covestro.com/en/media/news-releases
   topics:
   - 新材料
-  enabled: true
+  enabled: false
 - name: LG Chem
   type: rss
   url: https://www.lgchem.com/media/press-release?lang=en
   topics:
   - 新材料
-  enabled: true
+  enabled: false
 - name: Toray Industries
   type: rss
   url: https://www.toray.com/news/
@@ -2233,7 +2233,7 @@ sources:
   url: https://www.corning.com/worldwide/en/about-us/news-events/news-releases.html
   topics:
   - 新材料
-  enabled: true
+  enabled: false
 - name: ITER Organization
   type: rss
   url: https://www.iter.org/news
@@ -2257,7 +2257,7 @@ sources:
   url: https://www.helion.com/news
   topics:
   - 核聚变
-  enabled: true
+  enabled: false
 - name: General Fusion
   type: rss
   url: https://generalfusion.com/news/
@@ -2269,19 +2269,19 @@ sources:
   url: https://www.tokamakenergy.co.uk/news/
   topics:
   - 核聚变
-  enabled: true
+  enabled: false
 - name: Zap Energy
   type: rss
   url: https://www.zapenergy.com/news
   topics:
   - 核聚变
-  enabled: true
+  enabled: false
 - name: First Light Fusion
   type: rss
   url: https://firstlightfusion.com/news
   topics:
   - 核聚变
-  enabled: true
+  enabled: false
 - name: Google DeepMind
   type: rss
   url: https://deepmind.google/blog
@@ -2299,7 +2299,7 @@ sources:
   url: https://www.amd.com/en/corporate/blog.html
   topics:
   - AI芯片
-  enabled: true
+  enabled: false
 - name: Intel (Habana/Gaudi)
   type: rss
   url: https://www.intel.com/content/www/us/en/newsroom.html
@@ -2323,7 +2323,7 @@ sources:
   url: https://www.tesla.com/AI
   topics:
   - AI芯片
-  enabled: true
+  enabled: false
 - name: Paradigm
   type: rss
   url: https://www.paradigm.xyz/writing
@@ -2341,37 +2341,37 @@ sources:
   url: https://messari.io/research
   topics:
   - Web3
-  enabled: true
+  enabled: false
 - name: The Block Research
   type: rss
   url: https://www.theblock.co/research
   topics:
   - Web3
-  enabled: true
+  enabled: false
 - name: Binance Research
   type: rss
   url: https://research.binance.com/
   topics:
   - Web3
-  enabled: true
+  enabled: false
 - name: CoinGecko Research
   type: rss
   url: https://www.coingecko.com/research/publications
   topics:
   - Web3
-  enabled: true
+  enabled: false
 - name: BYD (比亚迪)
   type: rss
   url: https://www.byd.com/en/news
   topics:
   - 新能源
-  enabled: true
+  enabled: false
 - name: Rivian
   type: rss
   url: https://stories.rivian.com/
   topics:
   - 新能源
-  enabled: true
+  enabled: false
 - name: Lucid Motors
   type: rss
   url: https://www.lucidmotors.com/media-room
@@ -2389,7 +2389,7 @@ sources:
   url: https://www.silanano.com/newsroom
   topics:
   - 新能源
-  enabled: true
+  enabled: false
 - name: QuantumScape
   type: rss
   url: https://www.quantumscape.com/blog/
@@ -2401,13 +2401,13 @@ sources:
   url: https://www.ginkgobioworks.com/news/
   topics:
   - 生物科技
-  enabled: true
+  enabled: false
 - name: Recursion Pharmaceuticals
   type: rss
   url: https://www.recursion.com/news
   topics:
   - 生物科技
-  enabled: true
+  enabled: false
 - name: Insilico Medicine
   type: rss
   url: https://insilico.com/blog
@@ -2419,31 +2419,31 @@ sources:
   url: https://investors.modernatx.com/news/news-details/
   topics:
   - 生物科技
-  enabled: true
+  enabled: false
 - name: BioNTech
   type: rss
   url: https://investors.biontech.de/news-events/news-releases
   topics:
   - 生物科技
-  enabled: true
+  enabled: false
 - name: Regeneron
   type: rss
   url: https://newsroom.regeneron.com/news-releases
   topics:
   - 生物科技
-  enabled: true
+  enabled: false
 - name: Vertex Pharmaceuticals
   type: rss
   url: https://news.vrtx.com/news-releases/
   topics:
   - 生物科技
-  enabled: true
+  enabled: false
 - name: CRISPR Therapeutics
   type: rss
   url: https://crisprtx.com/about-us/news
   topics:
   - 生物科技
-  enabled: true
+  enabled: false
 - name: Joby Aviation
   type: rss
   url: https://www.jobyaviation.com/news/
@@ -2461,7 +2461,7 @@ sources:
   url: https://lilium.com/newsroom
   topics:
   - 低空经济
-  enabled: true
+  enabled: false
 - name: Volocopter
   type: rss
   url: https://www.volocopter.com/en/newsroom
@@ -2473,7 +2473,7 @@ sources:
   url: https://www.beta.team/news/
   topics:
   - 低空经济
-  enabled: true
+  enabled: false
 - name: Wisk Aero
   type: rss
   url: https://wisk.aero/news/
@@ -2491,13 +2491,13 @@ sources:
   url: https://supernal.aero/news/
   topics:
   - 低空经济
-  enabled: true
+  enabled: false
 - name: Microsoft HoloLens
   type: rss
   url: https://techcommunity.microsoft.com/t5/mixed-reality-blog/bg-p/MixedRealityBlog
   topics:
   - AR/VR
-  enabled: true
+  enabled: false
 - name: Magic Leap
   type: rss
   url: https://www.magicleap.com/newsroom
@@ -2527,7 +2527,7 @@ sources:
   url: https://pr.tsmc.com/english/news
   topics:
   - 半导体芯片
-  enabled: true
+  enabled: false
 - name: Intel
   type: rss
   url: https://newsroom.intel.com/
@@ -2539,13 +2539,13 @@ sources:
   url: https://news.samsung.com/global/semiconductor
   topics:
   - 半导体芯片
-  enabled: true
+  enabled: false
 - name: AMD
   type: rss
   url: https://www.amd.com/en/corporate/newsroom.html
   topics:
   - 半导体芯片
-  enabled: true
+  enabled: false
 - name: Qualcomm
   type: rss
   url: https://www.qualcomm.com/news/releases
@@ -2575,25 +2575,25 @@ sources:
   url: https://www.ericsson.com/en/news
   topics:
   - 6G通信
-  enabled: true
+  enabled: false
 - name: Nokia
   type: rss
   url: https://www.nokia.com/about-us/news/
   topics:
   - 6G通信
-  enabled: true
+  enabled: false
 - name: Nokia Bell Labs
   type: rss
   url: https://www.bell-labs.com/blog/
   topics:
   - 6G通信
-  enabled: true
+  enabled: false
 - name: MediaTek
   type: rss
   url: https://www.mediatek.com/news-events
   topics:
   - 6G通信
-  enabled: true
+  enabled: false
 - name: Intel
   type: rss
   url: https://blogs.intel.com/
@@ -2617,31 +2617,31 @@ sources:
   url: https://news.skhynix.com/
   topics:
   - 芯片半导体
-  enabled: true
+  enabled: false
 - name: 1X Technologies
   type: rss
   url: https://www.1x.tech/blogs
   topics:
   - 机器人技术
-  enabled: true
+  enabled: false
 - name: Apptronik
   type: rss
   url: https://apptronik.com/blog/
   topics:
   - 机器人技术
-  enabled: true
+  enabled: false
 - name: Sanctuary AI
   type: rss
   url: https://sanctuary.ai/blog/
   topics:
   - 机器人技术
-  enabled: true
+  enabled: false
 - name: ANYbotics
   type: rss
   url: https://www.anybotics.com/blog/
   topics:
   - 机器人技术
-  enabled: true
+  enabled: false
 - name: NVIDIA Robotics
   type: rss
   url: https://developer.nvidia.com/blog/category/robotics/
@@ -2653,7 +2653,7 @@ sources:
   url: https://www.midjourney.com/
   topics:
   - AI绘画与创意工具
-  enabled: true
+  enabled: false
 - name: Runway
   type: rss
   url: https://runwayml.com/blog
@@ -2665,31 +2665,31 @@ sources:
   url: https://blog.adobe.com/en/topics/artificial-intelligence
   topics:
   - AI绘画与创意工具
-  enabled: true
+  enabled: false
 - name: Canva
   type: rss
   url: https://www.canva.com/newsroom/
   topics:
   - AI绘画与创意工具
-  enabled: true
+  enabled: false
 - name: Pika Labs
   type: rss
   url: https://pika.art/blog
   topics:
   - AI绘画与创意工具
-  enabled: true
+  enabled: false
 - name: Leonardo.Ai
   type: rss
   url: https://leonardo.ai/blog/
   topics:
   - AI绘画与创意工具
-  enabled: true
+  enabled: false
 - name: Nuro
   type: rss
   url: https://www.nuro.ai/newsroom
   topics:
   - 自动驾驶最新进展
-  enabled: true
+  enabled: false
 - name: Motional
   type: rss
   url: https://motional.com/news
@@ -2713,7 +2713,7 @@ sources:
   url: https://apptronik.com/news
   topics:
   - 人形机器人产业化
-  enabled: true
+  enabled: false
 - name: Unitree Robotics
   type: rss
   url: https://www.unitree.com/news/

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.discovery import search_web
-from app.feeds import FeedsConfig
+from app.feeds import FeedsConfig, check_url_connectivity
 from app.llm.base import LLMProvider, Message
 
 # Built-in seeds so the recommender stays useful offline (mock provider) or
@@ -332,8 +332,56 @@ def suggest_keywords(subtopic: str, provider: LLMProvider,
     return _dedupe(merged, limit)
 
 
+def _validate_and_fix_urls(items: list[dict],
+                           proxy: str | None = None) -> list[dict]:
+    """Validate LLM-generated URLs and replace unreachable ones via web search.
+
+    For each item, ``check_url_connectivity`` is tried first (with a short
+    timeout).  When it returns ``False`` (404, timeout, …), a web search
+    (DuckDuckGo → Bing fallback) for ``<name> blog`` or ``<name> news`` is
+    performed and the first reachable result replaces the broken URL.
+    Items whose corrected URL is still unreachable are dropped.
+    """
+    _INIT_TIMEOUT = 4.0   # quick filter for LLM-generated URLs
+    _FIX_TIMEOUT = 8.0   # longer for search result candidates
+
+    # Phase 1: quick connectivity check in parallel
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = [pool.submit(check_url_connectivity, item["url"],
+                               timeout=_INIT_TIMEOUT, proxy=proxy)
+                   for item in items]
+
+    out: list[dict] = []
+    needs_fix: list[dict] = []
+
+    for i, item in enumerate(items):
+        if futures[i].result():
+            out.append(item)
+        else:
+            needs_fix.append(item)
+
+    # Phase 2: fix broken URLs sequentially (search is serial by design)
+    for item in needs_fix:
+        name = item.get("name", "")
+        fixed_url = ""
+        for query in (f"{name} blog", f"{name} news"):
+            candidates = search_web(query, max_results=3)
+            for cand in candidates:
+                if check_url_connectivity(cand, timeout=_FIX_TIMEOUT,
+                                          proxy=proxy):
+                    fixed_url = cand
+                    break
+            if fixed_url:
+                break
+        if fixed_url:
+            out.append({"name": name, "url": fixed_url})
+        # else: drop this item — both LLM URL and search failed
+
+    return out
+
+
 def suggest_sources(topic: str, provider: LLMProvider,
-                    limit: int = 20) -> list[dict]:
+                    limit: int = 20, proxy: str | None = None) -> list[dict]:
     """Recommend frontier companies / orgs / media (with their news/blog URLs)
     for a topic, so the caller can auto-discover feeds from them."""
     topic = topic.strip()
@@ -367,7 +415,8 @@ def suggest_sources(topic: str, provider: LLMProvider,
             out.append({"name": item["name"], "url": item["url"]})
         if len(out) >= limit:
             break
-    return out
+    # Validate LLM-generated URLs; replace broken ones via DuckDuckGo search
+    return _validate_and_fix_urls(out, proxy=proxy)
 
 
 def _parse_hotness_json(raw: str) -> dict:
