@@ -213,11 +213,24 @@ export default function Sources() {
     setSelSources([]); refetch();
   }
   const [checking, setChecking] = useState(false);
+  const [checkProg, setCheckProg] = useState<{current: number; total: number; disabled: number} | null>(null);
   async function checkAllReachability() {
     setChecking(true);
+    setCheckProg(null);
+    // Start the check (async) and poll progress
+    const checkDone = api.post("/sources/check-reachability");
+    const poll = setInterval(async () => {
+      try {
+        const r = await getJson<{running: boolean; current: number; total: number; disabled: number}>("/sources/check-reachability/progress");
+        setCheckProg(r);
+        if (!r.running) { clearInterval(poll); }
+      } catch { /* ignore */ }
+    }, 500);
     try {
-      const r = await api.post("/sources/check-reachability");
+      const r = await checkDone;
       const { total, disabled } = r.data;
+      clearInterval(poll);
+      setCheckProg(null);
       if (disabled === 0) {
         message.success(`全部 ${total} 个来源可达`);
       } else {
@@ -225,6 +238,8 @@ export default function Sources() {
       }
       refetch();
     } catch {
+      clearInterval(poll);
+      setCheckProg(null);
       message.error("检测失败");
     } finally {
       setChecking(false);
@@ -349,7 +364,9 @@ export default function Sources() {
           <Button size="small" disabled={!selSources.length} onClick={() => batchToggleSources(true)}>批量启用</Button>
           <Button size="small" danger disabled={!selSources.length} onClick={() => batchToggleSources(false)}>批量禁用</Button>
           <Button danger size="small" disabled={!selSources.length} onClick={batchDeleteSources}>批量删除</Button>
-          <Button size="small" loading={checking} onClick={checkAllReachability}>检测可达性</Button>
+          <Button size="small" loading={checking} onClick={checkAllReachability}>
+            {checkProg ? `检测中 ${checkProg.current}/${checkProg.total}${checkProg.disabled ? ` (不可达: ${checkProg.disabled})` : ""}` : "检测可达性"}
+          </Button>
           <Button size="small" loading={fixing} onClick={fixDisabledSources}>修复禁用来源</Button>
         </Space>
         <Table rowKey="url" size="small" pagination={false} dataSource={sources}

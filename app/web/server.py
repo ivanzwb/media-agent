@@ -292,6 +292,9 @@ def create_app(config: Config | None = None,
     }
     _SOURCE_PROG_RE = re.compile(r"抓取来源 \[(\d+)/(\d+)\]")
 
+    # ---- reachability check progress ----
+    check_progress = {"running": False, "current": 0, "total": 0, "disabled": 0, "results": []}
+
     # ---- operations DB-backed registry (survives page refresh) ----
     from app.db import start_op, finish_op, fail_op, _op_log, get_running_ops
 
@@ -1526,6 +1529,8 @@ def create_app(config: Config | None = None,
         if not enabled_sources:
             return {"total": 0, "disabled": 0, "results": []}
 
+        total = len(enabled_sources)
+        check_progress.update(running=True, current=0, total=total, disabled=0, results=[])
         results: list[dict] = []
 
         def _check(s):
@@ -1535,7 +1540,11 @@ def create_app(config: Config | None = None,
         with ThreadPoolExecutor(max_workers=10) as pool:
             futures = {pool.submit(_check, s): s for s in enabled_sources}
             for future in futures:
-                results.append(future.result())
+                r = future.result()
+                results.append(r)
+                check_progress["current"] = len(results)
+                check_progress["disabled"] = sum(1 for x in results if not x["reachable"])
+                check_progress["results"] = results
 
         disabled_urls = [r["url"] for r in results if not r["reachable"]]
         if disabled_urls:
@@ -1546,11 +1555,16 @@ def create_app(config: Config | None = None,
                         s.enabled = False
             update_feeds(feeds_path, _do_disable)
 
+        check_progress.update(running=False, results=results)
         return {
-            "total": len(enabled_sources),
+            "total": total,
             "disabled": len(disabled_urls),
             "results": results,
         }
+
+    @app.get("/sources/check-reachability/progress")
+    async def sources_check_reachability_progress():
+        return check_progress
 
     @app.post("/sources/fix-disabled")
     async def sources_fix_disabled():
