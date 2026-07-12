@@ -4,10 +4,19 @@ import {
   Tag, Typography, Form, InputNumber, Divider, Tooltip,
 } from "antd";
 import { ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, getJson, postForm } from "../api/client";
 
 const { Title, Text, Paragraph } = Typography;
+
+// localStorage helpers for state persistence across refresh
+function useLocalState<T>(key: string, initial: T): [T, (v: T | ((prev: T) => T)) => void] {
+  const [val, setVal] = useState<T>(() => {
+    try { const s = localStorage.getItem(key); return s !== null ? JSON.parse(s) : initial; } catch { return initial; }
+  });
+  useEffect(() => { try { localStorage.setItem(key, JSON.stringify(val)); } catch { /* ignore */ } }, [key, val]);
+  return [val, setVal];
+}
 
 interface Topic { name: string; keywords: string[]; }
 interface Source {
@@ -24,12 +33,12 @@ export default function Sources() {
   const { data } = useQuery({ queryKey: ["feeds"], queryFn: () => getJson<Feeds>("/api/feeds") });
   const refetch = () => qc.invalidateQueries({ queryKey: ["feeds"] });
 
-  // smart recommendation state
-  const [themes, setThemes] = useState("");
-  const [recoStatus, setRecoStatus] = useState("");
-  const [subtopics, setSubtopics] = useState<string[]>([]);
-  const [groups, setGroups] = useState<{ name: string; keywords: { kw: string; on: boolean }[] }[]>([]);
-  const [autoBusy, setAutoBusy] = useState(false);
+  // smart recommendation state (persisted across refresh)
+  const [themes, setThemes] = useLocalState<string>("sources-themes", "");
+  const [recoStatus, setRecoStatus] = useLocalState<string>("sources-recoStatus", "");
+  const [subtopics, setSubtopics] = useLocalState<string[]>("sources-subtopics", []);
+  const [groups, setGroups] = useLocalState<{ name: string; keywords: { kw: string; on: boolean }[] }[]>("sources-groups", []);
+  const [autoBusy, setAutoBusy] = useState(false); // ephemeral — don't persist loading state
 
   // topic discover state: topicName -> {candidates, selected}
   const [discover, setDiscover] = useState<Record<string, { cands: Candidate[]; sel: Set<string>; status: string }>>({});
@@ -148,10 +157,10 @@ export default function Sources() {
     refetch();
   }
 
-  // ── manual discover ──
-  const [discUrl, setDiscUrl] = useState(""); const [discTopic, setDiscTopic] = useState("");
-  const [searchKw, setSearchKw] = useState(""); const [searchTopic, setSearchTopic] = useState("");
-  const [batchText, setBatchText] = useState("");
+  // ── manual discover (persisted) ──
+  const [discUrl, setDiscUrl] = useLocalState<string>("sources-discUrl", ""); const [discTopic, setDiscTopic] = useLocalState<string>("sources-discTopic", "");
+  const [searchKw, setSearchKw] = useLocalState<string>("sources-searchKw", ""); const [searchTopic, setSearchTopic] = useLocalState<string>("sources-searchTopic", "");
+  const [batchText, setBatchText] = useLocalState<string>("sources-batchText", "");
 
   async function doDiscover() {
     if (!discUrl.trim()) return;
