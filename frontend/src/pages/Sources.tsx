@@ -197,6 +197,12 @@ export default function Sources() {
     Modal.confirm({ title: `确定删除选中的 ${selSources.length} 个来源？`, okType: "danger",
       onOk: async () => { await api.post("/sources/delete-batch", { items: selSources }); setSelSources([]); refetch(); } });
   }
+  async function batchToggleSources(enabled: boolean) {
+    if (!selSources.length) return;
+    const r = await api.post("/sources/toggle-batch", { items: selSources, enabled });
+    message.success(`已${enabled ? "启用" : "禁用"} ${r.data.updated} 个来源`);
+    setSelSources([]); refetch();
+  }
   async function batchDiscoverSelected() {
     for (const t of selTopics) await topicDiscover(t);
   }
@@ -295,7 +301,11 @@ export default function Sources() {
       <div>
         <Space style={{ marginBottom: 8 }}>
           <Title level={4} style={{ margin: 0 }}>来源</Title>
-          {selSources.length > 0 && <Button danger size="small" onClick={batchDeleteSources}>批量删除</Button>}
+          {selSources.length > 0 && <>
+            <Button size="small" onClick={() => batchToggleSources(true)}>批量启用</Button>
+            <Button size="small" danger onClick={() => batchToggleSources(false)}>批量禁用</Button>
+            <Button danger size="small" onClick={batchDeleteSources}>批量删除</Button>
+          </>}
         </Space>
         <Table rowKey="url" size="small" pagination={false} dataSource={sources}
           rowSelection={{ selectedRowKeys: selSources, onChange: (k) => setSelSources(k as string[]) }}
@@ -306,8 +316,11 @@ export default function Sources() {
             { title: "URL", dataIndex: "url", ellipsis: true, render: (v) => <a href={v} target="_blank" rel="noopener">{v}</a> },
             { title: "主题", dataIndex: "topics", render: (v: string[]) => v.map((t) => <Tag key={t}>{t}</Tag>) },
             { title: "模式", width: 70, render: (_, s: Source) => (s.type === "scrape" ? s.mode : "-") },
-            { title: "状态", width: 80, render: (_, s: Source) => (
-              <Button size="small" danger={!s.enabled} onClick={() => toggleSource(s.url)}>{s.enabled ? "已启用" : "已禁用"}</Button>
+            { title: "状态", width: 100, render: (_, s: Source) => (
+              <Space size={2}>
+                <Button size="small" type={s.enabled ? "primary" : "default"} disabled={s.enabled} onClick={() => toggleSource(s.url)}>启用</Button>
+                <Button size="small" danger={!s.enabled} disabled={!s.enabled} onClick={() => toggleSource(s.url)}>禁用</Button>
+              </Space>
             ) },
             { title: "操作", width: 140, render: (_, s: Source) => (
               <Space>

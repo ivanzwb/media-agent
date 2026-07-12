@@ -1486,6 +1486,24 @@ def create_app(config: Config | None = None,
         update_feeds(feeds_path, _do_toggle)
         return RedirectResponse(url="/sources", status_code=303)
 
+    @app.post("/sources/toggle-batch")
+    async def sources_toggle_batch(request: Request):
+        body = await request.json()
+        urls = body.get("items", [])
+        enabled = body.get("enabled")
+        if not urls or enabled is None:
+            return {"updated": 0}
+        url_set = set(u.strip() for u in urls)
+        updated = 0
+        def _do_toggle(cfg):
+            nonlocal updated
+            for s in cfg.sources:
+                if s.url in url_set and s.enabled != enabled:
+                    s.enabled = enabled
+                    updated += 1
+        update_feeds(feeds_path, _do_toggle)
+        return {"updated": updated}
+
     @app.post("/run")
     def trigger_run():
         with run_lock:
