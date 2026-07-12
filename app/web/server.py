@@ -1543,6 +1543,63 @@ def create_app(config: Config | None = None,
             "results": results,
         }
 
+    @app.post("/sources/fix-disabled")
+    async def sources_fix_disabled():
+        """For each disabled source, search for the correct URL and update it."""
+        from concurrent.futures import ThreadPoolExecutor
+        from app.discovery import search_web
+        from urllib.parse import unquote
+
+        cfg = load_feeds(feeds_path)
+        disabled_sources = [s for s in cfg.sources if not s.enabled]
+        if not disabled_sources:
+            return {"total": 0, "fixed": 0, "removed": 0, "results": []}
+
+        results: list[dict] = []
+        fixed_count = 0
+        removed_count = 0
+
+        def _fix_source(s):
+            nonlocal fixed_count, removed_count
+            name = s.name
+            old_url = s.url
+            # Search for correct URL
+            for query in (f"{name} blog", f"{name} news", f"{name}"):
+                candidates = search_web(query, max_results=5)
+                for cand in candidates:
+                    if check_url_connectivity(cand, timeout=8.0, proxy=_resolve_proxy()):
+                        return {"name": name, "old_url": old_url, "new_url": cand, "status": "fixed"}
+            # No reachable URL found
+            return {"name": name, "old_url": old_url, "new_url": None, "status": "removed"}
+
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            futures = {pool.submit(_fix_source, s): s for s in disabled_sources}
+            for future in futures:
+                results.append(future.result())
+
+        # Apply changes
+        def _apply(cfg):
+            nonlocal fixed_count, removed_count
+            for r in results:
+                if r["status"] == "fixed":
+                    for s in cfg.sources:
+                        if s.url == r["old_url"]:
+                            s.url = r["new_url"]
+                            s.enabled = True
+                            fixed_count += 1
+                            break
+                elif r["status"] == "removed":
+                    cfg.sources = [s for s in cfg.sources if s.url != r["old_url"]]
+                    removed_count += 1
+        update_feeds(feeds_path, _apply)
+
+        return {
+            "total": len(disabled_sources),
+            "fixed": fixed_count,
+            "removed": removed_count,
+            "results": results,
+        }
+
     @app.post("/run")
     def trigger_run():
         with run_lock:

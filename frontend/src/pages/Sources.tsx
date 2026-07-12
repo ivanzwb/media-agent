@@ -221,6 +221,24 @@ export default function Sources() {
       setChecking(false);
     }
   }
+  const [fixing, setFixing] = useState(false);
+  async function fixDisabledSources() {
+    setFixing(true);
+    try {
+      const r = await api.post("/sources/fix-disabled");
+      const { total, fixed, removed } = r.data;
+      if (total === 0) {
+        message.info("没有禁用的来源需要修复");
+      } else {
+        message.success(`修复 ${fixed} 个，移除 ${removed} 个（共 ${total} 个禁用来源）`);
+      }
+      refetch();
+    } catch {
+      message.error("修复失败");
+    } finally {
+      setFixing(false);
+    }
+  }
   async function batchDiscoverSelected() {
     for (const t of selTopics) await topicDiscover(t);
   }
@@ -323,6 +341,7 @@ export default function Sources() {
           <Button size="small" danger disabled={!selSources.length} onClick={() => batchToggleSources(false)}>批量禁用</Button>
           <Button danger size="small" disabled={!selSources.length} onClick={batchDeleteSources}>批量删除</Button>
           <Button size="small" loading={checking} onClick={checkAllReachability}>检测可达性</Button>
+          <Button size="small" loading={fixing} onClick={fixDisabledSources}>修复禁用来源</Button>
         </Space>
         <Table rowKey="url" size="small" pagination={false} dataSource={sources}
           rowSelection={{ selectedRowKeys: selSources, onChange: (k) => setSelSources(k as string[]) }}
