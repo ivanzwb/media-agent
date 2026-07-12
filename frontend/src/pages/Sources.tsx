@@ -301,11 +301,9 @@ export default function Sources() {
       <div>
         <Space style={{ marginBottom: 8 }}>
           <Title level={4} style={{ margin: 0 }}>来源</Title>
-          {selSources.length > 0 && <>
-            <Button size="small" onClick={() => batchToggleSources(true)}>批量启用</Button>
-            <Button size="small" danger onClick={() => batchToggleSources(false)}>批量禁用</Button>
-            <Button danger size="small" onClick={batchDeleteSources}>批量删除</Button>
-          </>}
+          <Button size="small" disabled={!selSources.length} onClick={() => batchToggleSources(true)}>批量启用</Button>
+          <Button size="small" danger disabled={!selSources.length} onClick={() => batchToggleSources(false)}>批量禁用</Button>
+          <Button danger size="small" disabled={!selSources.length} onClick={batchDeleteSources}>批量删除</Button>
         </Space>
         <Table rowKey="url" size="small" pagination={false} dataSource={sources}
           rowSelection={{ selectedRowKeys: selSources, onChange: (k) => setSelSources(k as string[]) }}
