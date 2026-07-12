@@ -1304,17 +1304,26 @@ def create_app(config: Config | None = None,
     @app.post("/sources/topics/suggest")
     def topics_suggest(themes: str = Form(...)):
         theme_list = [t.strip() for t in re.split(r"[,，\n]", themes) if t.strip()]
-        subtopics = suggest_subtopics(theme_list, _resolve_provider())
+        try:
+            subtopics = suggest_subtopics(theme_list, _resolve_provider())
+        except Exception as exc:
+            return {"themes": theme_list, "subtopics": [], "error": str(exc)}
         return {"themes": theme_list, "subtopics": subtopics}
 
     @app.post("/sources/topics/keywords")
     def topics_keywords(subtopic: str = Form(...)):
-        keywords = suggest_keywords(subtopic.strip(), _resolve_provider())
+        try:
+            keywords = suggest_keywords(subtopic.strip(), _resolve_provider())
+        except Exception as exc:
+            return {"subtopic": subtopic.strip(), "keywords": [], "error": str(exc)}
         return {"subtopic": subtopic.strip(), "keywords": keywords}
 
     @app.post("/sources/suggest-sources")
     def sources_suggest_frontier(topic: str = Form(...)):
-        candidates = suggest_sources(topic.strip(), _resolve_provider())
+        try:
+            candidates = suggest_sources(topic.strip(), _resolve_provider())
+        except Exception as exc:
+            return {"topic": topic.strip(), "candidates": [], "error": str(exc)}
         return {"topic": topic.strip(), "candidates": candidates}
 
     @app.post("/sources/discover-add")
