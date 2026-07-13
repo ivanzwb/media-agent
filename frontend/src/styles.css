@@ -4,7 +4,7 @@ body {
     "Helvetica Neue", "Microsoft YaHei", sans-serif;
   background: #f5f6f8;
 }
-.ma-content { padding: 24px; min-width: 1200px; width: min(88vw, 1600px); margin: 0 auto; height: 100%; overflow-y: auto; display: flex; flex-direction: column; }
+.ma-content { padding: 24px; min-width: 1200px; width: min(88vw, 1600px); margin: 0 auto; height: calc(100vh - 64px); overflow-y: auto; display: flex; flex-direction: column; }
 
 /* ── DraftEdit: lock page at 100vh, only editor scrollbar ── */
 body:has(.ma-draft-edit),
