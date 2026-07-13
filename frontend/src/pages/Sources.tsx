@@ -212,7 +212,7 @@ export default function Sources() {
     message.success(`已${enabled ? "启用" : "禁用"} ${r.data.updated} 个来源`);
     setSelSources([]); refetch();
   }
-  const [checking, setChecking] = useState(false);
+  const [checking, setChecking] = useLocalState<boolean>("sources-checking", false);
   const [checkProg, setCheckProg] = useState<{current: number; total: number; disabled: number} | null>(null);
   async function checkAllReachability() {
     setChecking(true);
@@ -245,7 +245,7 @@ export default function Sources() {
       setChecking(false);
     }
   }
-  const [fixing, setFixing] = useState(false);
+  const [fixing, setFixing] = useLocalState<boolean>("sources-fixing", false);
   async function fixDisabledSources() {
     setFixing(true);
     try {
@@ -266,6 +266,25 @@ export default function Sources() {
   async function batchDiscoverSelected() {
     for (const t of selTopics) await topicDiscover(t);
   }
+
+  // Resume reachability polling on mount if backend check is still running
+  useEffect(() => {
+    if (!checking) return;
+    let cancelled = false;
+    const poll = setInterval(async () => {
+      try {
+        const r = await getJson<{running: boolean; current: number; total: number; disabled: number}>("/sources/check-reachability/progress");
+        if (cancelled) return;
+        setCheckProg(r);
+        if (!r.running) {
+          clearInterval(poll);
+          setChecking(false);
+          refetch();
+        }
+      } catch { /* ignore */ }
+    }, 500);
+    return () => { cancelled = true; clearInterval(poll); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const topicOptions = topics.map((t) => ({ value: t.name, label: t.name }));
 
