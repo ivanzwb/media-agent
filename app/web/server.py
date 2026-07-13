@@ -595,6 +595,8 @@ def create_app(config: Config | None = None,
                 _rewrite_log(article_id, "保存草稿…",
                              op_key=op_key, op_conn=op_conn)
                 old = ws.get_draft_for_article(article_id)
+                if old:
+                    draft.id = old["id"]
                 saved = ws.save_draft(draft)
 
                 # Compute and store draft score
@@ -613,9 +615,6 @@ def create_app(config: Config | None = None,
                 except Exception as exc:
                     _rewrite_log(article_id, f"评分失败（已跳过）：{exc}",
                                  op_key=op_key, op_conn=op_conn)
-
-                if old and old["id"] != saved.id:
-                    ws.delete_draft(old["id"])
 
                 if image_provider is not None:
                     _rewrite_log(article_id, "生成封面…",

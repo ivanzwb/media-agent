@@ -245,17 +245,26 @@ class Store:
         abs_path.write_text(frontmatter.dumps(post), encoding="utf-8")
         draft.draft_path = str(rel).replace("\\", "/")
 
-        cur = self.conn.execute(
-            """INSERT INTO drafts
-            (article_id, draft_path, cover_image, title_cn,
-             status, updated_at, score)
-            VALUES (?,?,?,?,?,?,?)""",
-            (draft.article_id, draft.draft_path,
-             draft.cover_image, draft.title_cn, draft.status,
-             datetime.now(timezone.utc).isoformat(),
-             draft.score))
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if getattr(draft, "id", None):
+            self.conn.execute(
+                """UPDATE drafts SET article_id=?, draft_path=?,
+                   cover_image=?, title_cn=?, status=?, updated_at=?, score=?
+                   WHERE id=?""",
+                (draft.article_id, draft.draft_path,
+                 draft.cover_image, draft.title_cn, draft.status,
+                 now_iso, draft.score, draft.id))
+        else:
+            cur = self.conn.execute(
+                """INSERT INTO drafts
+                (article_id, draft_path, cover_image, title_cn,
+                 status, updated_at, score)
+                VALUES (?,?,?,?,?,?,?)""",
+                (draft.article_id, draft.draft_path,
+                 draft.cover_image, draft.title_cn, draft.status,
+                 now_iso, draft.score))
+            draft.id = cur.lastrowid
         self.conn.commit()
-        draft.id = cur.lastrowid
         return draft
 
     def update_draft_score(self, draft_id: int, score: float) -> None:
