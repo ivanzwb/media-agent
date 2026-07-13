@@ -342,3 +342,70 @@ def test_save_draft_no_cover_keeps_none(tmp_path):
         draft.cover_image = None
         saved = store.save_draft(draft)
         assert saved.cover_image is None or saved.cover_image == "" or not saved.cover_image
+
+
+# ═══════════════════════════════════════════════════════════════════
+# save_draft in-place update (rewrite preserves draft ID)
+# ═══════════════════════════════════════════════════════════════════
+
+def test_save_draft_new_when_no_id(tmp_path):
+    """save_draft without draft.id creates a new row (INSERT)."""
+    store = make_store(tmp_path)
+    art = store.save_article(sample_article(url="https://x.com/new1"))
+    draft = Draft(article_id=art.id,
+                  title_candidates=["Original"], body_md="original body",
+                  topic="AI", source_url=art.url, source_name=art.source_name)
+    saved = store.save_draft(draft)
+    assert saved.id is not None
+    row = store.get_draft(saved.id)
+    assert row is not None
+
+
+def test_save_draft_updates_in_place_when_id_set(tmp_path):
+    """save_draft with draft.id set updates the existing row (no new ID)."""
+    store = make_store(tmp_path)
+    art = store.save_article(sample_article(url="https://x.com/upd"))
+
+    # Create initial draft
+    draft1 = Draft(article_id=art.id,
+                   title_candidates=["V1"], body_md="version 1",
+                   topic="AI", source_url=art.url, source_name=art.source_name)
+    saved1 = store.save_draft(draft1)
+    original_id = saved1.id
+
+    # Rewrite: set id to trigger UPDATE path
+    draft2 = Draft(article_id=art.id,
+                   title_candidates=["V2"], body_md="version 2",
+                   topic="AI", source_url=art.url, source_name=art.source_name)
+    draft2.id = original_id
+    saved2 = store.save_draft(draft2)
+
+    # Same ID, content updated
+    assert saved2.id == original_id
+    row = store.get_draft(original_id)
+    assert row is not None
+    body = store.read_draft_body(original_id)
+    assert body["body_md"] == "version 2"
+
+
+def test_save_draft_in_place_no_duplicate_rows(tmp_path):
+    """In-place update should not create extra draft rows for same article."""
+    store = make_store(tmp_path)
+    art = store.save_article(sample_article(url="https://x.com/dup"))
+
+    draft = Draft(article_id=art.id,
+                  title_candidates=["First"], body_md="first",
+                  topic="AI", source_url=art.url, source_name=art.source_name)
+    saved = store.save_draft(draft)
+    orig_id = saved.id
+
+    # Rewrite in place
+    draft2 = Draft(article_id=art.id,
+                   title_candidates=["Second"], body_md="second",
+                   topic="AI", source_url=art.url, source_name=art.source_name)
+    draft2.id = orig_id
+    store.save_draft(draft2)
+
+    # Only one draft for this article
+    found = store.get_draft_for_article(art.id)
+    assert found["id"] == orig_id
