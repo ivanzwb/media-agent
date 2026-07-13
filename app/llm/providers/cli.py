@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import ClassVar
 
 from app.llm.base import Message
@@ -227,7 +228,7 @@ class CLIProvider:
     _STDIN_TOOLS: ClassVar[set[str]] = set()
 
     def __init__(self, tool_id: str, timeout: int = 500,
-                 model: str = "") -> None:
+                 model: str = "", cwd: str | Path | None = None) -> None:
         td = _TOOLS.get(tool_id)
         if td is None:
             raise ValueError(f"Unknown CLI tool: {tool_id}")
@@ -242,6 +243,8 @@ class CLIProvider:
         self._exe_path = exe_path
         self._timeout = timeout
         self._default_model = model
+        self._cwd = str(cwd) if cwd else None
+        self._proc: subprocess.Popen | None = None  # running subprocess handle
 
     # -- public API -----------------------------------------------------------
 
@@ -259,6 +262,25 @@ class CLIProvider:
     @property
     def tool_label(self) -> str:
         return self._td.label
+
+    def cancel(self) -> bool:
+        """Kill the running subprocess. Returns True if a process was killed."""
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return False
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+            logger.info("CLI agent %s process %d killed", self._td.id, proc.pid)
+            return True
+        except Exception as e:
+            logger.warning("Failed to kill CLI agent %s: %s", self._td.id, e)
+            return False
+
+    @property
+    def is_running(self) -> bool:
+        """True if a subprocess is currently executing."""
+        return self._proc is not None and self._proc.poll() is None
 
     # -- helpers --------------------------------------------------------------
 
@@ -286,12 +308,6 @@ class CLIProvider:
         """
         # Bun segfaults on null bytes in the prompt.  Strip them.
         prompt = prompt.replace("\x00", "")
-        kwargs: dict = dict(
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
 
         # If no explicit model was passed, fall back to the default model
         # configured at construction time (e.g. from MEDIA_AGENT_LLM_MODEL),
@@ -311,38 +327,55 @@ class CLIProvider:
                 a.replace("{prompt}", prompt) for a in raw_args
             ]
             logger.debug("running: %s", args)
-            proc = subprocess.run(args, **kwargs)
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f"{self._td.label} timed out after {timeout}s")
+            self._proc = subprocess.Popen(
+                args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                encoding="utf-8",
+                errors="replace",
+                cwd=self._cwd,
+            )
+            returncode = -1
+            try:
+                stdout, stderr = self._proc.communicate(timeout=timeout)
+                returncode = self._proc.returncode
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait(timeout=5)
+                self._proc = None
+                raise RuntimeError(f"{self._td.label} timed out after {timeout}s")
+            finally:
+                self._proc = None
         except ValueError as e:
+            self._proc = None
             raise RuntimeError(
                 f"{self._td.label} rejected: {e}. "
                 "The prompt contains characters the OS cannot pass via command line."
             ) from None
 
-        if proc.returncode != 0:
-            stderr = (proc.stderr or "").strip()[:500]
-            stdout = (proc.stdout or "").strip()
+        if returncode is not None and returncode != 0:
+            stderr_text = (stderr or "").strip()[:500]
+            stdout_text = (stdout or "").strip()
             # Some tools (e.g. opencode --format json) write the real error
             # message to stdout as a JSON error event, not to stderr.
-            if stdout.startswith("{"):
+            if stdout_text.startswith("{"):
                 try:
-                    parsed = self._parse_json_events(stdout)
+                    parsed = self._parse_json_events(stdout_text)
                 except RuntimeError as json_err:
                     # JSON error events found — use that message
                     raise RuntimeError(
-                        f"{self._td.label} exited with code {proc.returncode}: {json_err}"
+                        f"{self._td.label} exited with code {returncode}: {json_err}"
                     ) from None
-                if parsed and parsed != stdout:
+                if parsed and parsed != stdout_text:
                     raise RuntimeError(
-                        f"{self._td.label} exited with code {proc.returncode}: {parsed}"
+                        f"{self._td.label} exited with code {returncode}: {parsed}"
                     )
             raise RuntimeError(
-                f"{self._td.label} exited with code {proc.returncode}"
-                + (f": {stderr}" if stderr else "")
+                f"{self._td.label} exited with code {returncode}"
+                + (f": {stderr_text}" if stderr_text else "")
             )
 
-        output = (proc.stdout or "").strip()
+        output = (stdout or "").strip()
         if not output:
             raise RuntimeError(f"{self._td.label} returned empty output")
 

@@ -485,22 +485,183 @@ function AgentModal({ open, draftId, onClose, onApplied }: { open: boolean; draf
   const { message } = AntApp.useApp();
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
+  const [agentStatus, setAgentStatus] = useState<"idle" | "running" | "completed" | "error" | "cancelled">("idle");
+  const [elapsed, setElapsed] = useState(0);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [resultBody, setResultBody] = useState("");
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Check backend status on modal open (survives page refresh)
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = await getJson<{ ok: boolean; status: string; elapsed_s?: number; body_md?: string; error?: string; prompt?: string }>(
+          `/api/draft/${draftId}/agent-status`);
+        if (cancelled) return;
+        if (s.status === "running") {
+          setAgentStatus("running");
+          setElapsed(s.elapsed_s || 0);
+          setPrompt(s.prompt || "");
+          startPolling();
+        } else if (s.status === "completed" && s.body_md) {
+          setAgentStatus("completed");
+          setResultBody(s.body_md);
+        } else if (s.status === "error") {
+          setAgentStatus("error");
+          setErrorMsg(s.error || "未知错误");
+        }
+      } catch { /* ignore — status endpoint may not exist yet */ }
+    })();
+    return () => { cancelled = true; };
+  }, [open, draftId]);
+
+  function startPolling() {
+    if (pollRef.current) return;
+    setElapsed(0);
+    timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
+    pollRef.current = setInterval(async () => {
+      try {
+        const s = await getJson<{ ok: boolean; status: string; elapsed_s?: number; body_md?: string; error?: string }>(
+          `/api/draft/${draftId}/agent-status`);
+        if (s.status === "completed") {
+          stopPolling();
+          setAgentStatus("completed");
+          if (s.body_md) setResultBody(s.body_md);
+          message.success("Agent 修改完成");
+        } else if (s.status === "error") {
+          stopPolling();
+          setAgentStatus("error");
+          setErrorMsg(s.error || "未知错误");
+        } else if (s.status === "cancelled") {
+          stopPolling();
+          setAgentStatus("cancelled");
+          message.info("Agent 已取消");
+        } else if (s.status === "running") {
+          setElapsed(s.elapsed_s || 0);
+        }
+      } catch { /* ignore poll errors */ }
+    }, 2000);
+  }
+
+  function stopPolling() {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+  }
+
+  // Cleanup on unmount / close
+  useEffect(() => {
+    if (!open) { stopPolling(); setAgentStatus("idle"); setBusy(false); setResultBody(""); setErrorMsg(""); setElapsed(0); }
+  }, [open]);
+
   async function run() {
     if (!prompt.trim()) return;
     setBusy(true);
+    setAgentStatus("running");
+    setResultBody("");
+    setErrorMsg("");
     try {
-      const r = await postForm<{ ok?: boolean; body_md?: string; error?: string; running?: boolean }>(`/api/draft/${draftId}/agent-edit`, { prompt });
-      if (r.body_md) { onApplied(r.body_md); message.success("已应用 Agent 修改"); }
-      else if (r.error) message.error(r.error);
-      else message.info("Agent 已开始处理，请稍后刷新查看");
-    } catch { message.error("请求失败"); }
-    finally { setBusy(false); }
+      const r = await postForm<{ ok?: boolean; running?: boolean; error?: string }>(
+        `/api/draft/${draftId}/agent-edit`, { prompt });
+      if (r.error) {
+        setAgentStatus("error");
+        setErrorMsg(r.error);
+        setBusy(false);
+        message.error(r.error);
+      } else if (r.running) {
+        startPolling();
+        setBusy(false);
+      } else {
+        // Shouldn't happen with new async backend, but handle fallback
+        setBusy(false);
+        setAgentStatus("idle");
+      }
+    } catch {
+      setBusy(false);
+      setAgentStatus("error");
+      setErrorMsg("请求失败");
+      message.error("请求失败");
+    }
   }
+
+  async function cancel() {
+    try {
+      await postForm(`/api/draft/${draftId}/agent-cancel`);
+      stopPolling();
+      setAgentStatus("cancelled");
+      message.info("已取消");
+    } catch { message.error("取消失败"); }
+  }
+
+  function applyResult() {
+    if (resultBody) {
+      onApplied(resultBody);
+      message.success("已应用 Agent 修改");
+    }
+  }
+
+  function formatTime(s: number) {
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return m > 0 ? `${m}:${String(sec).padStart(2, "0")}` : `${sec}s`;
+  }
+
+  const isRunning = agentStatus === "running";
+  const isCompleted = agentStatus === "completed";
+  const isError = agentStatus === "error";
+
   return (
-    <Modal open={open} onCancel={onClose} title="用 CLI Agent 修改正文" okText="执行" confirmLoading={busy} onOk={run}>
-      <Paragraph type="secondary">描述你想让 Agent 做的修改（需在设置里配置 CLI Agent）。</Paragraph>
-      <Input.TextArea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)}
-        placeholder="如：把第三段改得更口语化，并补充一个类比" />
+    <Modal
+      open={open}
+      onCancel={isRunning ? cancel : onClose}
+      closable={!isRunning}
+      maskClosable={!isRunning}
+      keyboard={!isRunning}
+      title="用 CLI Agent 修改正文"
+      okText={isRunning ? "处理中…" : isCompleted ? "应用修改" : "执行"}
+      okButtonProps={{
+        loading: busy,
+        disabled: isRunning,
+        type: isCompleted ? "primary" : undefined,
+      }}
+      onOk={isCompleted ? applyResult : run}
+      cancelText={isRunning ? "取消执行" : "关闭"}
+      cancelButtonProps={isRunning ? { danger: true } : undefined}
+    >
+      {!isRunning && !isCompleted && !isError && (
+        <>
+          <Paragraph type="secondary">描述你想让 Agent 做的修改（需在设置里配置 CLI Agent）。</Paragraph>
+          <Input.TextArea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)}
+            placeholder="如：把第三段改得更口语化，并补充一个类比" />
+        </>
+      )}
+
+      {isRunning && (
+        <div style={{ textAlign: "center", padding: "24px 0" }}>
+          <div style={{ fontSize: 16, marginBottom: 8 }}>🤖 Agent 正在处理…</div>
+          <div style={{ fontSize: 24, fontFamily: "monospace", color: "#1890ff" }}>{formatTime(elapsed)}</div>
+          <div style={{ marginTop: 12, color: "#999", fontSize: 13 }}>完成后将自动应用修改，可关闭此窗口</div>
+        </div>
+      )}
+
+      {isCompleted && (
+        <div style={{ textAlign: "center", padding: "16px 0" }}>
+          <div style={{ fontSize: 16, color: "#52c41a", marginBottom: 8 }}>✅ Agent 修改完成</div>
+          <Paragraph type="secondary">点击「应用修改」将结果写入编辑器。</Paragraph>
+        </div>
+      )}
+
+      {isError && (
+        <div style={{ padding: "16px 0" }}>
+          <div style={{ fontSize: 16, color: "#ff4d4f", marginBottom: 8 }}>❌ 执行失败</div>
+          <Paragraph type="danger" style={{ margin: 0 }}>{errorMsg}</Paragraph>
+          <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+            您可以修改指令后重试，或关闭窗口。
+          </Paragraph>
+        </div>
+      )}
     </Modal>
   );
 }

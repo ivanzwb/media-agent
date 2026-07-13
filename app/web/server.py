@@ -223,6 +223,16 @@ def create_app(config: Config | None = None,
     app.state.license = license_mgr          # same object the routes gate on
     app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
+    # ── Agent execution state (persists across page refreshes) ───────────
+    # Keyed by draft_id.  Each entry:
+    #   { "status": "running"|"completed"|"error"|"cancelled",
+    #     "provider": CLIProvider instance (while running),
+    #     "started_at": float (time.time()),
+    #     "body_md": str (result, when completed),
+    #     "error": str (when error),
+    #     "prompt": str (original prompt) }
+    _agent_tasks: dict[int, dict] = {}
+
     # ── React SPA serving (when frontend/dist is built) ──────────────────
     _spa_index = _SPA_DIST / "index.html"
     _spa_enabled = _spa_index.exists()
@@ -909,12 +919,105 @@ def create_app(config: Config | None = None,
 
     # ── Agent edit (draft → CLI agent) ──────────────────────────────────────
 
+    def _agent_run_background(draft_id: int, prompt: str, full_md: str,
+                              original_body: str, provider: cli_provider.CLIProvider):
+        """Background thread: run CLI agent, save result, update state."""
+        try:
+            messages = [
+                Message(role="system", content=(
+                    "你是一个文章编辑助手。用户会给你一篇完整草稿文件（包含 front-matter 元信息和正文 markdown）"
+                    "以及修改指令。\n\n"
+                    "规则：\n"
+                    "1. 根据指令修改草稿内容，**完整输出修改后的整篇文件（包含 front-matter）**。\n"
+                    "2. 禁止输出任何修改说明、总结、备注、注释、思考过程、标记符号——你的全部输出将被直接写入文件，任何多余文字都会出现在最终发布内容中，会造成破坏，所以禁止。\n"
+                    "3. 禁止在正文末尾添加分隔符（如 ---）、注释块、TODO 列表等。\n"
+                    "4. 用户如果要求插入图片，用标准 Markdown 图片语法 `![描述](图片URL)`。\n"
+                    "5. 不要用代码块包裹输出。")),
+                Message(role="user", content=(
+                    f"## 当前草稿文件\n```markdown\n{full_md}\n```\n\n"
+                    f"## 用户指令\n{prompt}")),
+            ]
+            result = provider.chat(messages)
+
+            # Check if cancelled during execution
+            task = _agent_tasks.get(draft_id)
+            if task and task["status"] == "cancelled":
+                return
+
+            # Post-process
+            result = _clean_agent_output(result, original_body=original_body)
+            import frontmatter as _fm
+            _parsed = _fm.loads(result)
+
+            # Backup current draft
+            store = get_store()
+            row = store.get_draft(draft_id)
+            if row and row["draft_path"]:
+                src = config.data_dir / row["draft_path"]
+                if src.exists():
+                    bak_path = src.with_name(src.name + ".agent-bak")
+                    bak_path.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+                    logger.info("agent-edit draft=%d backed up", draft_id)
+
+            # Write agent output to draft file
+            if row and row["draft_path"]:
+                abs_path = config.data_dir / row["draft_path"]
+                abs_path.parent.mkdir(parents=True, exist_ok=True)
+                abs_path.write_text(result, encoding="utf-8")
+
+            # Sync DB
+            _parsed_titles = _parsed.metadata.get("title_candidates", []) or []
+            _parsed_body = _parsed.content
+            preserved_cn = (
+                original_body
+                if not _parsed.metadata.get("title_cn")
+                else _parsed.metadata.get("title_cn")
+            )
+            store.update_draft_body(
+                draft_id,
+                title_candidates=_parsed_titles,
+                body_md=_parsed_body,
+                status="drafted",
+                title_cn=preserved_cn,
+            )
+            logger.info("agent-edit draft=%d saved OK", draft_id)
+
+            _agent_tasks[draft_id] = {
+                "status": "completed",
+                "body_md": _parsed_body,
+                "started_at": _agent_tasks[draft_id]["started_at"],
+                "prompt": prompt,
+            }
+
+        except RuntimeError as e:
+            logger.error("agent-edit draft=%d failed: %s", draft_id, e)
+            _agent_tasks[draft_id] = {
+                "status": "error",
+                "error": str(e),
+                "started_at": _agent_tasks[draft_id]["started_at"],
+                "prompt": prompt,
+            }
+        except Exception as e:
+            logger.exception("agent-edit draft=%d unexpected error", draft_id)
+            _agent_tasks[draft_id] = {
+                "status": "error",
+                "error": f"内部错误: {e}",
+                "started_at": _agent_tasks[draft_id]["started_at"],
+                "prompt": prompt,
+            }
+
     @app.post("/api/draft/{draft_id}/agent-edit")
     def draft_agent_edit(draft_id: int, prompt: str = Form(...)):
-        """Send a user prompt + current draft content to the configured CLI agent."""
+        """Start CLI agent execution in background. Returns immediately."""
         store = get_store()
 
-        # 1. get draft content — give agent the full file (front-matter + body)
+        # Check if already running
+        if draft_id in _agent_tasks and _agent_tasks[draft_id]["status"] == "running":
+            return JSONResponse(
+                {"ok": False, "error": "Agent 正在处理中，请等待完成或取消当前任务"},
+                status_code=409)
+
+        # 1. get draft content
         body = store.read_draft_body(draft_id)
         if not body or "body_md" not in body:
             return JSONResponse({"ok": False, "error": "草稿不存在或内容为空"}, status_code=404)
@@ -926,7 +1029,6 @@ def create_app(config: Config | None = None,
             if abs_path.exists():
                 full_md = abs_path.read_text(encoding="utf-8")
         if not full_md:
-            # fallback: reconstruct from body + minimal metadata
             import frontmatter
             full_md = frontmatter.dumps(frontmatter.Post(body["body_md"]))
 
@@ -951,84 +1053,71 @@ def create_app(config: Config | None = None,
                 {"ok": False, "error": f"Agent '{active_tool}' 未安装或不在 PATH 中"},
                 status_code=400)
 
-        # 4. invoke the agent
-        # NOTE: we deliberately do NOT pass config.llm_model here — that
-        # setting belongs to the text-rewriting LLM provider (OpenAI-
-        # compatible), not to the CLI agent.  Passing it would override
-        # the CLIProvider's built-in _DEFAULT_MODELS fallback (which
-        # already pins a known-working model for opencode).
-        provider = cli_provider.CLIProvider(active_tool, timeout=config.cli_timeout)
-        messages = [
-            Message(role="system", content=(
-                "你是一个文章编辑助手。用户会给你一篇完整草稿文件（包含 front-matter 元信息和正文 markdown）"
-                "以及修改指令。\n\n"
-                "规则：\n"
-                "1. 根据指令修改草稿内容，**完整输出修改后的整篇文件（包含 front-matter）**。\n"
-                "2. 禁止输出任何修改说明、总结、备注、注释、思考过程、标记符号——你的全部输出将被直接写入文件，任何多余文字都会出现在最终发布内容中，会造成破坏，所以禁止。\n"
-                "3. 禁止在正文末尾添加分隔符（如 ---）、注释块、TODO 列表等。\n"
-                "4. 用户如果要求插入图片，用标准 Markdown 图片语法 `![描述](图片URL)`。\n"
-                "5. 不要用代码块包裹输出。")),
-            Message(role="user", content=(
-                f"## 当前草稿文件\n```markdown\n{full_md}\n```\n\n"
-                f"## 用户指令\n{prompt}")),
-        ]
-
-        try:
-            result = provider.chat(messages)
-        except RuntimeError as e:
-            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-        # Post-process: clean agent output — strip thinking text, code fences,
-        # trailing notes, and anything else that would corrupt the draft file.
-        # Pass original body as fallback when agent output is pure thinking text.
+        # 4. start background execution
+        provider = cli_provider.CLIProvider(
+            active_tool, timeout=config.cli_timeout,
+            cwd=config.data_dir.parent,
+        )
         _original_body = body.get("body_md", "") if body else ""
-        result = _clean_agent_output(result, original_body=_original_body)
 
-        # Parse the cleaned output for DB sync and frontend display.
-        # This always succeeds because _clean_agent_output guarantees valid
-        # front-matter output.
-        import frontmatter as _fm
-        _parsed = _fm.loads(result)
-
-        # Backup the current draft file before overwriting
-        if row and row["draft_path"]:
-            src = config.data_dir / row["draft_path"]
-            if src.exists():
-                bak_path = src.with_name(src.name + ".agent-bak")
-                bak_path.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-                logger.info("agent-edit draft=%d backed up", draft_id)
-
-        # Write agent's full output (including front-matter) directly to the draft file
-        if row and row["draft_path"]:
-            abs_path = config.data_dir / row["draft_path"]
-            abs_path.parent.mkdir(parents=True, exist_ok=True)
-            abs_path.write_text(result, encoding="utf-8")
-
-        # Sync DB metadata so read_draft_body() returns correct data
-        _parsed_titles = _parsed.metadata.get("title_candidates", []) or []
-        _parsed_body = _parsed.content
-        preserved_cn = (
-            body.get("title_cn")
-            if not _parsed.metadata.get("title_cn")
-            else _parsed.metadata.get("title_cn")
-        )
-        store.update_draft_body(
-            draft_id,
-            title_candidates=_parsed_titles,
-            body_md=_parsed_body,
-            status="drafted",
-            title_cn=preserved_cn,
-        )
-        logger.info("agent-edit draft=%d saved OK", draft_id)
-
-        # Return body_md separately for the editor (not the full file)
-        return {
-            "ok": True,
-            "result": result,
-            "body_md": _parsed_body,
-            "saved": True,
-            "backup": True,
+        _agent_tasks[draft_id] = {
+            "status": "running",
+            "provider": provider,
+            "started_at": time.time(),
+            "prompt": prompt,
         }
+
+        t = threading.Thread(
+            target=_agent_run_background,
+            args=(draft_id, prompt, full_md, _original_body, provider),
+            daemon=True,
+        )
+        t.start()
+
+        return {"ok": True, "running": True, "draft_id": draft_id}
+
+    @app.get("/api/draft/{draft_id}/agent-status")
+    def draft_agent_status(draft_id: int):
+        """Poll agent execution status."""
+        task = _agent_tasks.get(draft_id)
+        if not task:
+            return {"ok": True, "status": "idle"}
+
+        elapsed = time.time() - task["started_at"]
+        base = {
+            "ok": True,
+            "status": task["status"],
+            "elapsed_s": round(elapsed, 1),
+            "prompt": task.get("prompt", ""),
+        }
+
+        if task["status"] == "running":
+            return base
+
+        if task["status"] == "completed":
+            return {**base, "body_md": task.get("body_md", "")}
+
+        if task["status"] == "error":
+            return {**base, "error": task.get("error", "未知错误")}
+
+        if task["status"] == "cancelled":
+            return {**base, "error": "已取消"}
+
+        return base
+
+    @app.post("/api/draft/{draft_id}/agent-cancel")
+    def draft_agent_cancel(draft_id: int):
+        """Cancel a running agent task."""
+        task = _agent_tasks.get(draft_id)
+        if not task or task["status"] != "running":
+            return JSONResponse({"ok": False, "error": "没有正在运行的 Agent 任务"}, status_code=404)
+
+        provider = task.get("provider")
+        if provider:
+            provider.cancel()
+
+        task["status"] = "cancelled"
+        return {"ok": True, "cancelled": True}
 
     @app.post("/api/draft/{draft_id}/agent-undo")
     def draft_agent_undo(draft_id: int):
