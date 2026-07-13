@@ -110,8 +110,37 @@ if exist "%COSYVOICE_DIR%python.exe" (
 )
 
 :: --- Find the embeddable Python zip bundled in _internal\packaging\ --
-set "EMBED_ZIP=%INTERNAL_DIR%packaging\python-embed-win64.zip"
-set "GET_PIP=%INTERNAL_DIR%packaging\get-pip.py"
+:: PyInstaller 6.x puts --add-data files in root, not _internal/.
+:: Check both locations, then fall back to downloading on-the-fly.
+set "EMBED_ZIP="
+set "GET_PIP="
+
+if exist "%INTERNAL_DIR%packaging\python-embed-win64.zip" (
+    set "EMBED_ZIP=%INTERNAL_DIR%packaging\python-embed-win64.zip"
+    set "GET_PIP=%INTERNAL_DIR%packaging\get-pip.py"
+) else if exist "%BUNDLE_DIR%packaging\python-embed-win64.zip" (
+    set "EMBED_ZIP=%BUNDLE_DIR%packaging\python-embed-win64.zip"
+    set "GET_PIP=%BUNDLE_DIR%packaging\get-pip.py"
+)
+
+:: --- Download on-the-fly if not bundled --------------------------------
+if not defined EMBED_ZIP (
+    echo   Embeddable Python not bundled — downloading now...
+    if not exist "%BUNDLE_DIR%packaging" mkdir "%BUNDLE_DIR%packaging"
+    powershell -Command "Invoke-WebRequest -Uri 'https://mirrors.tuna.tsinghua.edu.cn/python/3.11.9/python-3.11.9-embed-amd64.zip' -OutFile '%BUNDLE_DIR%packaging\python-embed-win64.zip'"
+    if %errorlevel% neq 0 (
+        echo   [FAIL] Failed to download embeddable Python
+        goto :cosyvoice_end
+    )
+    powershell -Command "Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile '%BUNDLE_DIR%packaging\get-pip.py'"
+    if %errorlevel% neq 0 (
+        echo   [FAIL] Failed to download get-pip.py
+        goto :cosyvoice_end
+    )
+    set "EMBED_ZIP=%BUNDLE_DIR%packaging\python-embed-win64.zip"
+    set "GET_PIP=%BUNDLE_DIR%packaging\get-pip.py"
+    echo   [OK] Downloaded
+)
 
 if not exist "%EMBED_ZIP%" (
     echo   [FAIL] Embeddable Python zip not found at:
@@ -142,24 +171,33 @@ if exist "%COSYVOICE_DIR%python*._pth" (
 
 :: --- Install pip ----------------------------------------------------
 echo   Installing pip...
-"%COSYVOICE_DIR%python.exe" "%GET_PIP%" --quiet
+"%COSYVOICE_DIR%python.exe" "%GET_PIP%" --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple
 if %errorlevel% neq 0 (
     echo   [FAIL] pip install failed
     goto :cosyvoice_end
 )
 echo   [OK] pip installed
 
+:: --- Install setuptools + wheel (needed for building packages) --------
+echo   Installing setuptools + wheel...
+"%COSYVOICE_DIR%python.exe" -m pip install setuptools wheel --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple
+if %errorlevel% neq 0 (
+    echo   [FAIL] setuptools install failed
+    goto :cosyvoice_end
+)
+echo   [OK] setuptools + wheel installed
+
 :: --- Install PyTorch (CPU) + CosyVoice ------------------------------
 echo   Installing PyTorch (CPU) + CosyVoice (this may take a few minutes)...
 "%COSYVOICE_DIR%python.exe" -m pip install torch torchvision torchaudio ^
-    --index-url https://download.pytorch.org/whl/cpu --quiet
+    --index-url https://mirrors.aliyun.com/pytorch-wheels/cpu/ --quiet
 if %errorlevel% neq 0 (
     echo   [FAIL] PyTorch install failed
     goto :cosyvoice_end
 )
 echo   [OK] PyTorch installed
 
-"%COSYVOICE_DIR%python.exe" -m pip install cosyvoice --quiet
+"%COSYVOICE_DIR%python.exe" -m pip install cosyvoice --quiet --no-build-isolation -i https://pypi.tuna.tsinghua.edu.cn/simple
 if %errorlevel% neq 0 (
     echo   [FAIL] CosyVoice install failed
     goto :cosyvoice_end
@@ -182,7 +220,8 @@ if not exist "%MODEL_DIR%" mkdir "%MODEL_DIR%"
 :: Use huggingface_hub.snapshot_download to download the model.
 :: Note: `huggingface_hub[cli]` extra no longer exists in >=1.23.0,
 :: and `-m huggingface_hub.cli download` fails because cli is a package.
-"%COSYVOICE_DIR%python.exe" -m pip install huggingface_hub --quiet
+"%COSYVOICE_DIR%python.exe" -m pip install huggingface_hub --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple
+set "HF_ENDPOINT=https://hf-mirror.com"
 "%COSYVOICE_DIR%python.exe" -c ^
 "from huggingface_hub import snapshot_download; snapshot_download('FunAudioLLM/CosyVoice2-0.5B', local_dir=r'%MODEL_DIR%')"
 if %errorlevel% neq 0 (
