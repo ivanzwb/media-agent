@@ -1606,7 +1606,7 @@ def create_app(config: Config | None = None,
         return {"updated": updated}
 
     @app.post("/sources/check-reachability")
-    async def sources_check_reachability():
+    def sources_check_reachability():
         """Check all enabled sources with 3 retries each; disable unreachable."""
         from concurrent.futures import ThreadPoolExecutor
         def _check_with_retries(url: str, retries: int = 3, timeout: float = 10.0) -> bool:
@@ -1658,7 +1658,7 @@ def create_app(config: Config | None = None,
         return check_progress
 
     @app.post("/sources/fix-disabled")
-    async def sources_fix_disabled():
+    def sources_fix_disabled():
         """For each disabled source, search for the correct URL and update it."""
         from concurrent.futures import ThreadPoolExecutor
         from app.discovery import search_web
