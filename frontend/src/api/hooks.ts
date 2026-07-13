@@ -1,5 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { getJson } from "./client";
+
+export function useLocalState<T>(key: string, initial: T): [T, (v: T | ((prev: T) => T)) => void] {
+  const [val, setVal] = useState<T>(() => {
+    try { const s = localStorage.getItem(key); return s !== null ? JSON.parse(s) : initial; } catch { return initial; }
+  });
+  useEffect(() => { try { localStorage.setItem(key, JSON.stringify(val)); } catch { /* ignore */ } }, [key, val]);
+  return [val, setVal];
+}
 
 export interface LicenseStatus {
   active: boolean;

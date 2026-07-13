@@ -8,6 +8,7 @@ import MDEditor, { commands, type ICommand } from "@uiw/react-md-editor";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, getJson, postForm } from "../api/client";
+import { useLocalState } from "../api/hooks";
 import SceneEditor from "../components/SceneEditor";
 
 const { Title, Text, Paragraph } = Typography;
@@ -108,10 +109,36 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   const editorRef = useRef<HTMLDivElement>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
-  const [rewriting, setRewriting] = useState(false);
+  const [rewriting, setRewriting] = useLocalState<boolean>(`draftedit-rewriting-${data.id}`, false);
   const [rewriteStyle, setRewriteStyle] = useState("");
   const [platform, setPlatform] = useState("");
   const TOUTIAO_URL = "https://mp.toutiao.com/profile_v4/graphic/publish";
+
+  // Track active poll interval so we can clear on unmount
+  const rewritePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    return () => { if (rewritePollRef.current) clearInterval(rewritePollRef.current); };
+  }, []);
+
+  // Resume rewrite polling on mount if backend rewrite is still running
+  useEffect(() => {
+    if (!rewriting || !data.article_id) return;
+    let cancelled = false;
+    const poll = setInterval(async () => {
+      try {
+        const s = await getJson<{ running: boolean; done: boolean; error: string | null }>(
+          `/api/rewrite-status?article_id=${data.article_id}`);
+        if (cancelled) return;
+        if (s.done) {
+          clearInterval(poll); setRewriting(false);
+          if (s.error) message.error("重写失败：" + s.error);
+          else { message.success("重写完成"); qc.invalidateQueries({ queryKey: ["draft", data.id] }); location.reload(); }
+        }
+      } catch { /* ignore poll errors */ }
+    }, 1200);
+    rewritePollRef.current = poll;
+    return () => { cancelled = true; clearInterval(poll); rewritePollRef.current = null; };
+  }, [data.article_id]); // intentionally NOT depending on `rewriting` to avoid double-start
 
   const { data: styleData } = useQuery({
     queryKey: ["rewrite-styles"],
@@ -184,6 +211,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     setRewriting(true);
     try {
       await postForm(`/archive/${data.article_id}/rewrite`, rewriteStyle ? { style: rewriteStyle } : {});
+      if (rewritePollRef.current) clearInterval(rewritePollRef.current);
       const poll = setInterval(async () => {
         const s = await getJson<{ running: boolean; done: boolean; error: string | null }>(`/api/rewrite-status?article_id=${data.article_id}`);
         if (s.done) {
@@ -668,28 +696,77 @@ function AgentModal({ open, draftId, onClose, onApplied }: { open: boolean; draf
 
 function VideoTab({ data }: { data: DraftData }) {
   const { message } = AntApp.useApp();
-  const [narrating, setNarrating] = useState(false);
-  const [synth, setSynth] = useState(false);
+  const qc = useQueryClient();
+  const [narrating, setNarrating] = useLocalState<boolean>(`draftedit-narrating-${data.id}`, false);
+  const [synth, setSynth] = useLocalState<boolean>(`draftedit-synth-${data.id}`, false);
   const [hasVideo, setHasVideo] = useState(data.has_video);
   const [voice, setVoice] = useState<string | undefined>(undefined);
 
   const { data: voices } = useQuery({ queryKey: ["voices"], queryFn: () => getJson<{ voices: any[] }>("/api/voices") });
 
+  // Track active poll intervals so we can clear on unmount
+  const narrPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const synthPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    return () => { if (narrPollRef.current) clearInterval(narrPollRef.current); if (synthPollRef.current) clearInterval(synthPollRef.current); };
+  }, []);
+
+  // Resume narration polling on mount if backend is still running
+  useEffect(() => {
+    if (!narrating) return;
+    let cancelled = false;
+    const poll = setInterval(async () => {
+      try {
+        const s = await getJson<{ running: boolean; error: string | null }>(`/api/narration-status?draft_id=${data.id}`);
+        if (cancelled) return;
+        if (!s.running) {
+          clearInterval(poll); setNarrating(false);
+          s.error ? message.error("生成失败：" + s.error) : message.success("讲解脚本+配音已生成");
+        }
+      } catch { /* ignore poll errors */ }
+    }, 1500);
+    narrPollRef.current = poll;
+    return () => { cancelled = true; clearInterval(poll); narrPollRef.current = null; };
+  }, [data.id]); // intentionally NOT depending on `narrating`
+
+  // Resume video synth polling on mount if backend is still running
+  useEffect(() => {
+    if (!synth) return;
+    let cancelled = false;
+    const poll = setInterval(async () => {
+      try {
+        const s = await getJson<{ running: boolean; error: string | null }>(`/api/video-status?draft_id=${data.id}`);
+        if (cancelled) return;
+        if (!s.running) {
+          clearInterval(poll); setSynth(false);
+          if (s.error) message.error("合成失败：" + s.error);
+          else { message.success("视频已合成"); setHasVideo(true); }
+        }
+      } catch { /* ignore poll errors */ }
+    }, 2000);
+    synthPollRef.current = poll;
+    return () => { cancelled = true; clearInterval(poll); synthPollRef.current = null; };
+  }, [data.id]); // intentionally NOT depending on `synth`
+
   async function genNarration() {
     setNarrating(true);
     await postForm(`/drafts/${data.id}/narration`);
+    if (narrPollRef.current) clearInterval(narrPollRef.current);
     const poll = setInterval(async () => {
       const s = await getJson<{ running: boolean; error: string | null }>(`/api/narration-status?draft_id=${data.id}`);
       if (!s.running) { clearInterval(poll); setNarrating(false); s.error ? message.error("生成失败：" + s.error) : message.success("讲解脚本+配音已生成"); }
     }, 1500);
+    narrPollRef.current = poll;
   }
   async function synthVideo() {
     setSynth(true);
     await postForm(`/drafts/${data.id}/video`);
+    if (synthPollRef.current) clearInterval(synthPollRef.current);
     const poll = setInterval(async () => {
       const s = await getJson<{ running: boolean; error: string | null }>(`/api/video-status?draft_id=${data.id}`);
       if (!s.running) { clearInterval(poll); setSynth(false); if (s.error) message.error("合成失败：" + s.error); else { message.success("视频已合成"); setHasVideo(true); } }
     }, 2000);
+    synthPollRef.current = poll;
   }
   async function prepareChannels() {
     const r = await postForm<{ ok?: boolean; caption?: string; url?: string }>(`/drafts/${data.id}/wechat-channels/prepare`);

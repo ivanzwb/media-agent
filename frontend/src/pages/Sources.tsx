@@ -6,17 +6,9 @@ import {
 import { ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useEffect, useState } from "react";
 import { api, getJson, postForm } from "../api/client";
+import { useLocalState } from "../api/hooks";
 
 const { Title, Text, Paragraph } = Typography;
-
-// localStorage helpers for state persistence across refresh
-function useLocalState<T>(key: string, initial: T): [T, (v: T | ((prev: T) => T)) => void] {
-  const [val, setVal] = useState<T>(() => {
-    try { const s = localStorage.getItem(key); return s !== null ? JSON.parse(s) : initial; } catch { return initial; }
-  });
-  useEffect(() => { try { localStorage.setItem(key, JSON.stringify(val)); } catch { /* ignore */ } }, [key, val]);
-  return [val, setVal];
-}
 
 interface Topic { name: string; keywords: string[]; }
 interface Source {
