@@ -242,11 +242,15 @@ export default function Sources() {
     setFixing(true);
     try {
       const r = await api.post("/sources/fix-disabled");
-      const { total, fixed, removed } = r.data;
+      const { total, fixed, skipped, removed } = r.data;
       if (total === 0) {
         message.info("没有禁用的来源需要修复");
       } else {
-        message.success(`修复 ${fixed} 个，移除 ${removed} 个（共 ${total} 个禁用来源）`);
+        const parts = [];
+        if (fixed > 0) parts.push(`修复 ${fixed} 个`);
+        if (skipped > 0) parts.push(`跳过 ${skipped} 个`);
+        if (removed > 0) parts.push(`移除 ${removed} 个`);
+        message.success(`${parts.join("，")}（共 ${total} 个禁用来源）`);
       }
       refetch();
     } catch {

@@ -1672,19 +1672,23 @@ def create_app(config: Config | None = None,
         results: list[dict] = []
         fixed_count = 0
         removed_count = 0
+        skipped_count = 0
 
         def _fix_source(s):
             nonlocal fixed_count, removed_count
             name = s.name
             old_url = s.url
+            # First: re-check if original URL is now reachable (may have been transient)
+            if check_url_connectivity(old_url, timeout=10.0, proxy=_resolve_proxy()):
+                return {"name": name, "old_url": old_url, "new_url": old_url, "status": "fixed"}
             # Search for correct URL
             for query in (f"{name} blog", f"{name} news", f"{name}"):
                 candidates = search_web(query, max_results=5)
                 for cand in candidates:
                     if check_url_connectivity(cand, timeout=8.0, proxy=_resolve_proxy()):
                         return {"name": name, "old_url": old_url, "new_url": cand, "status": "fixed"}
-            # No reachable URL found
-            return {"name": name, "old_url": old_url, "new_url": None, "status": "removed"}
+            # No reachable URL found — keep disabled, do NOT delete
+            return {"name": name, "old_url": old_url, "new_url": None, "status": "skipped"}
 
         with ThreadPoolExecutor(max_workers=5) as pool:
             futures = {pool.submit(_fix_source, s): s for s in disabled_sources}
@@ -1693,7 +1697,7 @@ def create_app(config: Config | None = None,
 
         # Apply changes
         def _apply(cfg):
-            nonlocal fixed_count, removed_count
+            nonlocal fixed_count, removed_count, skipped_count
             for r in results:
                 if r["status"] == "fixed":
                     for s in cfg.sources:
@@ -1705,11 +1709,14 @@ def create_app(config: Config | None = None,
                 elif r["status"] == "removed":
                     cfg.sources = [s for s in cfg.sources if s.url != r["old_url"]]
                     removed_count += 1
+                elif r["status"] == "skipped":
+                    skipped_count += 1
         update_feeds(feeds_path, _apply)
 
         return {
             "total": len(disabled_sources),
             "fixed": fixed_count,
+            "skipped": skipped_count,
             "removed": removed_count,
             "results": results,
         }
