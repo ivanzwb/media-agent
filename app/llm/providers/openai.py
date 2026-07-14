@@ -8,8 +8,9 @@ from app.llm.base import Message
 class OpenAIProvider:
     def __init__(self, api_key: str | None = None,
                  model: str | None = None,
-                 base_url: str | None = None):
-        kwargs = {"api_key": api_key}
+                 base_url: str | None = None,
+                 timeout: float = 60.0):
+        kwargs = {"api_key": api_key, "timeout": timeout}
         if base_url:
             kwargs["base_url"] = base_url
         self.client = OpenAI(**kwargs)

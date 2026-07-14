@@ -1704,18 +1704,26 @@ def create_app(config: Config | None = None,
                     pool.submit(suggest_keywords, st, provider): st
                     for st in subtopics
                 }
-                for i, future in enumerate(as_completed(futures)):
-                    st = futures[future]
-                    try:
-                        keywords = future.result()
-                    except Exception:
-                        keywords = []
-                        logger.warning("[auto-discover] step 2: keywords failed for %s", st)
-                    kw_results.append({"name": st, "keywords": keywords})
-                    p["current"] = i + 1
-                    p["detail"] = f"[{i+1}/{len(subtopics)}] {st}"
-                    logger.info("[auto-discover] step 2: [%d/%d] %s → %d keywords",
-                                i + 1, len(subtopics), st, len(keywords))
+                try:
+                    for i, future in enumerate(as_completed(futures, timeout=120)):
+                        st = futures[future]
+                        try:
+                            keywords = future.result()
+                        except Exception:
+                            keywords = []
+                            logger.warning("[auto-discover] step 2: keywords failed for %s", st)
+                        kw_results.append({"name": st, "keywords": keywords})
+                        p["current"] = i + 1
+                        p["detail"] = f"[{i+1}/{len(subtopics)}] {st}"
+                        logger.info("[auto-discover] step 2: [%d/%d] %s → %d keywords",
+                                    i + 1, len(subtopics), st, len(keywords))
+                except TimeoutError:
+                    logger.warning("[auto-discover] step 2: timed out after 120s, %d/%d completed",
+                                   len(kw_results), len(subtopics))
+                    # Collect whatever completed, fill the rest as empty
+                    for st in subtopics:
+                        if not any(r["name"] == st for r in kw_results):
+                            kw_results.append({"name": st, "keywords": []})
 
             # ── Step 3: add topics to feeds.yaml ──
             p.update(step=3, step_name="添加为主题",
@@ -1758,27 +1766,33 @@ def create_app(config: Config | None = None,
                      current=0, total=len(added_names))
             logger.info("[auto-discover] step 4/5: suggest sources for %d topics", len(added_names))
 
+            completed_count = 0
             with ThreadPoolExecutor(max_workers=min(len(added_names), 5)) as pool:
                 futures = {
                     pool.submit(suggest_sources, t, provider): t
                     for t in added_names
                 }
-                for i, future in enumerate(as_completed(futures)):
-                    t = futures[future]
-                    try:
-                        cands = future.result()
-                    except Exception:
-                        cands = []
-                        logger.warning("[auto-discover] step 4: sources failed for %s", t)
-                    count = 0
-                    for c in cands:
-                        url = c.get("url", "").rstrip("/")
-                        if url and url not in seen_urls:
-                            seen_urls.add(url)
-                            all_candidates.append({"name": c.get("name", ""), "url": c["url"], "topics": [t]})
-                            count += 1
-                    p["current"] = i + 1
-                    p["detail"] = f"[{i+1}/{len(added_names)}] {t} → {count} 个来源"
+                try:
+                    for i, future in enumerate(as_completed(futures, timeout=120)):
+                        t = futures[future]
+                        try:
+                            cands = future.result()
+                        except Exception:
+                            cands = []
+                            logger.warning("[auto-discover] step 4: sources failed for %s", t)
+                        count = 0
+                        for c in cands:
+                            url = c.get("url", "").rstrip("/")
+                            if url and url not in seen_urls:
+                                seen_urls.add(url)
+                                all_candidates.append({"name": c.get("name", ""), "url": c["url"], "topics": [t]})
+                                count += 1
+                        completed_count = i + 1
+                        p["current"] = completed_count
+                        p["detail"] = f"[{completed_count}/{len(added_names)}] {t} → {count} 个来源"
+                except TimeoutError:
+                    logger.warning("[auto-discover] step 4: timed out after 120s, %d/%d completed",
+                                   completed_count, len(added_names))
                     logger.info("[auto-discover] step 4: [%d/%d] %s → %d sources",
                                 i + 1, len(added_names), t, count)
 
