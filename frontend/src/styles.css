@@ -13,7 +13,7 @@ body:has(.ma-draft-edit) .ant-layout {
   overflow: hidden; height: 100vh;
 }
 body:has(.ma-draft-edit) .ma-content {
-  overflow: auto;
+  overflow: hidden;
 }
 
 /* ── DraftEdit: full-height tab content ── */
