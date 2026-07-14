@@ -44,6 +44,24 @@ export default function Sources() {
   const [topicEdit, setTopicEdit] = useState<Topic | null>(null);
   const [sourceEdit, setSourceEdit] = useState<Source | null>(null);
 
+  // ── on mount: if autoBusy is stuck (e.g. page refreshed mid-process), verify backend state ──
+  useEffect(() => {
+    if (!autoBusy) return;
+    getJson<{ running: boolean }>("/sources/auto-discover/progress")
+      .then((r) => {
+        if (!r.running) {
+          // Backend already finished or never started — clear stale state
+          try { localStorage.setItem("sources-autoBusy", "false"); } catch { /* ignore */ }
+          setAutoBusy(false);
+        }
+      })
+      .catch(() => {
+        // Backend unreachable — clear stale state
+        try { localStorage.setItem("sources-autoBusy", "false"); } catch { /* ignore */ }
+        setAutoBusy(false);
+      });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const topics = data?.topics || [];
   const sources = data?.sources || [];
 
