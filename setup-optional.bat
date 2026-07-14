@@ -222,6 +222,11 @@ if not exist "%MODEL_DIR%" mkdir "%MODEL_DIR%"
 :: and `-m huggingface_hub.cli download` fails because cli is a package.
 "%COSYVOICE_DIR%python.exe" -m pip install huggingface_hub --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple
 set "HF_ENDPOINT=https://hf-mirror.com"
+:: Disable the Xet backend — its CAS server (cas-server.xethub.hf.co) is not
+:: served by the mirror and returns 401, breaking the download. Falling back
+:: to classic HTTP downloads works with hf-mirror.com.
+set "HF_HUB_DISABLE_XET=1"
+set "HF_XET_DISABLE=1"
 "%COSYVOICE_DIR%python.exe" -c ^
 "from huggingface_hub import snapshot_download; snapshot_download('FunAudioLLM/CosyVoice2-0.5B', local_dir=r'%MODEL_DIR%')"
 if %errorlevel% neq 0 (

@@ -153,6 +153,10 @@ else
     # Note: `huggingface_hub[cli]` extra no longer exists in >=1.23.0,
     # and `-m huggingface_hub.cli download` fails because cli is a package.
     "$PYTHON" -m pip install huggingface_hub --quiet
+    # Disable the Xet backend — its CAS server (cas-server.xethub.hf.co) can
+    # return 401 and isn't served by mirrors; classic HTTP download is reliable.
+    export HF_HUB_DISABLE_XET=1
+    export HF_XET_DISABLE=1
     "$PYTHON" -c "from huggingface_hub import snapshot_download; snapshot_download('FunAudioLLM/CosyVoice2-0.5B', local_dir='$MODEL_DIR')"
     echo "  [OK] Model downloaded"
 fi
