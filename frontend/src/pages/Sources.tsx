@@ -103,6 +103,8 @@ export default function Sources() {
 
       // Poll progress endpoint every 600ms
       await new Promise<void>((resolve, reject) => {
+        let notStartedCount = 0;
+        const NOT_STARTED_LIMIT = 10; // ~6s — if backend hasn't started by then, abort
         const poll = setInterval(async () => {
           try {
             const r = await getJson<{
@@ -121,6 +123,7 @@ export default function Sources() {
               return;
             }
             if (r.running) {
+              notStartedCount = 0; // reset — backend is alive
               const emojis = ["①", "②", "③", "④", "⑤"];
               const emoji = emojis[r.step - 1] || "●";
               const pct = r.total > 0 ? ` (${r.current}/${r.total})` : "";
@@ -128,6 +131,13 @@ export default function Sources() {
               setRecoStatus(`${emoji} ${r.step_name}${pct} ${r.detail}`);
             } else if (!r.running && r.step === 0 && !r.result) {
               // Not started yet — backend thread hasn't begun; keep polling
+              notStartedCount++;
+              if (notStartedCount >= NOT_STARTED_LIMIT) {
+                setRecoStatus("✗ 后端未响应，请检查服务是否运行");
+                setAutoProg(null);
+                clearInterval(poll);
+                reject(new Error("后端未响应"));
+              }
               return;
             } else {
               // Process finished
@@ -145,6 +155,13 @@ export default function Sources() {
             }
           } catch {
             // Progress endpoint not ready yet, keep polling
+            notStartedCount++;
+            if (notStartedCount >= NOT_STARTED_LIMIT) {
+              setRecoStatus("✗ 后端未响应，请检查服务是否运行");
+              setAutoProg(null);
+              clearInterval(poll);
+              reject(new Error("后端未响应"));
+            }
           }
         }, 600);
       });
