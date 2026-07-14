@@ -1,9 +1,9 @@
 import { Layout as AntLayout, Menu, Button, Tag, Modal } from "antd";
 import { PlayCircleOutlined } from "@ant-design/icons";
 import { Link, useLocation, useNavigate, Outlet } from "react-router-dom";
-import { useState } from "react";
-import { useLicense } from "../api/hooks";
-import { postForm } from "../api/client";
+import { useEffect, useState } from "react";
+import { useLicense, useLocalState } from "../api/hooks";
+import { getJson, postForm } from "../api/client";
 import RunPanel from "./RunPanel";
 
 const { Header, Content } = AntLayout;
@@ -26,8 +26,16 @@ export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { data: lic } = useLicense();
-  const [runOpen, setRunOpen] = useState(false);
+  const [runOpen, setRunOpen] = useLocalState<boolean>("layout-runOpen", false);
   const [guideOpen, setGuideOpen] = useState(false);
+
+  // On mount, if panel was open (from localStorage), check if run is still active
+  useEffect(() => {
+    if (!runOpen) return;
+    getJson<{ running: boolean; stopped: boolean }>("/api/run-status")
+      .then((s) => { if (!s.running && !s.stopped) setRunOpen(false); })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const licTag = lic?.dev
     ? <Tag color="blue">DEV</Tag>
