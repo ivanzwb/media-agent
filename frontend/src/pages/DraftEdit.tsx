@@ -787,34 +787,32 @@ function VideoTab({ data }: { data: DraftData }) {
   }
 
   return (
-    <div style={{ overflowY: "auto", height: "100%" }}>
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <div style={{ flexShrink: 0 }}>
         <Paragraph type="secondary">基于正文自动生成口播分镜脚本并逐段配音，再合成 mp4（需本地 ffmpeg）。</Paragraph>
-        <Space wrap>
+        <Space wrap size="middle">
           <Text>TTS 音色：</Text>
           <Select style={{ width: 220 }} placeholder="选择音色" value={voice} onChange={setVoice}
             options={voices.map((v) => ({ value: v.id, label: v.label }))} />
           <Button type="primary" className="pro-feature" loading={narrating} onClick={genNarration}>
             {data.has_narration ? "重新生成讲解脚本+配音" : "生成讲解脚本+配音"}
           </Button>
-        </Space>
-        <Space wrap>
           <Button type="primary" className="pro-feature" loading={synth} onClick={synthVideo}>
             {hasVideo ? "重新合成讲解视频" : "合成讲解视频（mp4）"}
           </Button>
         </Space>
         {narrating && narrLog.length > 0 && (
-          <Card size="small" title="生成进度" style={{ background: "#fafafa" }}>
+          <Card size="small" title="生成进度" style={{ background: "#fafafa", marginTop: 8 }}>
             <div style={{ maxHeight: 200, overflowY: "auto", fontFamily: "monospace", fontSize: 12 }}>
               {narrLog.map((line, i) => <div key={i}>{line}</div>)}
             </div>
           </Card>
         )}
         {hasVideo && (
-          <div>
+          <div style={{ marginTop: 8 }}>
             <video controls preload="metadata" style={{ maxWidth: "100%", borderRadius: 8 }} src={`/videos/draft-${data.id}/video.mp4`} />
             <div style={{ marginTop: 8 }}>
-              <Space wrap>
+        <Space wrap size="middle">
                 <a href={`/videos/draft-${data.id}/video.mp4`} download><Button size="small">下载 mp4</Button></a>
                 {data.platforms.filter((p) => p.video_publish_url).map((p) => (
                   <a key={p.id} href={p.video_publish_url!} target="_blank" rel="noopener"><Button size="small">{p.label}</Button></a>
@@ -824,9 +822,11 @@ function VideoTab({ data }: { data: DraftData }) {
             </div>
           </div>
         )}
-        <Divider>分镜编辑</Divider>
+      </div>
+      <Divider style={{ margin: "8px 0", flexShrink: 0 }}>分镜编辑</Divider>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         <SceneEditor draftId={data.id} ttsVoice={voice} />
-      </Space>
+      </div>
     </div>
   );
 }
