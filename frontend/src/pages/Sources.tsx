@@ -30,7 +30,7 @@ export default function Sources() {
   const [recoStatus, setRecoStatus] = useLocalState<string>("sources-recoStatus", "");
   const [subtopics, setSubtopics] = useLocalState<string[]>("sources-subtopics", []);
   const [groups, setGroups] = useLocalState<{ name: string; keywords: { kw: string; on: boolean }[] }[]>("sources-groups", []);
-  const autoBusy = /^①|^②|^③|^④|^⑤/.test(recoStatus); // derive from persisted status
+  const [autoBusy, setAutoBusy] = useLocalState<boolean>("sources-autoBusy", false);
 
   // topic discover state: topicName -> {candidates, selected}
   const [discover, setDiscover] = useState<Record<string, { cands: Candidate[]; sel: Set<string>; status: string }>>({});
@@ -87,6 +87,7 @@ export default function Sources() {
 
   async function autoDiscoverAll() {
     if (!themes.trim()) { setRecoStatus("请先输入主题"); return; }
+    setAutoBusy(true);
     const set = (m: string) => setRecoStatus(m);
     try {
       set("① 推荐子主题…");
@@ -120,6 +121,7 @@ export default function Sources() {
     } catch (e: any) {
       set("✗ 流程出错：" + (e?.message || "未知错误"));
     } finally {
+      setAutoBusy(false);
       refetch();
     }
   }
