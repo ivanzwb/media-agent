@@ -1657,6 +1657,173 @@ def create_app(config: Config | None = None,
     async def sources_check_reachability_progress():
         return check_progress
 
+    # ---- auto-discover (single endpoint, server-side parallelism) ----
+    auto_discover_progress = {
+        "running": False, "step": 0, "total_steps": 5,
+        "step_name": "", "detail": "",
+        "current": 0, "total": 0,
+        "result": None, "error": None,
+    }
+
+    @app.post("/sources/auto-discover")
+    def sources_auto_discover(themes: str = Form(...)):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        p = auto_discover_progress
+        provider = _resolve_provider()
+        theme_list = [t.strip() for t in re.split(r"[,，\n]", themes) if t.strip()]
+        if not theme_list:
+            p.update(running=False, error="请输入主题")
+            return {"error": "请输入主题"}
+
+        p.update(running=True, step=1, step_name="推荐子主题",
+                 detail=f"主题：{', '.join(theme_list)}",
+                 current=0, total=0, result=None, error=None)
+        logger.info("[auto-discover] step 1/5: suggest subtopics for %s", theme_list)
+
+        try:
+            # ── Step 1: suggest subtopics (1 LLM call) ──
+            subtopics = suggest_subtopics(theme_list, provider)
+            if not subtopics:
+                p.update(running=False, step=1, step_name="推荐子主题",
+                         detail="没有推荐出子主题", error="没有推荐出子主题")
+                logger.info("[auto-discover] step 1: no subtopics returned")
+                return {"error": "没有推荐出子主题"}
+            logger.info("[auto-discover] step 1: got %d subtopics: %s",
+                        len(subtopics), subtopics)
+
+            # ── Step 2: fetch keywords for each subtopic (parallel LLM calls) ──
+            p.update(step=2, step_name="获取关键词",
+                     detail=f"共 {len(subtopics)} 个子主题",
+                     current=0, total=len(subtopics))
+            logger.info("[auto-discover] step 2/5: fetch keywords for %d subtopics", len(subtopics))
+
+            kw_results: list[dict] = []
+            with ThreadPoolExecutor(max_workers=min(len(subtopics), 5)) as pool:
+                futures = {
+                    pool.submit(suggest_keywords, st, provider): st
+                    for st in subtopics
+                }
+                for i, future in enumerate(as_completed(futures)):
+                    st = futures[future]
+                    try:
+                        keywords = future.result()
+                    except Exception:
+                        keywords = []
+                        logger.warning("[auto-discover] step 2: keywords failed for %s", st)
+                    kw_results.append({"name": st, "keywords": keywords})
+                    p["current"] = i + 1
+                    p["detail"] = f"[{i+1}/{len(subtopics)}] {st}"
+                    logger.info("[auto-discover] step 2: [%d/%d] %s → %d keywords",
+                                i + 1, len(subtopics), st, len(keywords))
+
+            # ── Step 3: add topics to feeds.yaml ──
+            p.update(step=3, step_name="添加为主题",
+                     detail=f"共 {len(kw_results)} 个子主题",
+                     current=0, total=len(kw_results))
+            logger.info("[auto-discover] step 3/5: add %d topics", len(kw_results))
+
+            added_names: list[str] = []
+            for i, it in enumerate(kw_results):
+                if not it["keywords"]:
+                    logger.info("[auto-discover] step 3: skip %s (no keywords)", it["name"])
+                    continue
+                kw_str = ", ".join(it["keywords"])
+                try:
+                    kw_list = [k.strip() for k in kw_str.split(",") if k.strip()]
+                    def _do_add(cfg, _name=it["name"], _kws=kw_list):
+                        cfg.add_topic(Topic(name=_name, keywords=_kws))
+                    update_feeds(feeds_path, _do_add)
+                    added_names.append(it["name"])
+                    logger.info("[auto-discover] step 3: [%d/%d] added topic %s (%d keywords)",
+                                i + 1, len(kw_results), it["name"], len(it["keywords"]))
+                except Exception:
+                    logger.warning("[auto-discover] step 3: failed to add %s", it["name"])
+                p["current"] = i + 1
+                p["detail"] = f"[{i+1}/{len(kw_results)}] {it['name']}"
+
+            if not added_names:
+                p.update(running=False, step=3, step_name="添加为主题",
+                         detail="没有新增主题", result={"added_topics": 0, "added_sources": 0})
+                logger.info("[auto-discover] step 3: no topics added")
+                return {"error": "没有新增主题"}
+
+            logger.info("[auto-discover] step 3: added %d topics: %s", len(added_names), added_names)
+
+            # ── Step 4: suggest sources for each topic (parallel LLM calls) ──
+            all_candidates: list[dict] = []
+            seen_urls: set[str] = set()
+            p.update(step=4, step_name="发现来源",
+                     detail=f"共 {len(added_names)} 个主题",
+                     current=0, total=len(added_names))
+            logger.info("[auto-discover] step 4/5: suggest sources for %d topics", len(added_names))
+
+            with ThreadPoolExecutor(max_workers=min(len(added_names), 5)) as pool:
+                futures = {
+                    pool.submit(suggest_sources, t, provider): t
+                    for t in added_names
+                }
+                for i, future in enumerate(as_completed(futures)):
+                    t = futures[future]
+                    try:
+                        cands = future.result()
+                    except Exception:
+                        cands = []
+                        logger.warning("[auto-discover] step 4: sources failed for %s", t)
+                    count = 0
+                    for c in cands:
+                        url = c.get("url", "").rstrip("/")
+                        if url and url not in seen_urls:
+                            seen_urls.add(url)
+                            all_candidates.append({"name": c.get("name", ""), "url": c["url"], "topics": [t]})
+                            count += 1
+                    p["current"] = i + 1
+                    p["detail"] = f"[{i+1}/{len(added_names)}] {t} → {count} 个来源"
+                    logger.info("[auto-discover] step 4: [%d/%d] %s → %d sources",
+                                i + 1, len(added_names), t, count)
+
+            if not all_candidates:
+                p.update(running=False, step=4, step_name="发现来源",
+                         detail="没有发现来源",
+                         result={"added_topics": len(added_names), "added_sources": 0})
+                logger.info("[auto-discover] step 4: no candidates found")
+                return {"added_topics": len(added_names), "added_sources": 0, "total": 0}
+
+            logger.info("[auto-discover] step 4: found %d unique sources", len(all_candidates))
+
+            # ── Step 5: batch add sources ──
+            p.update(step=5, step_name="添加来源",
+                     detail=f"共 {len(all_candidates)} 个来源",
+                     current=0, total=len(all_candidates))
+            logger.info("[auto-discover] step 5/5: batch add %d sources", len(all_candidates))
+
+            source_configs = [
+                SourceConfig(name=c["name"], type="rss", url=c["url"], topics=c["topics"])
+                for c in all_candidates
+            ]
+            added_count = _append_sources(source_configs)
+
+            p.update(running=False, step=5, step_name="完成",
+                     detail=f"新增 {added_count}/{len(all_candidates)} 个来源",
+                     current=len(all_candidates), total=len(all_candidates),
+                     result={"added_topics": len(added_names),
+                             "added_sources": added_count,
+                             "total": len(all_candidates)})
+            logger.info("[auto-discover] step 5: added %d/%d sources. DONE.",
+                        added_count, len(all_candidates))
+            return {"added_topics": len(added_names),
+                    "added_sources": added_count,
+                    "total": len(all_candidates)}
+
+        except Exception as exc:
+            p.update(running=False, error=str(exc))
+            logger.error("[auto-discover] failed: %s", exc, exc_info=True)
+            return {"error": str(exc)}
+
+    @app.get("/sources/auto-discover/progress")
+    async def sources_auto_discover_progress():
+        return auto_discover_progress
+
     @app.post("/sources/fix-disabled")
     def sources_fix_disabled():
         """For each disabled source, search for the correct URL and update it."""

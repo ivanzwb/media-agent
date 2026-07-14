@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  App as AntApp, Button, Card, Checkbox, Input, Modal, Select, Space, Table,
+  App as AntApp, Button, Card, Checkbox, Input, Modal, Progress, Select, Space, Table,
   Tag, Typography, Form, InputNumber, Divider, Tooltip,
 } from "antd";
 import { ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
@@ -31,6 +31,7 @@ export default function Sources() {
   const [subtopics, setSubtopics] = useLocalState<string[]>("sources-subtopics", []);
   const [groups, setGroups] = useLocalState<{ name: string; keywords: { kw: string; on: boolean }[] }[]>("sources-groups", []);
   const [autoBusy, setAutoBusy] = useLocalState<boolean>("sources-autoBusy", false);
+  const [autoProg, setAutoProg] = useState<{ step: number; stepName: string; detail: string; current: number; total: number } | null>(null);
 
   // topic discover state: topicName -> {candidates, selected}
   const [discover, setDiscover] = useState<Record<string, { cands: Candidate[]; sel: Set<string>; status: string }>>({});
@@ -87,41 +88,73 @@ export default function Sources() {
 
   async function autoDiscoverAll() {
     if (!themes.trim()) { setRecoStatus("请先输入主题"); return; }
+    // Write synchronously to localStorage BEFORE any await — useLocalState's useEffect
+    // fires after render which may not survive a fast page refresh
+    try { localStorage.setItem("sources-autoBusy", "true"); } catch { /* ignore */ }
     setAutoBusy(true);
-    const set = (m: string) => setRecoStatus(m);
+    setAutoProg(null);
+    setRecoStatus("① 启动自动发现…");
     try {
-      set("① 推荐子主题…");
-      const sub = await postForm<{ subtopics: string[] }>("/sources/topics/suggest", { themes });
-      const sts = sub.subtopics || [];
-      if (!sts.length) { set("没有推荐出子主题"); return; }
-      set("② 获取关键词…");
-      const kwRes = await Promise.all(sts.map(async (st) => {
-        const d = await postForm<{ keywords: string[] }>("/sources/topics/keywords", { subtopic: st });
-        return { name: st, keywords: d.keywords || [] };
-      }));
-      set("③ 批量加为主题…");
-      const added: string[] = [];
-      for (const it of kwRes) {
-        try { await postForm("/sources/topics/add", { name: it.name, keywords: it.keywords.join(", ") }); added.push(it.name); } catch { /* skip */ }
-      }
-      if (!added.length) { set("没有新增主题"); refetch(); return; }
-      set(`④ 发现来源…`);
-      const allCands: { name: string; url: string; topics: string[] }[] = [];
-      const seen = new Set<string>();
-      for (const t of added) {
-        try {
-          const d = await postForm<{ candidates: Candidate[] }>("/sources/suggest-sources", { topic: t });
-          (d.candidates || []).forEach((c) => { if (!seen.has(c.url)) { seen.add(c.url); allCands.push({ name: c.name, url: c.url, topics: [t] }); } });
-        } catch { /* skip */ }
-      }
-      if (!allCands.length) { set("④ 没发现来源，已完成主题添加"); refetch(); return; }
-      set("⑤ 添加来源…");
-      const r = await api.post("/sources/batch-discover-add", { items: allCands });
-      set(`✓ 完成：新增 ${r.data.added}/${r.data.total} 个主题+来源`);
+      // Fire backend endpoint (runs server-side with parallelism)
+      const formData = new FormData();
+      formData.append("themes", themes);
+      // Use raw fetch to avoid blocking on response — poll progress instead
+      fetch("/sources/auto-discover", { method: "POST", body: formData }).catch(() => {});
+
+      // Poll progress endpoint every 600ms
+      await new Promise<void>((resolve, reject) => {
+        const poll = setInterval(async () => {
+          try {
+            const r = await getJson<{
+              running: boolean; step: number; total_steps: number;
+              step_name: string; detail: string;
+              current: number; total: number;
+              result: { added_topics: number; added_sources: number; total: number } | null;
+              error: string | null;
+            }>("/sources/auto-discover/progress");
+
+            if (r.error && !r.running) {
+              setRecoStatus("✗ " + r.error);
+              setAutoProg(null);
+              clearInterval(poll);
+              reject(new Error(r.error));
+              return;
+            }
+            if (r.running) {
+              const emojis = ["①", "②", "③", "④", "⑤"];
+              const emoji = emojis[r.step - 1] || "●";
+              const pct = r.total > 0 ? ` (${r.current}/${r.total})` : "";
+              setAutoProg({ step: r.step, stepName: r.step_name, detail: r.detail, current: r.current, total: r.total });
+              setRecoStatus(`${emoji} ${r.step_name}${pct} ${r.detail}`);
+            } else if (!r.running && r.step === 0 && !r.result) {
+              // Not started yet — backend thread hasn't begun; keep polling
+              return;
+            } else {
+              // Process finished
+              clearInterval(poll);
+              if (r.result) {
+                const { added_topics, added_sources, total } = r.result;
+                setRecoStatus(`✓ 完成：新增 ${added_topics} 个主题，${added_sources}/${total} 个来源`);
+              } else if (r.step_name === "完成") {
+                setRecoStatus(`✓ ${r.detail}`);
+              } else {
+                setRecoStatus(`✓ 完成`);
+              }
+              setAutoProg(null);
+              resolve();
+            }
+          } catch {
+            // Progress endpoint not ready yet, keep polling
+          }
+        }, 600);
+      });
     } catch (e: any) {
-      set("✗ 流程出错：" + (e?.message || "未知错误"));
+      setRecoStatus("✗ " + (e?.message || "流程出错"));
+      setAutoProg(null);
     } finally {
+      try { localStorage.setItem("sources-autoBusy", "false"); } catch { /* ignore */ }
       setAutoBusy(false);
+      setAutoProg(null);
       refetch();
     }
   }
@@ -297,6 +330,16 @@ export default function Sources() {
           <Button icon={<ThunderboltOutlined />} loading={autoBusy} onClick={autoDiscoverAll}>自动一键发现</Button>
           <Text type="secondary">{recoStatus}</Text>
         </Space>
+        {autoProg && (
+          <div style={{ marginTop: 8 }}>
+            <Progress
+              percent={autoProg.total > 0 ? Math.round(((autoProg.step - 1 + autoProg.current / Math.max(autoProg.total, 1)) / 5) * 100) : (autoProg.step / 5) * 100}
+              size="small"
+              status="active"
+              strokeColor="#1890ff"
+            />
+          </div>
+        )}
         {subtopics.length > 0 && (
           <div style={{ marginTop: 12 }}>
             <Text>① 选择子主题（可多选，选中即推荐其关键词）：</Text>
