@@ -1310,14 +1310,14 @@ def create_app(config: Config | None = None,
         update_feeds(feeds_path, _do_add)
         return RedirectResponse(url="/sources", status_code=303)
 
-    def _append_sources(found):
+    def _append_sources(found, skip_connectivity=False):
         added = 0
-        proxy = _resolve_proxy()
+        proxy = _resolve_proxy() if not skip_connectivity else None
         def _do_append(cfg):
             nonlocal added
             for s in found:
                 if cfg.add_source(s) is not None:
-                    if not check_url_connectivity(s.url, proxy=proxy):
+                    if not skip_connectivity and not check_url_connectivity(s.url, proxy=proxy):
                         s.enabled = False
                     added += 1
         update_feeds(feeds_path, _do_append)
@@ -1801,7 +1801,7 @@ def create_app(config: Config | None = None,
                 SourceConfig(name=c["name"], type="rss", url=c["url"], topics=c["topics"])
                 for c in all_candidates
             ]
-            added_count = _append_sources(source_configs)
+            added_count = _append_sources(source_configs, skip_connectivity=True)
 
             p.update(running=False, step=5, step_name="完成",
                      detail=f"新增 {added_count}/{len(all_candidates)} 个来源",

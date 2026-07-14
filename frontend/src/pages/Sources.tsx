@@ -31,7 +31,7 @@ export default function Sources() {
   const [subtopics, setSubtopics] = useLocalState<string[]>("sources-subtopics", []);
   const [groups, setGroups] = useLocalState<{ name: string; keywords: { kw: string; on: boolean }[] }[]>("sources-groups", []);
   const [autoBusy, setAutoBusy] = useLocalState<boolean>("sources-autoBusy", false);
-  const [autoProg, setAutoProg] = useState<{ step: number; stepName: string; detail: string; current: number; total: number } | null>(null);
+  const [autoProg, setAutoProg] = useLocalState<{ step: number; stepName: string; detail: string; current: number; total: number } | null>("sources-autoProg", null);
 
   // topic discover state: topicName -> {candidates, selected}
   const [discover, setDiscover] = useState<Record<string, { cands: Candidate[]; sel: Set<string>; status: string }>>({});
@@ -47,18 +47,27 @@ export default function Sources() {
   // ── on mount: if autoBusy is stuck (e.g. page refreshed mid-process), verify backend state ──
   useEffect(() => {
     if (!autoBusy) return;
-    getJson<{ running: boolean }>("/sources/auto-discover/progress")
+    getJson<{ running: boolean; step: number; step_name: string; detail: string; current: number; total: number }>("/sources/auto-discover/progress")
       .then((r) => {
-        if (!r.running) {
+        if (r.running) {
+          // Backend still running — resume progress display
+          const emojis = ["①", "②", "③", "④", "⑤"];
+          const emoji = emojis[r.step - 1] || "●";
+          const pct = r.total > 0 ? ` (${r.current}/${r.total})` : "";
+          setAutoProg({ step: r.step, stepName: r.step_name, detail: r.detail, current: r.current, total: r.total });
+          setRecoStatus(`${emoji} ${r.step_name}${pct} ${r.detail}`);
+        } else {
           // Backend already finished or never started — clear stale state
           try { localStorage.setItem("sources-autoBusy", "false"); } catch { /* ignore */ }
           setAutoBusy(false);
+          setAutoProg(null);
         }
       })
       .catch(() => {
         // Backend unreachable — clear stale state
         try { localStorage.setItem("sources-autoBusy", "false"); } catch { /* ignore */ }
         setAutoBusy(false);
+        setAutoProg(null);
       });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
