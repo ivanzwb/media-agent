@@ -2313,19 +2313,24 @@ def create_app(config: Config | None = None,
     ]
 
     @app.get("/api/voices")
-    def api_list_voices():
-        """Return available voice options grouped by provider."""
+    def api_list_voices(provider: str = ""):
+        """Return available voice options for the given TTS provider.
+
+        If *provider* is empty, fall back to the configured default.
+        """
         from app.tts.voices import list_voices
+        provider = (provider or config.tts_provider or "kitten").lower()
         cloned = list_voices(config)
-        return {
-            "kitten": _KITTEN_PROFILES,
-            "openai": _OPENAI_VOICES,
-            "cosyvoice": [{"id": v["id"], "label": v.get("name", v["id"])}
-                          for v in cloned],
-            "fishaudio": [{"id": v["id"], "label": v.get("name", v["id"])}
-                          for v in cloned],
-            "kitten_http": _KITTEN_PROFILES,
+        cloned_fmt = [{"id": v["id"], "label": v.get("name", v["id"])}
+                      for v in cloned]
+        voices_map: dict[str, list[dict]] = {
+            "kitten": list(_KITTEN_PROFILES),
+            "kitten_http": list(_KITTEN_PROFILES),
+            "openai": list(_OPENAI_VOICES),
+            "cosyvoice": cloned_fmt,
+            "fishaudio": cloned_fmt,
         }
+        return {"voices": voices_map.get(provider, [])}
 
     # ---- localize a single article's media (before transcribing) ----
     mlz_lock = threading.Lock()
@@ -2447,11 +2452,6 @@ def create_app(config: Config | None = None,
         if draft_id is not None:
             base["has_video"] = video_path(draft_id, config) is not None
         return base
-
-    # ---- voice library (local voice cloning, cosyvoice) ----
-    @app.get("/api/voices")
-    def api_voices():
-        return {"voices": list_voices(config)}
 
     @app.post("/voices")
     async def voices_add(file: UploadFile = File(...), name: str = Form("")):

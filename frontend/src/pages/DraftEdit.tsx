@@ -701,8 +701,15 @@ function VideoTab({ data }: { data: DraftData }) {
   const [synth, setSynth] = useLocalState<boolean>(`draftedit-synth-${data.id}`, false);
   const [hasVideo, setHasVideo] = useState(data.has_video);
   const [voice, setVoice] = useState<string | undefined>(undefined);
+  const [narrLog, setNarrLog] = useState<string[]>([]);
 
-  const { data: voices } = useQuery({ queryKey: ["voices"], queryFn: () => getJson<{ voices: any[] }>("/api/voices") });
+  const { data: ttsProvider } = useQuery({ queryKey: ["settings"], queryFn: () => getJson<{ tts_provider?: string }>("/api/settings"), select: (d) => d.tts_provider || "kitten" });
+  const { data: voiceData } = useQuery({
+    queryKey: ["voices", ttsProvider],
+    queryFn: () => getJson<{ voices: {id: string; label: string}[] }>(`/api/voices?provider=${encodeURIComponent(ttsProvider || "kitten")}`),
+    enabled: !!ttsProvider,
+  });
+  const voices = voiceData?.voices || [];
 
   // Track active poll intervals so we can clear on unmount
   const narrPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -717,11 +724,13 @@ function VideoTab({ data }: { data: DraftData }) {
     let cancelled = false;
     const poll = setInterval(async () => {
       try {
-        const s = await getJson<{ running: boolean; error: string | null }>(`/api/narration-status?draft_id=${data.id}`);
+        const s = await getJson<{ running: boolean; error: string | null; logs: string[] }>(`/api/narration-status?draft_id=${data.id}`);
         if (cancelled) return;
+        if (s.logs) setNarrLog(s.logs);
         if (!s.running) {
-          clearInterval(poll); setNarrating(false);
+          clearInterval(poll); setNarrating(false); setNarrLog([]);
           s.error ? message.error("生成失败：" + s.error) : message.success("讲解脚本+配音已生成");
+          qc.invalidateQueries({ queryKey: ["script", data.id] });
         }
       } catch { /* ignore poll errors */ }
     }, 1500);
@@ -750,11 +759,13 @@ function VideoTab({ data }: { data: DraftData }) {
 
   async function genNarration() {
     setNarrating(true);
+    setNarrLog([]);
     await postForm(`/drafts/${data.id}/narration`);
     if (narrPollRef.current) clearInterval(narrPollRef.current);
     const poll = setInterval(async () => {
-      const s = await getJson<{ running: boolean; error: string | null }>(`/api/narration-status?draft_id=${data.id}`);
-      if (!s.running) { clearInterval(poll); setNarrating(false); s.error ? message.error("生成失败：" + s.error) : message.success("讲解脚本+配音已生成"); }
+      const s = await getJson<{ running: boolean; error: string | null; logs: string[] }>(`/api/narration-status?draft_id=${data.id}`);
+      if (s.logs) setNarrLog(s.logs);
+      if (!s.running) { clearInterval(poll); setNarrating(false); setNarrLog([]); s.error ? message.error("生成失败：" + s.error) : message.success("讲解脚本+配音已生成"); qc.invalidateQueries({ queryKey: ["script", data.id] }); }
     }, 1500);
     narrPollRef.current = poll;
   }
@@ -781,7 +792,7 @@ function VideoTab({ data }: { data: DraftData }) {
       <Space wrap>
         <Text>TTS 音色：</Text>
         <Select style={{ width: 220 }} placeholder="选择音色" value={voice} onChange={setVoice}
-          options={(voices?.voices || []).map((v: any) => ({ value: v.id, label: v.name || v.id }))} />
+          options={voices.map((v) => ({ value: v.id, label: v.label }))} />
         <Button type="primary" className="pro-feature" loading={narrating} onClick={genNarration}>
           {data.has_narration ? "重新生成讲解脚本+配音" : "生成讲解脚本+配音"}
         </Button>
@@ -791,6 +802,13 @@ function VideoTab({ data }: { data: DraftData }) {
           {hasVideo ? "重新合成讲解视频" : "合成讲解视频（mp4）"}
         </Button>
       </Space>
+      {narrating && narrLog.length > 0 && (
+        <Card size="small" title="生成进度" style={{ background: "#fafafa" }}>
+          <div style={{ maxHeight: 200, overflowY: "auto", fontFamily: "monospace", fontSize: 12 }}>
+            {narrLog.map((line, i) => <div key={i}>{line}</div>)}
+          </div>
+        </Card>
+      )}
       {hasVideo && (
         <div>
           <video controls preload="metadata" style={{ maxWidth: "100%", borderRadius: 8 }} src={`/videos/draft-${data.id}/video.mp4`} />
