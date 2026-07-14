@@ -227,16 +227,28 @@ set "HF_ENDPOINT=https://hf-mirror.com"
 :: to classic HTTP downloads works with hf-mirror.com.
 set "HF_HUB_DISABLE_XET=1"
 set "HF_XET_DISABLE=1"
+:: Longer per-request timeout to survive slow TLS handshakes to the mirror.
+set "HF_HUB_DOWNLOAD_TIMEOUT=60"
+:: Retry loop — snapshot_download resumes partial files, so re-running
+:: continues from where a timeout/drop left off (large model, flaky mirror).
+set _dl_tries=0
+:cosyvoice_dl
+set /a _dl_tries+=1
 "%COSYVOICE_DIR%python.exe" -c ^
-"from huggingface_hub import snapshot_download; snapshot_download('FunAudioLLM/CosyVoice2-0.5B', local_dir=r'%MODEL_DIR%')"
-if %errorlevel% neq 0 (
-    echo   [FAIL] Model download failed
-    echo.
-    echo   You can download manually:
-    echo   huggingface-cli download FunAudioLLM/CosyVoice2-0.5B
-    echo   --local-dir pretrained_models/CosyVoice2-0.5B
-    goto :cosyvoice_end
+"from huggingface_hub import snapshot_download; snapshot_download('FunAudioLLM/CosyVoice2-0.5B', local_dir=r'%MODEL_DIR%', max_workers=2)"
+if %errorlevel% equ 0 goto :cosyvoice_dl_ok
+if %_dl_tries% lss 8 (
+    echo   下载中断，第 %_dl_tries%/8 次重试（断点续传）...
+    timeout /t 3 >nul
+    goto :cosyvoice_dl
 )
+echo   [FAIL] Model download failed
+echo.
+echo   You can re-run this script to resume, or download manually:
+echo   huggingface-cli download FunAudioLLM/CosyVoice2-0.5B
+echo   --local-dir pretrained_models/CosyVoice2-0.5B
+goto :cosyvoice_end
+:cosyvoice_dl_ok
 echo   [OK] Model downloaded
 
 :cosyvoice_done

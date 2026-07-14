@@ -157,8 +157,20 @@ else
     # return 401 and isn't served by mirrors; classic HTTP download is reliable.
     export HF_HUB_DISABLE_XET=1
     export HF_XET_DISABLE=1
-    "$PYTHON" -c "from huggingface_hub import snapshot_download; snapshot_download('FunAudioLLM/CosyVoice2-0.5B', local_dir='$MODEL_DIR')"
-    echo "  [OK] Model downloaded"
+    export HF_HUB_DOWNLOAD_TIMEOUT=60
+    # Retry loop — snapshot_download resumes partial files, so re-running
+    # continues from where a timeout/drop left off.
+    _dl_n=0
+    until "$PYTHON" -c "from huggingface_hub import snapshot_download; snapshot_download('FunAudioLLM/CosyVoice2-0.5B', local_dir='$MODEL_DIR', max_workers=2)"; do
+        _dl_n=$((_dl_n + 1))
+        if [ "$_dl_n" -ge 8 ]; then
+            echo "  [FAIL] Model download failed — re-run this script to resume."
+            break
+        fi
+        echo "  下载中断，第 $_dl_n/8 次重试（断点续传）..."
+        sleep 3
+    done
+    [ "$_dl_n" -lt 8 ] && echo "  [OK] Model downloaded"
 fi
 
 echo ""
