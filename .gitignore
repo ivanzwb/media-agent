@@ -33,3 +33,5 @@ frontend/dist/
 frontend/.vite/
 .vite/
 *.tsbuildinfo
+packaging/get-pip.py
+packaging/python-embed-win64.zip

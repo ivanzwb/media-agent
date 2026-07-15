@@ -72,9 +72,12 @@ _SUBTOPIC_SEED: dict[str, list[str]] = {
 }
 
 _SOURCE_SEED: dict[str, list[dict]] = {
+    # Seed URLs are best-effort — the primary discovery mechanism uses web
+    # search + RSS autodiscovery, so these only serve as fallback when search
+    # is unavailable.  URLs are the company/org homepages (not guessed paths).
     "ai": [
         # --- International ---
-        {"name": "OpenAI", "url": "https://openai.com/news/"},
+        {"name": "OpenAI", "url": "https://openai.com/blog"},
         {"name": "Anthropic", "url": "https://www.anthropic.com/news"},
         {"name": "Google DeepMind", "url": "https://deepmind.google/discover/blog/"},
         {"name": "Meta AI", "url": "https://ai.meta.com/blog/"},
@@ -82,22 +85,22 @@ _SOURCE_SEED: dict[str, list[dict]] = {
         {"name": "xAI", "url": "https://x.ai/blog"},
         {"name": "Hugging Face", "url": "https://huggingface.co/blog"},
         {"name": "Microsoft Research", "url": "https://www.microsoft.com/en-us/research/blog/"},
-        {"name": "NVIDIA", "url": "https://blogs.nvidia.com/"},
+        {"name": "NVIDIA", "url": "https://blogs.nvidia.com/blog/"},
         # --- Chinese ---
-        {"name": "DeepSeek", "url": "https://deepseek.com"},
-        {"name": "智谱AI (Zhipu/GLM)", "url": "https://z.ai/blog"},
-        {"name": "阿里千问 (Qwen)", "url": "https://qwen.ai/blog/"},
-        {"name": "月之暗面 (Moonshot/Kimi)", "url": "https://platform.kimi.com/blog"},
-        {"name": "百川智能 (Baichuan)", "url": "https://www.baichuan-ai.com/blog"},
-        {"name": "MiniMax", "url": "https://www.minimaxi.com/news"},
-        {"name": "零一万物 (01.AI/Yi)", "url": "https://www.lingyiwanwu.com/blog"},
+        {"name": "DeepSeek", "url": "https://www.deepseek.com"},
+        {"name": "智谱AI (Zhipu/GLM)", "url": "https://zhipuai.cn"},
+        {"name": "阿里千问 (Qwen)", "url": "https://qwenlm.github.io/blog"},
+        {"name": "月之暗面 (Moonshot/Kimi)", "url": "https://platform.moonshot.cn"},
+        {"name": "百川智能 (Baichuan)", "url": "https://www.baichuan-ai.com"},
+        {"name": "MiniMax", "url": "https://www.minimaxi.com"},
+        {"name": "零一万物 (01.AI/Yi)", "url": "https://www.lingyiwanwu.com"},
         {"name": "阶跃星辰 (Stepfun)", "url": "https://www.stepfun.com"},
         {"name": "百度 (文心一言)", "url": "https://yiyan.baidu.com"},
         {"name": "字节跳动 (豆包/火山引擎)", "url": "https://www.volcengine.com"},
     ],
     "人工智能": [
         # --- International ---
-        {"name": "OpenAI", "url": "https://openai.com/news/"},
+        {"name": "OpenAI", "url": "https://openai.com/blog"},
         {"name": "Anthropic", "url": "https://www.anthropic.com/news"},
         {"name": "Google DeepMind", "url": "https://deepmind.google/discover/blog/"},
         {"name": "Meta AI", "url": "https://ai.meta.com/blog/"},
@@ -105,61 +108,61 @@ _SOURCE_SEED: dict[str, list[dict]] = {
         {"name": "xAI", "url": "https://x.ai/blog"},
         {"name": "Hugging Face", "url": "https://huggingface.co/blog"},
         # --- Chinese ---
-        {"name": "DeepSeek (深度求索)", "url": "https://deepseek.com"},
-        {"name": "智谱AI (GLM)", "url": "https://z.ai/blog"},
-        {"name": "阿里千问 (Qwen/通义)", "url": "https://qwen.ai/blog/"},
-        {"name": "月之暗面 (Kimi)", "url": "https://platform.kimi.com/blog"},
-        {"name": "百川智能 (Baichuan)", "url": "https://www.baichuan-ai.com/blog"},
-        {"name": "MiniMax (稀宇科技)", "url": "https://www.minimaxi.com/news"},
-        {"name": "零一万物 (01.AI/Yi)", "url": "https://www.lingyiwanwu.com/blog"},
+        {"name": "DeepSeek (深度求索)", "url": "https://www.deepseek.com"},
+        {"name": "智谱AI (GLM)", "url": "https://zhipuai.cn"},
+        {"name": "阿里千问 (Qwen/通义)", "url": "https://qwenlm.github.io/blog"},
+        {"name": "月之暗面 (Kimi)", "url": "https://platform.moonshot.cn"},
+        {"name": "百川智能 (Baichuan)", "url": "https://www.baichuan-ai.com"},
+        {"name": "MiniMax (稀宇科技)", "url": "https://www.minimaxi.com"},
+        {"name": "零一万物 (01.AI/Yi)", "url": "https://www.lingyiwanwu.com"},
         {"name": "阶跃星辰 (Stepfun)", "url": "https://www.stepfun.com"},
         {"name": "百度 (文心一言)", "url": "https://yiyan.baidu.com"},
         {"name": "字节跳动 (豆包/火山引擎)", "url": "https://www.volcengine.com"},
         {"name": "科大讯飞 (星火)", "url": "https://xinghuo.xfyun.cn"},
     ],
     "大语言模型": [
-        {"name": "OpenAI", "url": "https://openai.com/news/"},
+        {"name": "OpenAI", "url": "https://openai.com/blog"},
         {"name": "Anthropic", "url": "https://www.anthropic.com/news"},
-        {"name": "DeepSeek", "url": "https://deepseek.com"},
-        {"name": "智谱AI (GLM)", "url": "https://z.ai/blog"},
-        {"name": "阿里千问 (Qwen)", "url": "https://qwen.ai/blog/"},
-        {"name": "月之暗面 (Kimi)", "url": "https://platform.kimi.com/blog"},
+        {"name": "DeepSeek", "url": "https://www.deepseek.com"},
+        {"name": "智谱AI (GLM)", "url": "https://zhipuai.cn"},
+        {"name": "阿里千问 (Qwen)", "url": "https://qwenlm.github.io/blog"},
+        {"name": "月之暗面 (Kimi)", "url": "https://platform.moonshot.cn"},
         {"name": "Meta AI (LLama)", "url": "https://ai.meta.com/blog/"},
         {"name": "Mistral AI", "url": "https://mistral.ai/news/"},
         {"name": "xAI (Grok)", "url": "https://x.ai/blog"},
         {"name": "Google DeepMind (Gemini)", "url": "https://deepmind.google/discover/blog/"},
-        {"name": "百川智能 (Baichuan)", "url": "https://www.baichuan-ai.com/blog"},
-        {"name": "MiniMax", "url": "https://www.minimaxi.com/news"},
-        {"name": "零一万物 (Yi)", "url": "https://www.lingyiwanwu.com/blog"},
+        {"name": "百川智能 (Baichuan)", "url": "https://www.baichuan-ai.com"},
+        {"name": "MiniMax", "url": "https://www.minimaxi.com"},
+        {"name": "零一万物 (Yi)", "url": "https://www.lingyiwanwu.com"},
         {"name": "Hugging Face", "url": "https://huggingface.co/blog"},
     ],
     "物理ai": [
-        {"name": "Physical Intelligence", "url": "https://www.physicalintelligence.company/blog"},
-        {"name": "NVIDIA Robotics", "url": "https://blogs.nvidia.com/blog/category/auto/"},
+        {"name": "Physical Intelligence", "url": "https://www.physicalintelligence.company"},
+        {"name": "NVIDIA Robotics", "url": "https://developer.nvidia.com/isaac"},
         {"name": "Boston Dynamics", "url": "https://bostondynamics.com/blog/"},
-        {"name": "Figure", "url": "https://www.figure.ai/news"},
+        {"name": "Figure", "url": "https://www.figure.ai"},
         {"name": "Google DeepMind", "url": "https://deepmind.google/discover/blog/"},
-        {"name": "Tesla Optimus", "url": "https://www.tesla.com/optimus"},
-        {"name": "Agility Robotics", "url": "https://agilityrobotics.com/news"},
-        {"name": "1X Technologies", "url": "https://www.1x.tech/news"},
+        {"name": "Tesla Optimus", "url": "https://www.tesla.com/AI"},
+        {"name": "Agility Robotics", "url": "https://agilityrobotics.com"},
+        {"name": "1X Technologies", "url": "https://www.1x.tech"},
         {"name": "星动纪元 (Robot Era)", "url": "https://www.robo-era.com"},
         {"name": "宇树科技 (Unitree)", "url": "https://www.unitree.com"},
     ],
     "机器人": [
         {"name": "Boston Dynamics", "url": "https://bostondynamics.com/blog/"},
-        {"name": "Figure", "url": "https://www.figure.ai/news"},
-        {"name": "Agility Robotics", "url": "https://agilityrobotics.com/news"},
-        {"name": "Physical Intelligence", "url": "https://www.physicalintelligence.company/blog"},
-        {"name": "Tesla Optimus", "url": "https://www.tesla.com/optimus"},
-        {"name": "1X Technologies", "url": "https://www.1x.tech/news"},
-        {"name": "NVIDIA Robotics", "url": "https://blogs.nvidia.com/blog/category/auto/"},
+        {"name": "Figure", "url": "https://www.figure.ai"},
+        {"name": "Agility Robotics", "url": "https://agilityrobotics.com"},
+        {"name": "Physical Intelligence", "url": "https://www.physicalintelligence.company"},
+        {"name": "Tesla Optimus", "url": "https://www.tesla.com/AI"},
+        {"name": "1X Technologies", "url": "https://www.1x.tech"},
+        {"name": "NVIDIA Robotics", "url": "https://developer.nvidia.com/isaac"},
         {"name": "宇树科技 (Unitree)", "url": "https://www.unitree.com"},
         {"name": "星动纪元 (Robot Era)", "url": "https://www.robo-era.com"},
         {"name": "智元机器人 (Agibot)", "url": "https://www.agibot.com"},
     ],
     "脑机接口": [
         {"name": "Neuralink", "url": "https://neuralink.com/blog/"},
-        {"name": "Synchron", "url": "https://synchron.com/newsroom"},
+        {"name": "Synchron", "url": "https://synchron.com"},
         {"name": "脑虎科技 (Neuralrobo)", "url": "https://www.neuralrobo.com"},
         {"name": "博睿康 (Neuracle)", "url": "https://www.neuracle.cn"},
     ],
@@ -335,15 +338,21 @@ def suggest_keywords(subtopic: str, provider: LLMProvider,
 def suggest_sources(topic: str, provider: LLMProvider,
                     limit: int = 20) -> list[dict]:
     """Recommend frontier companies / orgs / media (with their news/blog URLs)
-    for a topic, so the caller can auto-discover feeds from them."""
+    for a topic, so the caller can auto-discover feeds from them.
+
+    Uses a two-phase approach:
+    1. Ask the LLM for well-known company/org names in the field
+    2. For each name, use web search + RSS autodiscovery to find actual
+       feed URLs (LLMs hallucinate URLs — they guess plausible-looking
+       paths like /blog or /news that often return 404)
+    """
     topic = topic.strip()
     if not topic:
         return []
 
     prompt = (
         "你是行业研究员。针对给定主题，列出该领域全球最前沿、最值得关注的"
-        "公司 / 研究机构 / 实验室 / 行业媒体，并给出它们发布新闻或博客的官方网址"
-        "（尽量是 blog / news / research / rss 页面）。\n"
+        "公司 / 研究机构 / 实验室 / 行业媒体。\n"
         "\n"
         "重要：无论什么主题，中外来源都要兼顾，至少一半应为国内来源"
         "（包含国内公司、国内研究机构、国内行业媒体）。\n"
@@ -351,22 +360,62 @@ def suggest_sources(topic: str, provider: LLMProvider,
         f"主题：{topic}\n"
         '只输出 JSON 数组，每个元素形如 '
         '{"name": "OpenAI", "url": "https://openai.com/news/"}，'
+        "url 尽量给出该机构发布新闻或博客的官方主页（不确定可留空）。"
         "不要任何额外说明。"
     )
-    result = _parse_objects(provider.chat([Message(role="user", content=prompt)]))
+    llm_items = _parse_objects(provider.chat([Message(role="user", content=prompt)]))
 
-    if not result:
-        result = list(_SOURCE_SEED.get(topic.lower(), []))
+    from app.discovery import discover_from_keyword, discover_from_url
 
     out: list[dict] = []
     seen: set[str] = set()
-    for item in result:
-        url = item["url"].rstrip("/")
-        if url and url not in seen:
-            seen.add(url)
-            out.append({"name": item["name"], "url": item["url"]})
+
+    def _try_discover(name: str, url: str) -> bool:
+        """Try to find a real RSS feed for *name* via URL discovery or search."""
+        # 1) If LLM gave a URL, try RSS autodiscovery from that page
+        if url:
+            try:
+                for src in discover_from_url(url):
+                    if src.url not in seen and src.type == "rss":
+                        seen.add(src.url)
+                        out.append({"name": name, "url": src.url})
+                        return True
+            except Exception:
+                pass
+
+        # 2) Search DuckDuckGo for "{name} blog" → discover RSS from top hits
+        for query in (f"{name} blog", f"{name}"):
+            try:
+                for src in discover_from_keyword(query, max_sites=2):
+                    if src.url not in seen and src.type == "rss":
+                        seen.add(src.url)
+                        out.append({"name": name, "url": src.url})
+                        return True
+            except Exception:
+                pass
+        return False
+
+    # Phase 2a: process LLM suggestions (discover real RSS feeds)
+    for item in llm_items:
         if len(out) >= limit:
             break
+        name = item.get("name", "")
+        url = item.get("url", "")
+        if name:
+            _try_discover(name, url)
+
+    # Phase 2b: seed data fallback (try discovery, then add URL as best-effort)
+    if not out:
+        for item in _SOURCE_SEED.get(topic.lower(), []):
+            if len(out) >= limit:
+                break
+            name, url = item["name"], item["url"]
+            if not name or not url or any(o["name"] == name for o in out):
+                continue
+            if not _try_discover(name, url) and url not in seen:
+                seen.add(url)
+                out.append({"name": name, "url": url})
+
     return out
 
 

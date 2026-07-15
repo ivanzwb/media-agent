@@ -1773,7 +1773,7 @@ def create_app(config: Config | None = None,
                     for t in added_names
                 }
                 try:
-                    for i, future in enumerate(as_completed(futures, timeout=120)):
+                    for i, future in enumerate(as_completed(futures, timeout=300)):
                         t = futures[future]
                         try:
                             cands = future.result()
@@ -1791,7 +1791,7 @@ def create_app(config: Config | None = None,
                         p["current"] = completed_count
                         p["detail"] = f"[{completed_count}/{len(added_names)}] {t} → {count} 个来源"
                 except TimeoutError:
-                    logger.warning("[auto-discover] step 4: timed out after 120s, %d/%d completed",
+                    logger.warning("[auto-discover] step 4: timed out after 300s, %d/%d completed",
                                    completed_count, len(added_names))
                     logger.info("[auto-discover] step 4: [%d/%d] %s → %d sources",
                                 i + 1, len(added_names), t, count)
@@ -1805,26 +1805,67 @@ def create_app(config: Config | None = None,
 
             logger.info("[auto-discover] step 4: found %d unique sources", len(all_candidates))
 
-            # ── Step 5: batch add sources ──
-            p.update(step=5, step_name="添加来源",
-                     detail=f"共 {len(all_candidates)} 个来源",
+            # ── Step 5: validate + batch add sources ──
+            p.update(step=5, step_name="验证并添加来源",
+                     detail=f"正在验证 {len(all_candidates)} 个来源的可达性",
                      current=0, total=len(all_candidates))
-            logger.info("[auto-discover] step 5/5: batch add %d sources", len(all_candidates))
+            logger.info("[auto-discover] step 5/5: validate & add %d sources", len(all_candidates))
 
-            source_configs = [
-                SourceConfig(name=c["name"], type="rss", url=c["url"], topics=c["topics"])
-                for c in all_candidates
-            ]
-            added_count = _append_sources(source_configs, skip_connectivity=True)
+            # Validate reachability in parallel before adding
+            proxy = _resolve_proxy()
+            validated: list[SourceConfig] = []
+            skipped: list[dict] = []
+
+            def _check_source(c):
+                url = c["url"]
+                try:
+                    ok = check_url_connectivity(url, timeout=8.0, proxy=proxy)
+                except Exception:
+                    ok = False
+                return c, ok
+
+            with ThreadPoolExecutor(max_workers=min(len(all_candidates), 10)) as pool:
+                futures = {pool.submit(_check_source, c): c for c in all_candidates}
+                try:
+                    for i, future in enumerate(as_completed(futures, timeout=60)):
+                        c, ok = future.result()
+                        if ok:
+                            validated.append(SourceConfig(
+                                name=c["name"], type="rss", url=c["url"],
+                                topics=c["topics"]))
+                        else:
+                            skipped.append({"name": c["name"], "url": c["url"]})
+                            logger.info("[auto-discover] step 5: skipping unreachable %s (%s)",
+                                        c["name"], c["url"])
+                        p["current"] = i + 1
+                        p["detail"] = f"[{i+1}/{len(all_candidates)}] 验证中…"
+                except TimeoutError:
+                    logger.warning("[auto-discover] step 5: validation timed out, "
+                                   "%d/%d checked", len(validated) + len(skipped),
+                                   len(all_candidates))
+                    for c in all_candidates:
+                        url = c["url"]
+                        if not any(v.url == url for v in validated) and \
+                           not any(s["url"] == url for s in skipped):
+                            validated.append(SourceConfig(
+                                name=c["name"], type="rss", url=c["url"],
+                                topics=c["topics"]))
+
+            if skipped:
+                logger.info("[auto-discover] step 5: %d sources skipped (unreachable), "
+                            "%d validated", len(skipped), len(validated))
+
+            added_count = _append_sources(validated, skip_connectivity=True) if validated else 0
 
             p.update(running=False, step=5, step_name="完成",
-                     detail=f"新增 {added_count}/{len(all_candidates)} 个来源",
+                     detail=f"新增 {added_count} 个来源（跳过 {len(skipped)} 个不可达来源）",
                      current=len(all_candidates), total=len(all_candidates),
                      result={"added_topics": len(added_names),
                              "added_sources": added_count,
-                             "total": len(all_candidates)})
-            logger.info("[auto-discover] step 5: added %d/%d sources. DONE.",
-                        added_count, len(all_candidates))
+                             "total": len(all_candidates),
+                             "skipped": len(skipped)})
+            logger.info("[auto-discover] step 5: added %d sources, skipped %d unreachable. DONE.",
+                        added_count, len(skipped))
             return {"added_topics": len(added_names),
                     "added_sources": added_count,
                     "total": len(all_candidates)}
