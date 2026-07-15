@@ -12,6 +12,9 @@ datas = [
     ("app/licensing/public_key.b64", "app/licensing"),
 ]
 hiddenimports = []
+d, _b, h = collect_all("app")
+datas += d
+hiddenimports += h
 hiddenimports += collect_submodules("uvicorn")
 for pkg in ("trafilatura", "lxml", "cryptography", "readability",
             "feedparser", "fastapi", "starlette"):
