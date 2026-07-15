@@ -1456,8 +1456,13 @@ def create_app(config: Config | None = None,
             topics = item.get("topics", [])
             if isinstance(topics, str):
                 topics = [t.strip() for t in topics.split(",") if t.strip()]
+            # Accept an optional per-item type (default "rss" for backward
+            # compat). Scrape candidates need mode="list" so the collector
+            # scrapes the article-listing page.
+            typ = item.get("type", "rss") or "rss"
             found.append(SourceConfig(
-                name=name, type="rss", url=url, topics=topics))
+                name=name, type=typ, url=url, topics=topics,
+                mode="list" if typ == "scrape" else "single"))
         added = _append_sources(found)
         return {"added": added, "total": len(found)}
 
@@ -1938,7 +1943,8 @@ def create_app(config: Config | None = None,
                         if url and url not in seen_urls:
                             seen_urls.add(url)
                             all_candidates.append(
-                                {"name": it["name"], "url": it["url"], "topics": [t]})
+                                {"name": it["name"], "url": it["url"],
+                                 "type": it.get("type", "rss"), "topics": [t]})
 
             logger.info("[auto-discover] step 4: resolved %d sources from %d topics",
                         len(all_candidates), len(resolve_topics))
@@ -1990,8 +1996,11 @@ def create_app(config: Config | None = None,
                 # Unreachable only when we actually got a False result; if the
                 # check didn't finish, keep the source rather than dropping it.
                 if reachable or res is None:
+                    _ctype = c.get("type", "rss")
                     validated.append(SourceConfig(
-                        name=c["name"], type="rss", url=c["url"], topics=c["topics"]))
+                        name=c["name"], type=_ctype, url=c["url"],
+                        topics=c["topics"],
+                        mode="list" if _ctype == "scrape" else "single"))
                     if res is None:
                         logger.info("[auto-discover] step 5: keeping unverified %s (%s)",
                                     c["name"], c["url"])

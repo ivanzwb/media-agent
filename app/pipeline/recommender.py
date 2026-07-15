@@ -295,14 +295,29 @@ def _resolve_sources(topic: str, candidates: list[dict], limit: int = 20,
 
     This is the SINGLE resolution path shared by the manual per-topic
     ``suggest_sources`` and the one-click batched flow, so both produce an
-    identical result for the same candidates:
+    identical result for the same candidates.  Each returned entry carries a
+    ``type`` (``"rss"`` or ``"scrape"``):
 
     * for each candidate, try RSS ``<link>`` autodiscovery from its URL, then
       conventional feed paths (``/feed``, ``/rss.xml`` …), then a DuckDuckGo
-      keyword search — keeping only real RSS feeds;
-    * if nothing resolved, fall back to curated seed sources for *topic*,
-      keeping their homepage URL as a best-effort source even when no RSS feed
-      can be discovered.
+      keyword search — tagging the entry ``type="rss"`` when a real feed is
+      found;
+    * many sites publish no RSS at all.  Discovery must NOT filter content —
+      that is the scraper's job (``app/sources/scraper.py`` decides which links
+      are real articles).  So RSS discovery is an *enhancement*, never a gate:
+      every candidate with a usable http(s) URL is KEPT.  When a feed is found
+      the entry is ``type="rss"``; otherwise it is kept as ``type="scrape"``
+      pointing at its article-listing / homepage URL (preferring
+      ``discover_from_url``'s own scrape URL when available).  The collector
+      then scrapes such sources via ``SourceConfig(type="scrape", mode="list")``;
+    * if a topic yields nothing at all, fall back to curated seed sources for
+      *topic*, resolved the same way (RSS when possible, otherwise scrape).
+
+    *limit* caps how many sources are returned; *max_attempts* caps how many
+    candidates we PROBE over the network for RSS.  Once the probe budget is
+    spent, remaining candidates are still kept as scrape sources (using their
+    URL directly, no extra network) — so the count of returned sources tracks
+    the number of distinct candidate URLs, not just the few that had feeds.
     """
     import time
     from app.discovery import (discover_from_keyword, discover_from_url,
@@ -312,61 +327,85 @@ def _resolve_sources(topic: str, candidates: list[dict], limit: int = 20,
     seen: set[str] = set()
     attempts = 0
 
-    def _try_discover(name: str, url: str) -> bool:
-        # 1) RSS autodiscovery from the given page.
-        if url:
-            try:
-                for src in discover_from_url(url):
-                    if src.url not in seen and src.type == "rss":
-                        seen.add(src.url)
-                        out.append({"name": name, "url": src.url})
-                        return True
-            except Exception:
-                pass
-            # 2) Conventional feed paths on the same domain (no <link> tag).
-            try:
-                feed = probe_feed_paths(url, deadline=time.monotonic() + 20)
-                if feed and feed not in seen:
-                    seen.add(feed)
-                    out.append({"name": name, "url": feed})
-                    return True
-            except Exception:
-                pass
-        # 3) Search the web for the org's feed.
-        for query in (f"{name} blog", f"{name}"):
-            try:
-                for src in discover_from_keyword(query, max_sites=2):
-                    if src.url not in seen and src.type == "rss":
-                        seen.add(src.url)
-                        out.append({"name": name, "url": src.url})
-                        return True
-            except Exception:
-                pass
-        return False
+    def _resolve_one(name: str, url: str) -> dict | None:
+        """Resolve a single candidate to an RSS feed or a scrape source.
 
-    # Phase A: resolve LLM/candidate suggestions (real RSS feeds only).
+        RSS probing runs only while the network *max_attempts* budget lasts;
+        beyond that the candidate is kept as a scrape source without any
+        further network calls.  Returns the resolved ``{name, url, type}`` dict
+        (recording its URL in *seen*) or ``None`` when the candidate has no
+        usable http(s) URL / is a duplicate.
+        """
+        nonlocal attempts
+        scrape_url: str | None = None
+        if attempts < max_attempts:
+            attempts += 1
+            if url:
+                # 1) RSS autodiscovery from the given page. discover_from_url
+                #    also returns a scrape SourceConfig (its own sensible scrape
+                #    URL) when the page advertises no feed — remember it.
+                try:
+                    for src in discover_from_url(url):
+                        if src.type == "rss":
+                            if src.url not in seen:
+                                seen.add(src.url)
+                                return {"name": name, "url": src.url,
+                                        "type": "rss"}
+                        elif scrape_url is None and src.url:
+                            scrape_url = src.url
+                except Exception:
+                    pass
+                # 2) Conventional feed paths on the same domain (no <link> tag).
+                try:
+                    feed = probe_feed_paths(url, deadline=time.monotonic() + 20)
+                    if feed and feed not in seen:
+                        seen.add(feed)
+                        return {"name": name, "url": feed, "type": "rss"}
+                except Exception:
+                    pass
+            # 3) Search the web for the org's feed.
+            for query in (f"{name} blog", f"{name}"):
+                try:
+                    for src in discover_from_keyword(query, max_sites=2):
+                        if src.url not in seen and src.type == "rss":
+                            seen.add(src.url)
+                            return {"name": name, "url": src.url, "type": "rss"}
+                except Exception:
+                    pass
+        # 4) No RSS discoverable (or probe budget spent) — keep the candidate as
+        #    a scrape source rather than dropping it (most sites have no feed).
+        #    Prefer the scrape URL discover_from_url picked; else the candidate.
+        scrape = scrape_url or (url if url.startswith(("http://", "https://"))
+                                else "")
+        if scrape and scrape not in seen:
+            seen.add(scrape)
+            return {"name": name, "url": scrape, "type": "scrape"}
+        return None
+
+    # Phase A: resolve LLM/candidate suggestions. Bounded by *limit* only —
+    # every distinct candidate URL is kept (RSS-probed while budget lasts).
     for item in candidates:
-        if len(out) >= limit or attempts >= max_attempts:
+        if len(out) >= limit:
             break
         name = item.get("name", "")
         url = item.get("url", "")
         if name:
-            attempts += 1
-            _try_discover(name, url)
+            resolved = _resolve_one(name, url)
+            if resolved:
+                out.append(resolved)
 
-    # Phase B: seed fallback — keep best-effort homepage URLs when nothing
-    # discoverable resolved, so a topic is never emptier than its seed list.
+    # Phase B: seed fallback — resolve curated seeds the same way so a topic is
+    # never emptier than its seed list (RSS when discoverable, else scrape).
     if not out:
         for item in _SOURCE_SEED.get(topic.lower(), []):
-            if len(out) >= limit or attempts >= max_attempts:
+            if len(out) >= limit:
                 break
             name, url = item["name"], item["url"]
             if not name or not url or any(o["name"] == name for o in out):
                 continue
-            attempts += 1
-            if not _try_discover(name, url) and url not in seen:
-                seen.add(url)
-                out.append({"name": name, "url": url})
+            resolved = _resolve_one(name, url)
+            if resolved:
+                out.append(resolved)
 
     return out
 

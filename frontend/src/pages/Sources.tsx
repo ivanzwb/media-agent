@@ -17,7 +17,7 @@ interface Source {
   max_pages: number; render_js: boolean; enabled: boolean;
 }
 interface Feeds { topics: Topic[]; sources: Source[]; }
-interface Candidate { name: string; url: string; }
+interface Candidate { name: string; url: string; type?: string; }
 
 export default function Sources() {
   const qc = useQueryClient();
@@ -241,7 +241,7 @@ export default function Sources() {
     if (!st) return;
     const urls = [...st.sel];
     if (!urls.length) { message.warning("请先选择来源"); return; }
-    const items = st.cands.filter((c) => st.sel.has(c.url)).map((c) => ({ name: c.name, url: c.url, topics: [topic] }));
+    const items = st.cands.filter((c) => st.sel.has(c.url)).map((c) => ({ name: c.name, url: c.url, type: c.type || "rss", topics: [topic] }));
     const r = await api.post("/sources/batch-discover-add", { items });
     message.success(`新增 ${r.data.added}/${r.data.total} 个来源`);
     setDiscover((d) => { const n = { ...d }; delete n[topic]; return n; });
@@ -470,7 +470,7 @@ export default function Sources() {
                         onChange={(on) => setDiscover((d) => {
                           const s = new Set(d[t.name].sel); on ? s.add(c.url) : s.delete(c.url);
                           return { ...d, [t.name]: { ...d[t.name], sel: s } };
-                        })}><Tooltip title={c.url}>{c.name}</Tooltip></Tag.CheckableTag>
+                        })}><Tooltip title={c.url}>{c.name} · {c.type === "scrape" ? "网页" : "RSS"}</Tooltip></Tag.CheckableTag>
                     ))}
                   </div>
                   {st.cands.length > 0 && <Button type="primary" size="small" onClick={() => topicAddSources(t.name)}>添加选中来源</Button>}

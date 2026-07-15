@@ -77,6 +77,7 @@ def test_suggest_sources_discover_from_url():
     urls = [o["url"] for o in out]
     assert "https://openai.com/blog/rss" in urls
     assert out[0]["name"] == "OpenAI"
+    assert out[0]["type"] == "rss"
 
 
 def test_suggest_sources_discover_by_name():
@@ -118,6 +119,8 @@ def test_suggest_sources_seed_fallback():
     names = [o["name"] for o in out]
     assert "OpenAI" in names
     assert all(o["url"].startswith("http") for o in out)
+    # No RSS discoverable → seeds are kept as scrape sources.
+    assert all(o["type"] == "scrape" for o in out)
 
 
 def test_suggest_sources_dedupes():
@@ -164,8 +167,9 @@ def test_suggest_sources_empty_topic():
     assert suggest_sources("  ", MockProvider()) == []
 
 
-def test_suggest_sources_no_urls_when_all_discovery_fails():
-    """When LLM gives names but all discovery fails and no seed, returns empty."""
+def test_suggest_sources_keeps_scrape_when_no_rss():
+    """A candidate with a usable URL but NO discoverable RSS is kept as a
+    scrape source (discovery must not drop non-RSS sites)."""
     provider = MockProvider(responses=[
         '[{"name": "UnknownCorp", "url": "https://unknown.com"}]'
     ])
@@ -181,7 +185,43 @@ def test_suggest_sources_no_urls_when_all_discovery_fails():
             with patch("app.discovery.probe_feed_paths", return_value=None):
                 out = suggest_sources("niche_topic_xyz", provider)
 
-    assert out == []
+    assert out == [{"name": "UnknownCorp", "url": "https://unknown.com",
+                    "type": "scrape"}]
+
+
+def test_resolve_sources_all_scrape_when_none_expose_rss():
+    """When NONE of the candidates expose RSS, the resolver still returns ALL
+    of them as scrape sources (permissive: RSS is an upgrade, not a gate)."""
+    candidates = [
+        {"name": "A", "url": "https://a.com"},
+        {"name": "B", "url": "https://b.com/news"},
+        {"name": "C", "url": "https://c.com/blog"},
+    ]
+
+    with patch("app.discovery.discover_from_url", return_value=[]):
+        with patch("app.discovery.discover_from_keyword", return_value=[]):
+            with patch("app.discovery.probe_feed_paths", return_value=None):
+                out = _resolve_sources("topic", candidates)
+
+    assert [o["url"] for o in out] == [c["url"] for c in candidates]
+    assert all(o["type"] == "scrape" for o in out)
+
+
+def test_resolve_sources_keeps_candidates_beyond_probe_budget():
+    """max_attempts bounds NETWORK RSS-probing, not how many candidates we
+    keep: candidates past the probe budget are still kept as scrape sources."""
+    candidates = [{"name": f"S{i}", "url": f"https://s{i}.com"}
+                  for i in range(8)]
+
+    with patch("app.discovery.discover_from_url", return_value=[]):
+        with patch("app.discovery.discover_from_keyword", return_value=[]):
+            with patch("app.discovery.probe_feed_paths", return_value=None):
+                out = _resolve_sources("topic", candidates, limit=20,
+                                       max_attempts=3)
+
+    # All 8 distinct candidates kept even though only 3 were probed.
+    assert len(out) == 8
+    assert all(o["type"] == "scrape" for o in out)
 
 
 def test_batched_source_resolution_matches_manual():
@@ -204,8 +244,11 @@ def test_batched_source_resolution_matches_manual():
                     manual = suggest_sources(t, MockProvider(responses=[arr]))
                     batched = _resolve_sources(t, candidates)
                     assert manual == batched
-    # Seeded topic keeps best-effort URLs; unseeded stays empty when nothing
-    # resolves — both mirror the manual path exactly.
+                    # Every resolved entry carries a type; with no RSS
+                    # discoverable here they are kept as scrape sources.
+                    assert all(o["type"] == "scrape" for o in batched)
+    # Both topics keep their candidate URLs as best-effort scrape sources —
+    # both mirror the manual path exactly.
     assert any(o["name"] == "OpenAI" for o in name_map["人工智能"])
 
 
