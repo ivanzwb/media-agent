@@ -160,7 +160,7 @@ def _save_feeds_unlocked(config: FeedsConfig, path: Path | str) -> None:
     """Write feeds.yaml via tempfile + rename (caller MUST hold _feeds_lock)."""
     data = _build_feeds_data(config)
     yaml_text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
-    dst = Path(path)
+    dst = Path(path).resolve()
 
     # Atomic write: temp file in the same directory → os.replace (atomic on same FS).
     fd, tmp = tempfile.mkstemp(dir=dst.parent, suffix=".yaml", prefix=".feeds_tmp_")
