@@ -82,7 +82,7 @@ export default function Settings() {
             key: "model", label: "模型", forceRender: true, children: (
               <>
                 <Card title="LLM" size="small" style={{ marginBottom: 16 }}>
-                  <Form.Item name="llm_provider" label="Provider"><Input placeholder="mock / openai / anthropic …" /></Form.Item>
+                  <Form.Item name="llm_provider" label="Provider"><Select options={["openai", "mock", "auto", "opencode", "codex", "copilot"].map((v) => ({ value: v }))} /></Form.Item>
                   <Form.Item name="llm_model" label="模型"><Input /></Form.Item>
                   <Form.Item name="llm_api_base" label="API Base"><Input /></Form.Item>
                   <Form.Item name="llm_api_key" label={<>API Key {data.llm_api_key.set && <Tag color="green">已设置 {data.llm_api_key.masked}</Tag>}</>}>
@@ -90,7 +90,7 @@ export default function Settings() {
                   </Form.Item>
                 </Card>
                 <Card title="图片" size="small" style={{ marginBottom: 16 }}>
-                  <Form.Item name="image_provider" label="Provider"><Input placeholder="mock / openai …" /></Form.Item>
+                  <Form.Item name="image_provider" label="Provider"><Select options={["openai", "mock"].map((v) => ({ value: v }))} /></Form.Item>
                   <Form.Item name="image_model" label="模型"><Input /></Form.Item>
                   <Form.Item name="image_api_base" label="API Base"><Input /></Form.Item>
                   <Form.Item name="image_api_key" label={<>API Key {data.image_api_key.set && <Tag color="green">已设置 {data.image_api_key.masked}</Tag>}</>}>
