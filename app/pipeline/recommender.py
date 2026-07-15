@@ -255,6 +255,122 @@ def _parse_objects(raw: str) -> list[dict]:
     return []
 
 
+def _parse_object_map(raw: str) -> dict:
+    """Extract a JSON object (dict) from a model reply, tolerantly."""
+    def _coerce(obj) -> dict:
+        return obj if isinstance(obj, dict) else {}
+
+    try:
+        return _coerce(json.loads(raw))
+    except (json.JSONDecodeError, TypeError):
+        pass
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if m:
+        try:
+            return _coerce(json.loads(m.group(0)))
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def _coerce_source_objs(items) -> list[dict]:
+    """Coerce a list of loosely-shaped source objects into {name, url}."""
+    out: list[dict] = []
+    if not isinstance(items, list):
+        return out
+    for x in items:
+        if not isinstance(x, dict):
+            continue
+        url = str(x.get("url") or x.get("site") or x.get("link") or "").strip()
+        name = str(x.get("name") or x.get("org") or x.get("title") or "").strip()
+        if name or url:
+            out.append({"name": name or url, "url": url})
+    return out
+
+
+def _resolve_sources(topic: str, candidates: list[dict], limit: int = 20,
+                     max_attempts: int = 10) -> list[dict]:
+    """Resolve raw ``{name, url}`` candidates into real-feed / best-effort
+    sources.  Network-only (no LLM/agent).
+
+    This is the SINGLE resolution path shared by the manual per-topic
+    ``suggest_sources`` and the one-click batched flow, so both produce an
+    identical result for the same candidates:
+
+    * for each candidate, try RSS ``<link>`` autodiscovery from its URL, then
+      conventional feed paths (``/feed``, ``/rss.xml`` …), then a DuckDuckGo
+      keyword search — keeping only real RSS feeds;
+    * if nothing resolved, fall back to curated seed sources for *topic*,
+      keeping their homepage URL as a best-effort source even when no RSS feed
+      can be discovered.
+    """
+    import time
+    from app.discovery import (discover_from_keyword, discover_from_url,
+                               probe_feed_paths)
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    attempts = 0
+
+    def _try_discover(name: str, url: str) -> bool:
+        # 1) RSS autodiscovery from the given page.
+        if url:
+            try:
+                for src in discover_from_url(url):
+                    if src.url not in seen and src.type == "rss":
+                        seen.add(src.url)
+                        out.append({"name": name, "url": src.url})
+                        return True
+            except Exception:
+                pass
+            # 2) Conventional feed paths on the same domain (no <link> tag).
+            try:
+                feed = probe_feed_paths(url, deadline=time.monotonic() + 20)
+                if feed and feed not in seen:
+                    seen.add(feed)
+                    out.append({"name": name, "url": feed})
+                    return True
+            except Exception:
+                pass
+        # 3) Search the web for the org's feed.
+        for query in (f"{name} blog", f"{name}"):
+            try:
+                for src in discover_from_keyword(query, max_sites=2):
+                    if src.url not in seen and src.type == "rss":
+                        seen.add(src.url)
+                        out.append({"name": name, "url": src.url})
+                        return True
+            except Exception:
+                pass
+        return False
+
+    # Phase A: resolve LLM/candidate suggestions (real RSS feeds only).
+    for item in candidates:
+        if len(out) >= limit or attempts >= max_attempts:
+            break
+        name = item.get("name", "")
+        url = item.get("url", "")
+        if name:
+            attempts += 1
+            _try_discover(name, url)
+
+    # Phase B: seed fallback — keep best-effort homepage URLs when nothing
+    # discoverable resolved, so a topic is never emptier than its seed list.
+    if not out:
+        for item in _SOURCE_SEED.get(topic.lower(), []):
+            if len(out) >= limit or attempts >= max_attempts:
+                break
+            name, url = item["name"], item["url"]
+            if not name or not url or any(o["name"] == name for o in out):
+                continue
+            attempts += 1
+            if not _try_discover(name, url) and url not in seen:
+                seen.add(url)
+                out.append({"name": name, "url": url})
+
+    return out
+
+
 def _dedupe(items: list[str], limit: int) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -374,60 +490,97 @@ def suggest_sources(topic: str, provider: LLMProvider,
     )
     llm_items = _parse_objects(provider.chat([Message(role="user", content=prompt)]))
 
-    from app.discovery import discover_from_keyword, discover_from_url
+    # Resolution + seed fallback is shared with the one-click batched flow so
+    # both paths yield identical candidates for the same LLM suggestions.
+    return _resolve_sources(topic, llm_items, limit=limit,
+                            max_attempts=max_attempts)
 
-    out: list[dict] = []
-    seen: set[str] = set()
-    attempts = 0
 
-    def _try_discover(name: str, url: str) -> bool:
-        """Try to find a real RSS feed for *name* via URL discovery or search."""
-        # 1) If LLM gave a URL, try RSS autodiscovery from that page
-        if url:
-            try:
-                for src in discover_from_url(url):
-                    if src.url not in seen and src.type == "rss":
-                        seen.add(src.url)
-                        out.append({"name": name, "url": src.url})
-                        return True
-            except Exception:
-                pass
+def _norm_key_map(data: dict) -> dict[str, object]:
+    """Index a model's object reply by normalized (stripped/lowercased) key so
+    lookups tolerate minor reformatting of the topic/subtopic string."""
+    out: dict[str, object] = {}
+    if isinstance(data, dict):
+        for k, v in data.items():
+            out[str(k).strip().lower()] = v
+    return out
 
-        # 2) Search DuckDuckGo for "{name} blog" → discover RSS from top hits
-        for query in (f"{name} blog", f"{name}"):
-            try:
-                for src in discover_from_keyword(query, max_sites=2):
-                    if src.url not in seen and src.type == "rss":
-                        seen.add(src.url)
-                        out.append({"name": name, "url": src.url})
-                        return True
-            except Exception:
-                pass
-        return False
 
-    # Phase 2a: process LLM suggestions (discover real RSS feeds)
-    for item in llm_items:
-        if len(out) >= limit or attempts >= max_attempts:
-            break
-        name = item.get("name", "")
-        url = item.get("url", "")
-        if name:
-            attempts += 1
-            _try_discover(name, url)
+def suggest_keywords_batch(subtopics: list[str], provider: LLMProvider,
+                           limit: int = 20) -> dict[str, list[str]]:
+    """Keywords for MANY subtopics in a SINGLE LLM call.
 
-    # Phase 2b: seed data fallback (try discovery, then add URL as best-effort)
-    if not out:
-        for item in _SOURCE_SEED.get(topic.lower(), []):
-            if len(out) >= limit or attempts >= max_attempts:
-                break
-            name, url = item["name"], item["url"]
-            if not name or not url or any(o["name"] == name for o in out):
-                continue
-            attempts += 1
-            if not _try_discover(name, url) and url not in seen:
-                seen.add(url)
-                out.append({"name": name, "url": url})
+    CLI agents pay a large per-invocation cost (runtime cold-start + agent
+    loop), so issuing one call for all subtopics instead of one-per-subtopic
+    avoids the timeouts that plague fan-out. Returns {subtopic: [keywords]}.
+    Falls back to curated seeds for any subtopic the model omits.
+    """
+    subtopics = [s.strip() for s in subtopics if s.strip()]
+    if not subtopics:
+        return {}
 
+    listing = "\n".join(f"- {s}" for s in subtopics)
+    prompt = (
+        "你是 SEO 与选题专家。针对下面每一个子主题，分别列出用于检索和归类相关"
+        "文章的关键词（中英文混合，覆盖核心术语、代表性公司/模型/技术/事件）。\n"
+        "要求：每个子主题至少 10 个关键词，按重要性从高到低排序。\n"
+        f"子主题列表：\n{listing}\n"
+        "只输出一个 JSON 对象，键为子主题原文，值为关键词字符串数组，"
+        '例如 {"大语言模型": ["LLM", "GPT", "Transformer"]}。不要任何额外说明。'
+    )
+    data = _parse_object_map(provider.chat([Message(role="user", content=prompt)]))
+    norm = _norm_key_map(data)
+
+    out: dict[str, list[str]] = {}
+    for s in subtopics:
+        merged = list(_KEYWORD_SEED.get(s.lower(), []))
+        llm = data.get(s)
+        if not isinstance(llm, list):
+            llm = norm.get(s.strip().lower())
+        if isinstance(llm, list):
+            merged.extend(str(x).strip() for x in llm if str(x).strip())
+        if not merged:
+            merged = [s, f"{s}技术", f"{s}应用", f"{s}公司", f"{s}最新进展"]
+        out[s] = _dedupe(merged, limit)
+    return out
+
+
+def suggest_source_names_batch(topics: list[str],
+                               provider: LLMProvider) -> dict[str, list[dict]]:
+    """Frontier org/media candidates for MANY topics in a SINGLE LLM call.
+
+    Returns {topic: [{name, url}]} of RAW candidates (no network discovery —
+    the caller resolves real RSS feeds separately, in parallel). Falls back to
+    curated seed sources for any topic the model omits.
+    """
+    topics = [t.strip() for t in topics if t.strip()]
+    if not topics:
+        return {}
+
+    listing = "\n".join(f"- {t}" for t in topics)
+    prompt = (
+        "你是行业研究员。针对下面每一个主题，分别列出该领域全球最前沿、最值得"
+        "关注的公司 / 研究机构 / 实验室 / 行业媒体。\n"
+        "重要：中外来源都要兼顾，至少一半应为国内来源。每个主题给出 6-12 个。\n"
+        f"主题列表：\n{listing}\n"
+        "只输出一个 JSON 对象，键为主题原文，值为数组，元素形如 "
+        '{"name": "OpenAI", "url": "https://openai.com/news/"}。'
+        "url 尽量给出该机构发布新闻或博客的官方主页（不确定可留空）。"
+        "不要任何额外说明。"
+    )
+    data = _parse_object_map(provider.chat([Message(role="user", content=prompt)]))
+    norm = _norm_key_map(data)
+
+    out: dict[str, list[dict]] = {}
+    for t in topics:
+        items = data.get(t)
+        if not isinstance(items, list):
+            items = norm.get(t.strip().lower())
+        coerced = _coerce_source_objs(items)
+        if not coerced:
+            coerced = [{"name": it["name"], "url": it["url"]}
+                       for it in _SOURCE_SEED.get(t.lower(), [])]
+        out[t] = coerced
     return out
 
 

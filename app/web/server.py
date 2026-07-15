@@ -36,7 +36,8 @@ from app.pipeline.narration import (
     generate_narration, load_narration, save_scenes, resynth_scenes)
 from app.pipeline.orchestrator import run_pipeline, _append_prompt
 from app.pipeline.recommender import (
-    suggest_subtopics, suggest_keywords, suggest_sources, compute_hotness)
+    suggest_subtopics, suggest_keywords, suggest_sources, compute_hotness,
+    suggest_keywords_batch, suggest_source_names_batch, _resolve_sources)
 from app.pipeline.score import compute_draft_score
 from app.pipeline.localize import localize_one
 from app.pipeline.rewriter import rewrite
@@ -1748,29 +1749,30 @@ def create_app(config: Config | None = None,
                               on_progress, label):
             """Run fn(item) in parallel, emitting a heartbeat every few seconds
             (even while waiting) so the UI never looks frozen.  Returns
-            (results, unfinished) where results maps item→value-or-Exception
-            and unfinished lists items that didn't finish before the deadline.
+            (results, unfinished) where results maps item-INDEX→value-or-Exception
+            (indexed so unhashable items like dicts are supported) and
+            unfinished lists items that didn't finish before the deadline.
             """
             from concurrent.futures import wait, FIRST_COMPLETED
-            results: dict = {}
+            results: dict[int, object] = {}
             if not items:
                 return results, []
             pool = ThreadPoolExecutor(max_workers=min(len(items), workers))
             try:
-                fut_to_item = {pool.submit(fn, it): it for it in items}
-                pending = set(fut_to_item)
+                fut_to_idx = {pool.submit(fn, it): i for i, it in enumerate(items)}
+                pending = set(fut_to_idx)
                 deadline = time.time() + overall_timeout
                 while pending and time.time() < deadline:
                     done, pending = wait(pending, timeout=3,
                                          return_when=FIRST_COMPLETED)
                     for fut in done:
-                        it = fut_to_item[fut]
+                        idx = fut_to_idx[fut]
                         try:
-                            results[it] = fut.result()
+                            results[idx] = fut.result()
                         except Exception as exc:
-                            results[it] = exc
+                            results[idx] = exc
                     on_progress(len(results), len(items))
-                unfinished = [fut_to_item[f] for f in pending]
+                unfinished = [items[fut_to_idx[f]] for f in pending]
                 for f in pending:
                     f.cancel()
                 if unfinished:
@@ -1811,29 +1813,25 @@ def create_app(config: Config | None = None,
                   current=0, total=len(subtopics))
             logger.info("[auto-discover] step 2/5: fetch keywords for %d subtopics", len(subtopics))
 
-            kw_workers = min(len(subtopics), 5)
-            kw_timeout = _parallel_llm_timeout(len(subtopics), workers=kw_workers)
-            kw_provider = _ChatTimeout(provider, timeout=90)
-            kw_map, kw_unfinished = _collect_parallel(
-                lambda st: suggest_keywords(st, kw_provider),
-                subtopics, workers=kw_workers, overall_timeout=kw_timeout,
-                on_progress=lambda n, m: _bump(current=n,
-                                               detail=f"获取关键词 [{n}/{m}]"),
+            # ONE batched agent call for ALL subtopics (avoids ~N cold-start
+            # subprocess spawns that make CLI agents time out). Run it via a
+            # single-item collector so the UI heartbeat keeps ticking.
+            kw_provider = _ChatTimeout(provider, timeout=300)
+            kw_batch_res, _ = _collect_parallel(
+                lambda _: suggest_keywords_batch(subtopics, kw_provider),
+                [None], workers=1, overall_timeout=320,
+                on_progress=lambda n, m: _bump(
+                    detail=f"正在向 Agent 批量获取 {len(subtopics)} 个子主题的关键词…"),
                 label="step 2")
+            kw_map = kw_batch_res.get(0)
+            if isinstance(kw_map, Exception):
+                _log_failure(2, "keywords(batch)", f"{len(subtopics)} 个子主题", kw_map)
+                kw_map = {}
+            kw_map = kw_map or {}
 
-            kw_results: list[dict] = []
-            for st in subtopics:
-                res = kw_map.get(st)
-                if isinstance(res, Exception):
-                    _log_failure(2, "keywords", st, res)
-                    kw_results.append({"name": st, "keywords": []})
-                elif res is None:  # unfinished / timed out
-                    kw_results.append({"name": st, "keywords": []})
-                else:
-                    kw_results.append({"name": st, "keywords": res})
-            if kw_unfinished:
-                logger.warning("[auto-discover] step 2: %d subtopics timed out",
-                               len(kw_unfinished))
+            kw_results: list[dict] = [
+                {"name": st, "keywords": kw_map.get(st, [])} for st in subtopics
+            ]
 
             # ── Step 3: add topics to feeds.yaml ──
             _bump(step=3, step_name="添加为主题",
@@ -1869,77 +1867,92 @@ def create_app(config: Config | None = None,
 
             if not added_names:
                 _bump(running=False, step=3, step_name="添加为主题",
-                      detail="没有新增主题", result={"added_topics": 0, "added_sources": 0})
+                      detail="没有新增主题",
+                      result={"added_topics": 0, "added_sources": 0,
+                              "total": 0, "skipped": 0})
                 logger.info("[auto-discover] step 3: no topics added")
                 return {"error": "没有新增主题"}
 
             logger.info("[auto-discover] step 3: added %d topics: %s", len(added_names), added_names)
 
-            # ── Step 4: suggest sources for each topic (parallel LLM calls) ──
+            # ── Step 4: discover sources ──
+            # 4a) ONE batched agent call for ALL topics → raw {topic:[{name,url}]}.
+            # 4b) Resolve real RSS feeds over the network in parallel (no agent).
             all_candidates: list[dict] = []
             seen_urls: set[str] = set()
             _bump(step=4, step_name="发现来源",
-                  detail=f"共 {len(added_names)} 个主题",
+                  detail=f"正在向 Agent 批量获取 {len(added_names)} 个主题的候选来源…",
                   current=0, total=len(added_names))
-            logger.info("[auto-discover] step 4/5: suggest sources for %d topics", len(added_names))
+            logger.info("[auto-discover] step 4/5: batch suggest sources for %d topics",
+                        len(added_names))
 
-            src_workers = min(len(added_names), 5)
-            src_timeout = _parallel_llm_timeout(len(added_names), workers=src_workers,
-                                                per_batch_sec=90, minimum=180)
-            # Bound each per-topic LLM call so one slow topic can't starve the
-            # batch (CLI agents otherwise block up to cli_timeout ~500s).
-            src_provider = _ChatTimeout(provider, timeout=90)
+            src_provider = _ChatTimeout(provider, timeout=300)
+            name_res, _ = _collect_parallel(
+                lambda _: suggest_source_names_batch(added_names, src_provider),
+                [None], workers=1, overall_timeout=320,
+                on_progress=lambda n, m: _bump(
+                    detail=f"正在向 Agent 批量获取 {len(added_names)} 个主题的候选来源…"),
+                label="step 4 llm")
+            name_map = name_res.get(0)
+            if isinstance(name_map, Exception):
+                _log_failure(4, "sources(batch)", f"{len(added_names)} 个主题", name_map)
+                name_map = {}
+            elif name_map is None:
+                logger.warning("[auto-discover] step 4: batch source call timed out "
+                               "(no result within budget)")
+                name_map = {}
+            name_map = name_map or {}
 
-            def _do_topic(t):
-                return suggest_sources(t, src_provider)
+            raw_total = sum(len(name_map.get(t) or []) for t in added_names)
+            topics_with_cands = sum(1 for t in added_names if name_map.get(t))
+            logger.info("[auto-discover] step 4: batch returned candidates for "
+                        "%d/%d topics (%d raw candidates)",
+                        topics_with_cands, len(added_names), raw_total)
 
-            def _absorb(results: dict) -> None:
-                for t, res in results.items():
-                    if isinstance(res, Exception):
-                        _log_failure(4, "sources", t, res)
+            # Resolve real feeds / best-effort sources per topic via the SAME
+            # helper the manual per-topic suggest_sources uses, so the one-click
+            # flow yields identical candidates (best-effort URLs included).
+            # Network-only (no agent); parallelize across topics for speed.
+            resolve_topics = list(added_names)
+            if resolve_topics:
+                _bump(detail=f"正在解析 {len(resolve_topics)} 个主题的来源…",
+                      current=0, total=len(resolve_topics))
+
+                def _do_resolve(t):
+                    return (t, _resolve_sources(t, name_map.get(t) or []))
+
+                res_workers = min(len(resolve_topics), 10)
+                res_timeout = max(120.0, math.ceil(len(resolve_topics) / res_workers) * 60)
+                resolve_res, _ = _collect_parallel(
+                    _do_resolve, resolve_topics, workers=res_workers,
+                    overall_timeout=res_timeout,
+                    on_progress=lambda n, m: _bump(current=n,
+                                                   detail=f"解析来源 [{n}/{m}]"),
+                    label="step 4 resolve")
+                for idx, res in resolve_res.items():
+                    if isinstance(res, Exception) or not res:
                         continue
-                    for c in (res or []):
-                        url = c.get("url", "").rstrip("/")
+                    t, items = res
+                    for it in items:
+                        url = (it.get("url") or "").rstrip("/")
                         if url and url not in seen_urls:
                             seen_urls.add(url)
                             all_candidates.append(
-                                {"name": c.get("name", ""), "url": c["url"], "topics": [t]})
+                                {"name": it["name"], "url": it["url"], "topics": [t]})
 
-            def _on_prog(done_n, total_n):
-                _bump(current=done_n,
-                      detail=f"[{done_n}/{total_n}] 已发现 {len(all_candidates)} 个来源")
-
-            results, unfinished = _collect_parallel(
-                _do_topic, added_names, workers=src_workers,
-                overall_timeout=src_timeout, on_progress=_on_prog, label="step 4")
-            _absorb(results)
-
-            # Retry the topics that didn't finish in time (transient slowness /
-            # rate limits often clear on a second attempt).
-            if unfinished:
-                _bump(detail=f"重试 {len(unfinished)} 个超时主题…")
-                logger.info("[auto-discover] step 4: retrying %d unfinished topics",
-                            len(unfinished))
-                retry_timeout = _parallel_llm_timeout(
-                    len(unfinished), workers=min(len(unfinished), src_workers),
-                    per_batch_sec=90, minimum=120)
-                retry_results, _still = _collect_parallel(
-                    _do_topic, unfinished, workers=min(len(unfinished), src_workers),
-                    overall_timeout=retry_timeout,
-                    on_progress=lambda n, m: _bump(
-                        detail=f"重试中 [{n}/{m}]，已发现 {len(all_candidates)} 个来源"),
-                    label="step 4 retry")
-                _absorb(retry_results)
-                if _still:
-                    logger.warning("[auto-discover] step 4: %d topics still unfinished after retry",
-                                   len(_still))
+            logger.info("[auto-discover] step 4: resolved %d sources from %d topics",
+                        len(all_candidates), len(resolve_topics))
 
             if not all_candidates:
+                reason = ("Agent 未返回候选来源" if raw_total == 0
+                          else "候选均未解析出可用来源")
                 _bump(running=False, step=4, step_name="发现来源",
-                      detail="没有发现来源",
-                      result={"added_topics": len(added_names), "added_sources": 0})
-                logger.info("[auto-discover] step 4: no candidates found")
-                return {"added_topics": len(added_names), "added_sources": 0, "total": 0}
+                      detail=f"没有发现来源（{reason}）",
+                      result={"added_topics": len(added_names),
+                              "added_sources": 0, "total": 0, "skipped": 0})
+                logger.info("[auto-discover] step 4: no candidates found (%s)", reason)
+                return {"added_topics": len(added_names),
+                        "added_sources": 0, "total": 0}
 
             logger.info("[auto-discover] step 4: found %d unique sources", len(all_candidates))
 
@@ -1971,8 +1984,8 @@ def create_app(config: Config | None = None,
                                                detail=f"验证来源 [{n}/{m}]"),
                 label="step 5")
 
-            for c in all_candidates:
-                res = check_map.get(c)
+            for i, c in enumerate(all_candidates):
+                res = check_map.get(i)
                 reachable = res is True
                 # Unreachable only when we actually got a False result; if the
                 # check didn't finish, keep the source rather than dropping it.

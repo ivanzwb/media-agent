@@ -189,7 +189,9 @@ export default function Sources() {
               // Process finished
               clearInterval(poll);
               if (r.result) {
-                const { added_topics, added_sources, total } = r.result;
+                const added_topics = r.result.added_topics ?? 0;
+                const added_sources = r.result.added_sources ?? 0;
+                const total = r.result.total ?? added_sources;
                 setRecoStatus(`✓ 完成：新增 ${added_topics} 个主题，${added_sources}/${total} 个来源`);
               } else if (r.step_name === "完成") {
                 setRecoStatus(`✓ ${r.detail}`);
