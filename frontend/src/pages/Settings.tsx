@@ -98,12 +98,12 @@ export default function Settings() {
                   </Form.Item>
                 </Card>
                 <Card title="Agent（优先于 LLM Provider）" size="small">
-                  <Space.Compact style={{ width: "100%" }}>
-                    <Form.Item name="cli_tool" label="CLI Agent" style={{ flex: 1, marginBottom: 0 }}>
-                      <Select options={["auto", "opencode", "claude", "codex", "copilot", "cursor-agent", "none"].map((v) => ({ value: v }))} />
+                  <Space align="end">
+                    <Form.Item name="cli_tool" label="CLI Agent" style={{ marginBottom: 0 }}>
+                      <Select options={["auto", "opencode", "claude", "codex", "copilot", "cursor-agent", "none"].map((v) => ({ value: v }))} style={{ width: 200 }} />
                     </Form.Item>
-                    <CliTestButton />
-                  </Space.Compact>
+                    <CliTestButton form={form} />
+                  </Space>
                 </Card>
               </>
             ),
@@ -435,13 +435,12 @@ function VoiceRecorder({ onSave }: { onSave: () => void }) {
   );
 }
 
-function CliTestButton() {
+function CliTestButton({ form }: { form: any }) {
   const { message } = AntApp.useApp();
   const [loading, setLoading] = useState(false);
-  const cliTool = Form.useWatch("cli_tool", Form.useForm()[0]);
 
   async function testCli() {
-    const tool = cliTool || "auto";
+    const tool = form.getFieldValue("cli_tool") || "auto";
     setLoading(true);
     try {
       const fd = new FormData(); fd.append("tool_id", tool);
