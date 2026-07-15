@@ -1121,6 +1121,16 @@ def create_app(config: Config | None = None,
         task["status"] = "cancelled"
         return {"ok": True, "cancelled": True}
 
+    @app.post("/api/draft/{draft_id}/agent-clear")
+    def draft_agent_clear(draft_id: int):
+        """Forget a finished (non-running) agent task so the panel resets."""
+        task = _agent_tasks.get(draft_id)
+        if task and task["status"] == "running":
+            return JSONResponse(
+                {"ok": False, "error": "Agent 正在运行，无法清除"}, status_code=409)
+        _agent_tasks.pop(draft_id, None)
+        return {"ok": True}
+
     @app.post("/api/draft/{draft_id}/agent-undo")
     def draft_agent_undo(draft_id: int):
         """Restore draft from the backup created before the last agent edit."""

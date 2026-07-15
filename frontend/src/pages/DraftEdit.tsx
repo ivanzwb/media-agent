@@ -623,11 +623,11 @@ function AgentModal({ open, draftId, onClose, onApplied }: { open: boolean; draf
     } catch { message.error("取消失败"); }
   }
 
-  function applyResult() {
-    if (resultBody) {
-      onApplied(resultBody);
-      message.success("已应用 Agent 修改");
-    }
+  async function applyResult() {
+    if (!resultBody) return;
+    try { await postForm(`/api/draft/${draftId}/agent-clear`); } catch { /* ignore */ }
+    onApplied(resultBody);
+    message.success("已应用 Agent 修改");
   }
 
   function formatTime(s: number) {
