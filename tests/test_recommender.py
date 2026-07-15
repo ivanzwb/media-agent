@@ -1,8 +1,12 @@
+import json
+
 from unittest.mock import patch, MagicMock
 
 from app.llm.providers.mock import MockProvider
 from app.pipeline.recommender import (
-    suggest_subtopics, suggest_keywords, suggest_sources)
+    suggest_subtopics, suggest_keywords, suggest_sources,
+    suggest_keywords_batch, suggest_source_names_batch, _resolve_sources,
+    _KEYWORD_SEED)
 from app.feeds import SourceConfig
 
 
@@ -89,7 +93,8 @@ def test_suggest_sources_discover_by_name():
 
     with patch("app.discovery.discover_from_url", side_effect=mock_discover):
         with patch("app.discovery.discover_from_keyword", side_effect=mock_keyword):
-            out = suggest_sources("AI", provider)
+            with patch("app.discovery.probe_feed_paths", return_value=None):
+                out = suggest_sources("AI", provider)
 
     urls = [o["url"] for o in out]
     assert "https://anthropic.com/feed" in urls
@@ -107,7 +112,8 @@ def test_suggest_sources_seed_fallback():
 
     with patch("app.discovery.discover_from_url", side_effect=mock_discover):
         with patch("app.discovery.discover_from_keyword", side_effect=mock_keyword):
-            out = suggest_sources("AI", provider)
+            with patch("app.discovery.probe_feed_paths", return_value=None):
+                out = suggest_sources("AI", provider)
 
     names = [o["name"] for o in out]
     assert "OpenAI" in names
@@ -128,7 +134,8 @@ def test_suggest_sources_dedupes():
 
     with patch("app.discovery.discover_from_url", side_effect=mock_discover):
         with patch("app.discovery.discover_from_keyword"):
-            out = suggest_sources("AI", provider, limit=10)
+            with patch("app.discovery.probe_feed_paths", return_value=None):
+                out = suggest_sources("AI", provider, limit=10)
 
     urls = [o["url"] for o in out]
     assert len(set(urls)) == len(urls)
@@ -147,7 +154,8 @@ def test_suggest_sources_limit():
 
     with patch("app.discovery.discover_from_url", side_effect=mock_discover):
         with patch("app.discovery.discover_from_keyword"):
-            out = suggest_sources("AI", provider, limit=2)
+            with patch("app.discovery.probe_feed_paths", return_value=None):
+                out = suggest_sources("AI", provider, limit=2)
 
     assert len(out) <= 2
 
@@ -170,6 +178,44 @@ def test_suggest_sources_no_urls_when_all_discovery_fails():
 
     with patch("app.discovery.discover_from_url", side_effect=mock_discover):
         with patch("app.discovery.discover_from_keyword", side_effect=mock_keyword):
-            out = suggest_sources("niche_topic_xyz", provider)
+            with patch("app.discovery.probe_feed_paths", return_value=None):
+                out = suggest_sources("niche_topic_xyz", provider)
 
     assert out == []
+
+
+def test_batched_source_resolution_matches_manual():
+    """One-click batched resolution must equal manual per-topic suggest_sources
+    for the same candidates (best-effort seed URLs included)."""
+    topics = ["人工智能", "视频生成"]  # one seeded, one not
+    batch_json = json.dumps({
+        "人工智能": [{"name": "OpenAI", "url": "https://openai.com"}],
+        "视频生成": [{"name": "Runway", "url": "https://runwayml.com"}],
+    }, ensure_ascii=False)
+    name_map = suggest_source_names_batch(
+        topics, MockProvider(responses=[batch_json]))
+
+    with patch("app.discovery.discover_from_url", return_value=[]):
+        with patch("app.discovery.discover_from_keyword", return_value=[]):
+            with patch("app.discovery.probe_feed_paths", return_value=None):
+                for t in topics:
+                    candidates = name_map[t]
+                    arr = json.dumps(candidates, ensure_ascii=False)
+                    manual = suggest_sources(t, MockProvider(responses=[arr]))
+                    batched = _resolve_sources(t, candidates)
+                    assert manual == batched
+    # Seeded topic keeps best-effort URLs; unseeded stays empty when nothing
+    # resolves — both mirror the manual path exactly.
+    assert any(o["name"] == "OpenAI" for o in name_map["人工智能"])
+
+
+def test_batched_keywords_superset_of_seed_and_matches_manual():
+    """Batched keywords must never be emptier than the manual per-subtopic
+    seed floor, and must equal the manual path when the LLM is unavailable."""
+    subs = ["人工智能", "脑机接口"]
+    batch = suggest_keywords_batch(subs, MockProvider())  # offline → seeds only
+    for s in subs:
+        seed = set(_KEYWORD_SEED.get(s.lower(), []))
+        assert seed.issubset(set(batch[s]))
+        manual = suggest_keywords(s, MockProvider())
+        assert batch[s] == manual
