@@ -61,6 +61,66 @@ def discover_from_url(url: str, topics: list[str] | None = None,
                          mode="list")]
 
 
+# Conventional feed endpoints to probe when a page exposes no <link>
+# autodiscovery tag.  Ordered by prevalence so the first hit is usually found
+# quickly; probing stops at the first URL whose body looks like a feed.
+_COMMON_FEED_PATHS: tuple[str, ...] = (
+    "/feed", "/rss", "/rss.xml", "/feed.xml", "/atom.xml", "/index.xml",
+    "/feed/", "/rss/", "/blog/feed", "/blog/rss.xml", "/feeds/posts/default",
+)
+
+
+def looks_like_feed(text: str) -> bool:
+    """Heuristic check: does *text* look like an RSS/Atom/RDF feed document?"""
+    head = text[:1500].lstrip().lower()
+    return ("<rss" in head or "<feed" in head or "<rdf:rdf" in head
+            or "<channel" in head)
+
+
+def probe_feed_paths(url: str, fetch=None, timeout: float = 6.0,
+                     deadline: float | None = None) -> str | None:
+    """Probe conventional feed endpoints on *url*'s domain (and on the given
+    path's base) and return the first URL whose body looks like a feed.
+
+    Best-effort fallback for sites that publish a feed at a well-known path
+    (``/feed``, ``/rss.xml``, …) without advertising it via a
+    ``<link rel=alternate>`` autodiscovery tag.  Returns ``None`` when nothing
+    resolves.  *deadline* is an optional ``time.monotonic()`` cutoff so a slow
+    /unreachable host can't burn the whole probe budget.
+    """
+    import time as _time
+    raw = url if "://" in url else "https://" + url
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return None
+    if not parsed.netloc:
+        return None
+    root = f"{parsed.scheme or 'https'}://{parsed.netloc}"
+    bases: list[str] = []
+    path = parsed.path.rstrip("/")
+    if path:
+        bases.append(root + path)
+    bases.append(root)
+
+    seen: set[str] = set()
+    for base in bases:
+        for suffix in _COMMON_FEED_PATHS:
+            if deadline is not None and _time.monotonic() > deadline:
+                return None
+            candidate = base + suffix
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            try:
+                text = _get(candidate, fetch, timeout=timeout)
+            except Exception:
+                continue
+            if looks_like_feed(text):
+                return candidate
+    return None
+
+
 def search_web(query: str, max_results: int = 5, fetch=None) -> list[str]:
     search_url = "https://html.duckduckgo.com/html/?q=" + quote(query)
     try:

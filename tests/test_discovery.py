@@ -1,5 +1,9 @@
 from app.discovery import (find_feed_links, discover_from_url, search_web,
-                           discover_from_keyword)
+                           discover_from_keyword, probe_feed_paths,
+                           looks_like_feed)
+
+FEED_XML = ('<?xml version="1.0"?><rss version="2.0"><channel>'
+            '<title>Acme</title></channel></rss>')
 
 PAGE_WITH_FEED = """
 <html><head>
@@ -48,6 +52,27 @@ def test_discover_from_url_fetch_error_returns_empty():
     def boom(u):
         raise RuntimeError("net down")
     assert discover_from_url("https://x.com", fetch=boom) == []
+
+
+def test_looks_like_feed():
+    assert looks_like_feed(FEED_XML)
+    assert looks_like_feed('<feed xmlns="http://www.w3.org/2005/Atom"></feed>')
+    assert not looks_like_feed(PAGE_NO_FEED)
+
+
+def test_probe_feed_paths_finds_conventional_feed():
+    # No autodiscovery <link>, but a feed lives at the conventional /feed path.
+    def fake_fetch(url):
+        if url == "https://acme.com/feed":
+            return FEED_XML
+        return PAGE_NO_FEED
+
+    assert (probe_feed_paths("https://acme.com/blog", fetch=fake_fetch)
+            == "https://acme.com/feed")
+
+
+def test_probe_feed_paths_returns_none_when_no_feed():
+    assert probe_feed_paths("https://acme.com/", fetch=lambda u: PAGE_NO_FEED) is None
 
 
 def test_search_web_parses_and_decodes():
