@@ -31,11 +31,9 @@ _TOOLS: dict[str, _ToolDef] = {
         id="opencode",
         label="OpenCode",
         exe="opencode",
-        # --dangerously-skip-permissions keeps the daemon non-interactive
-        # (Multica uses this flag instead of --auto).
         # --model is appended dynamically by _run() when the caller provides
         # a model hint via opts["model"].
-        args=["run", "--format", "json", "--dangerously-skip-permissions", "{prompt}"],
+        args=["run", "--format", "json", "{prompt}"],
     ),
     "claude": _ToolDef(
         id="claude",
