@@ -1,17 +1,10 @@
 import json
 
-from unittest.mock import patch, MagicMock
-
 from app.llm.providers.mock import MockProvider
 from app.pipeline.recommender import (
     suggest_subtopics, suggest_keywords, suggest_sources,
     suggest_keywords_batch, suggest_source_names_batch, _resolve_sources,
     _KEYWORD_SEED)
-from app.feeds import SourceConfig
-
-
-def _make_rss_source(name, url):
-    return SourceConfig(name=name, type="rss", url=url)
 
 
 def test_suggest_subtopics_uses_llm_consolidated_list():
@@ -61,87 +54,77 @@ def test_empty_input_returns_empty():
     assert suggest_keywords("  ", MockProvider()) == []
 
 
-def test_suggest_sources_discover_from_url():
-    """When LLM gives a URL, suggest_sources should discover RSS from it."""
+def test_suggest_sources_homepage_url_is_scrape():
+    """A candidate with a normal homepage URL is kept as type="scrape".
+
+    Resolution is network-free: no RSS autodiscovery, feed probing, or web
+    search happens (registering the correct URL is enough — the scraper decides
+    what to crawl)."""
     provider = MockProvider(responses=[
         '[{"name": "OpenAI", "url": "https://openai.com/blog"}]'
     ])
 
-    def mock_discover(url):
-        return [_make_rss_source("OpenAI Blog", "https://openai.com/blog/rss")]
+    out = suggest_sources("AI", provider)
 
-    with patch("app.discovery.discover_from_url", side_effect=mock_discover):
-        with patch("app.discovery.discover_from_keyword"):
-            out = suggest_sources("AI", provider)
-
-    urls = [o["url"] for o in out]
-    assert "https://openai.com/blog/rss" in urls
-    assert out[0]["name"] == "OpenAI"
-    assert out[0]["type"] == "rss"
+    assert out == [{"name": "OpenAI", "url": "https://openai.com/blog",
+                    "type": "scrape"}]
 
 
-def test_suggest_sources_discover_by_name():
-    """When LLM URL fails discovery, fall back to search by name."""
+def test_suggest_sources_feed_url_is_rss():
+    """A candidate whose URL LOOKS like a feed (cheap heuristic, no network) is
+    tagged type="rss"."""
     provider = MockProvider(responses=[
-        '[{"name": "Anthropic", "url": "https://anthropic.com"}]'
+        '[{"name": "SomeBlog", "url": "https://x.com/rss.xml"}]'
     ])
 
-    def mock_discover(url):
-        return []
+    out = suggest_sources("AI", provider)
 
-    def mock_keyword(query, max_sites=2):
-        return [_make_rss_source("Anthropic Blog", "https://anthropic.com/feed")]
+    assert out == [{"name": "SomeBlog", "url": "https://x.com/rss.xml",
+                    "type": "rss"}]
 
-    with patch("app.discovery.discover_from_url", side_effect=mock_discover):
-        with patch("app.discovery.discover_from_keyword", side_effect=mock_keyword):
-            with patch("app.discovery.probe_feed_paths", return_value=None):
-                out = suggest_sources("AI", provider)
 
-    urls = [o["url"] for o in out]
-    assert "https://anthropic.com/feed" in urls
+def test_suggest_sources_skips_candidate_without_url():
+    """A candidate with no/invalid URL is skipped (a source needs a URL).
+
+    Here the LLM candidate has no usable URL, so Phase A yields nothing and the
+    seed fallback for a seeded topic kicks in."""
+    provider = MockProvider(responses=[
+        '[{"name": "NoUrlCorp", "url": ""},'
+        ' {"name": "BadCorp", "url": "not-a-url"}]'
+    ])
+
+    out = suggest_sources("人工智能", provider)
+
+    # Neither invalid candidate is kept; seed fallback (seeded topic) fills in.
+    assert all(o["url"].startswith("http") for o in out)
+    assert "NoUrlCorp" not in [o["name"] for o in out]
+    assert "OpenAI" in [o["name"] for o in out]
 
 
 def test_suggest_sources_seed_fallback():
-    """When LLM returns nothing, fall back to seed data with discovery."""
-    provider = MockProvider()
-
-    def mock_discover(url):
-        return []
-
-    def mock_keyword(query, max_sites=2):
-        return []
-
-    with patch("app.discovery.discover_from_url", side_effect=mock_discover):
-        with patch("app.discovery.discover_from_keyword", side_effect=mock_keyword):
-            with patch("app.discovery.probe_feed_paths", return_value=None):
-                out = suggest_sources("AI", provider)
+    """When the LLM returns nothing, fall back to curated seed sources,
+    classified the same cheap (network-free) way."""
+    out = suggest_sources("AI", MockProvider())
 
     names = [o["name"] for o in out]
     assert "OpenAI" in names
     assert all(o["url"].startswith("http") for o in out)
-    # No RSS discoverable → seeds are kept as scrape sources.
+    # Seed URLs are homepages → scrape.
     assert all(o["type"] == "scrape" for o in out)
 
 
 def test_suggest_sources_dedupes():
-    """Same URL from different sources should be deduped."""
+    """Candidates that normalize to the same URL should be deduped."""
     provider = MockProvider(responses=[
-        '[{"name": "Company A", "url": "https://a.com"},'
-        ' {"name": "Company B", "url": "https://a.com/blog"}]'
+        '[{"name": "Company A", "url": "https://a.com/blog"},'
+        ' {"name": "Company B", "url": "https://a.com/blog/"}]'
     ])
 
-    def mock_discover(url):
-        if "a.com" in url:
-            return [_make_rss_source("A Blog", "https://a.com/feed")]
-        return []
-
-    with patch("app.discovery.discover_from_url", side_effect=mock_discover):
-        with patch("app.discovery.discover_from_keyword"):
-            with patch("app.discovery.probe_feed_paths", return_value=None):
-                out = suggest_sources("AI", provider, limit=10)
+    out = suggest_sources("AI", provider, limit=10)
 
     urls = [o["url"] for o in out]
-    assert len(set(urls)) == len(urls)
+    assert len(set(u.rstrip("/") for u in urls)) == len(urls)
+    assert len(out) == 1
 
 
 def test_suggest_sources_limit():
@@ -152,13 +135,7 @@ def test_suggest_sources_limit():
         ' {"name": "C", "url": "https://c.com"}]'
     ])
 
-    def mock_discover(url):
-        return []
-
-    with patch("app.discovery.discover_from_url", side_effect=mock_discover):
-        with patch("app.discovery.discover_from_keyword"):
-            with patch("app.discovery.probe_feed_paths", return_value=None):
-                out = suggest_sources("AI", provider, limit=2)
+    out = suggest_sources("AI", provider, limit=2)
 
     assert len(out) <= 2
 
@@ -168,60 +145,65 @@ def test_suggest_sources_empty_topic():
 
 
 def test_suggest_sources_keeps_scrape_when_no_rss():
-    """A candidate with a usable URL but NO discoverable RSS is kept as a
+    """A candidate with a usable homepage URL (no feed markers) is kept as a
     scrape source (discovery must not drop non-RSS sites)."""
     provider = MockProvider(responses=[
         '[{"name": "UnknownCorp", "url": "https://unknown.com"}]'
     ])
 
-    def mock_discover(url):
-        return []
-
-    def mock_keyword(query, max_sites=2):
-        return []
-
-    with patch("app.discovery.discover_from_url", side_effect=mock_discover):
-        with patch("app.discovery.discover_from_keyword", side_effect=mock_keyword):
-            with patch("app.discovery.probe_feed_paths", return_value=None):
-                out = suggest_sources("niche_topic_xyz", provider)
+    out = suggest_sources("niche_topic_xyz", provider)
 
     assert out == [{"name": "UnknownCorp", "url": "https://unknown.com",
                     "type": "scrape"}]
 
 
-def test_resolve_sources_all_scrape_when_none_expose_rss():
-    """When NONE of the candidates expose RSS, the resolver still returns ALL
-    of them as scrape sources (permissive: RSS is an upgrade, not a gate)."""
+def test_resolve_sources_all_scrape_when_none_look_like_feeds():
+    """Candidates with plain homepage/section URLs are all kept as scrape
+    sources (RSS type is only a cheap URL-shape upgrade, never a gate)."""
     candidates = [
         {"name": "A", "url": "https://a.com"},
         {"name": "B", "url": "https://b.com/news"},
         {"name": "C", "url": "https://c.com/blog"},
     ]
 
-    with patch("app.discovery.discover_from_url", return_value=[]):
-        with patch("app.discovery.discover_from_keyword", return_value=[]):
-            with patch("app.discovery.probe_feed_paths", return_value=None):
-                out = _resolve_sources("topic", candidates)
+    out = _resolve_sources("topic", candidates)
 
     assert [o["url"] for o in out] == [c["url"] for c in candidates]
     assert all(o["type"] == "scrape" for o in out)
 
 
-def test_resolve_sources_keeps_candidates_beyond_probe_budget():
-    """max_attempts bounds NETWORK RSS-probing, not how many candidates we
-    keep: candidates past the probe budget are still kept as scrape sources."""
-    candidates = [{"name": f"S{i}", "url": f"https://s{i}.com"}
-                  for i in range(8)]
+def test_resolve_sources_classifies_feed_urls_as_rss():
+    """URL-shape heuristic: feed-looking URLs → rss, others → scrape."""
+    candidates = [
+        {"name": "Home", "url": "https://a.com"},
+        {"name": "Feed1", "url": "https://a.com/feed"},
+        {"name": "Feed2", "url": "https://b.com/atom.xml"},
+        {"name": "Feed3", "url": "https://c.com/blog?feed=rss2"},
+        {"name": "Section", "url": "https://d.com/news"},
+    ]
 
-    with patch("app.discovery.discover_from_url", return_value=[]):
-        with patch("app.discovery.discover_from_keyword", return_value=[]):
-            with patch("app.discovery.probe_feed_paths", return_value=None):
-                out = _resolve_sources("topic", candidates, limit=20,
-                                       max_attempts=3)
+    out = _resolve_sources("topic", candidates)
 
-    # All 8 distinct candidates kept even though only 3 were probed.
-    assert len(out) == 8
-    assert all(o["type"] == "scrape" for o in out)
+    by_name = {o["name"]: o["type"] for o in out}
+    assert by_name == {
+        "Home": "scrape", "Feed1": "rss", "Feed2": "rss",
+        "Feed3": "rss", "Section": "scrape",
+    }
+
+
+def test_resolve_sources_skips_candidates_without_url():
+    """Candidates lacking a usable http(s) URL are skipped entirely."""
+    candidates = [
+        {"name": "Good", "url": "https://good.com"},
+        {"name": "Empty", "url": ""},
+        {"name": "Bad", "url": "ftp://nope.com"},
+        {"name": "Missing"},
+    ]
+
+    out = _resolve_sources("topic", candidates)
+
+    assert out == [{"name": "Good", "url": "https://good.com",
+                    "type": "scrape"}]
 
 
 def test_batched_source_resolution_matches_manual():
@@ -235,21 +217,74 @@ def test_batched_source_resolution_matches_manual():
     name_map = suggest_source_names_batch(
         topics, MockProvider(responses=[batch_json]))
 
-    with patch("app.discovery.discover_from_url", return_value=[]):
-        with patch("app.discovery.discover_from_keyword", return_value=[]):
-            with patch("app.discovery.probe_feed_paths", return_value=None):
-                for t in topics:
-                    candidates = name_map[t]
-                    arr = json.dumps(candidates, ensure_ascii=False)
-                    manual = suggest_sources(t, MockProvider(responses=[arr]))
-                    batched = _resolve_sources(t, candidates)
-                    assert manual == batched
-                    # Every resolved entry carries a type; with no RSS
-                    # discoverable here they are kept as scrape sources.
-                    assert all(o["type"] == "scrape" for o in batched)
+    for t in topics:
+        candidates = name_map[t]
+        arr = json.dumps(candidates, ensure_ascii=False)
+        manual = suggest_sources(t, MockProvider(responses=[arr]))
+        batched = _resolve_sources(t, candidates)
+        assert manual == batched
+        # Homepage URLs → scrape (no network, cheap URL heuristic).
+        assert all(o["type"] == "scrape" for o in batched)
     # Both topics keep their candidate URLs as best-effort scrape sources —
     # both mirror the manual path exactly.
     assert any(o["name"] == "OpenAI" for o in name_map["人工智能"])
+
+
+def test_suggest_source_names_batch_chunks_cover_all_topics():
+    """More topics than one chunk → multiple agent calls (consumed in order by
+    MockProvider) and every topic gets its chunk's candidates."""
+    from app.pipeline.recommender import _SOURCE_BATCH_CHUNK
+    # 10 topics with a chunk size of 7 → 2 chunks (7 + 3).
+    topics = [f"主题{i}" for i in range(10)]
+    assert len(topics) > _SOURCE_BATCH_CHUNK  # ensure we exercise >1 chunk
+
+    def _chunk_json(chunk_topics):
+        return json.dumps(
+            {t: [{"name": f"Org-{t}", "url": f"https://{t}.example.com"}]
+             for t in chunk_topics}, ensure_ascii=False)
+
+    chunk1 = _chunk_json(topics[:_SOURCE_BATCH_CHUNK])
+    chunk2 = _chunk_json(topics[_SOURCE_BATCH_CHUNK:])
+    provider = MockProvider(responses=[chunk1, chunk2])
+
+    out = suggest_source_names_batch(topics, provider)
+
+    assert set(out) == set(topics)
+    for t in topics:
+        assert out[t], f"{t} had no candidates"
+        assert all(c["url"].startswith("http") for c in out[t])
+
+
+def test_suggest_source_names_batch_bad_chunk_falls_back_to_seeds():
+    """A chunk whose call parses empty/garbage falls back to curated seeds for
+    ITS topics without losing the other chunks' results."""
+    from app.pipeline.recommender import _SOURCE_BATCH_CHUNK, _SOURCE_SEED
+    # Chunk 1 (indices 0..6): arbitrary topics the agent answers.
+    good_topics = [f"主题{i}" for i in range(_SOURCE_BATCH_CHUNK)]
+    # Chunk 2: all curated-seed topics, so seed fallback yields candidates when
+    # the second agent call returns garbage.
+    seeded_topics = ["人工智能", "机器人", "脑机接口"]
+    assert all(t.lower() in _SOURCE_SEED for t in seeded_topics)
+    topics = good_topics + seeded_topics
+
+    good_json = json.dumps(
+        {t: [{"name": f"Org-{t}", "url": f"https://{t}.example.com"}]
+         for t in good_topics}, ensure_ascii=False)
+    # Second chunk response is unparseable garbage → forces seed fallback.
+    provider = MockProvider(responses=[good_json, "totally not json ###"])
+
+    out = suggest_source_names_batch(topics, provider)
+
+    # Chunk 1 results preserved.
+    for t in good_topics:
+        assert out[t], f"{t} lost its agent candidates"
+        assert out[t][0]["url"].startswith("http")
+    # Chunk 2 garbage → curated seed fallback per topic.
+    for t in seeded_topics:
+        assert out[t], f"{t} seed fallback was empty"
+        assert all(c["url"].startswith("http") for c in out[t])
+        seed_names = {it["name"] for it in _SOURCE_SEED[t.lower()]}
+        assert {c["name"] for c in out[t]} == seed_names
 
 
 def test_batched_keywords_superset_of_seed_and_matches_manual():

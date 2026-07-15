@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.discovery import search_web
 from app.feeds import FeedsConfig
 from app.llm.base import LLMProvider, Message
+
+logger = logging.getLogger(__name__)
+
+# How many topics to pack into ONE batched source-names agent call. A single
+# call covering 20+ topics WITH URLs produces a huge JSON blob that CLI agents
+# truncate / time out on, zeroing every topic. Chunking keeps each call's
+# output small while staying far below per-topic call counts.
+_SOURCE_BATCH_CHUNK = 7
 
 # Built-in seeds so the recommender stays useful offline (mock provider) or
 # when the LLM returns nothing parseable.
@@ -288,122 +298,81 @@ def _coerce_source_objs(items) -> list[dict]:
     return out
 
 
-def _resolve_sources(topic: str, candidates: list[dict], limit: int = 20,
-                     max_attempts: int = 10) -> list[dict]:
-    """Resolve raw ``{name, url}`` candidates into real-feed / best-effort
-    sources.  Network-only (no LLM/agent).
+def _looks_like_feed_url(url: str) -> bool:
+    """Cheap, network-free heuristic: does *url* look like an RSS/Atom feed?
+
+    Only inspects the URL's path/query — never fetches anything. Matches the
+    common conventions (``/rss``, ``/feed``, ``/atom.xml``, ``rss.xml``,
+    ``?feed=…``, or any ``.xml`` endpoint). This is deliberately loose: getting
+    the ``type`` slightly wrong is harmless because the scraper
+    (``app/sources/scraper.py``) decides what to actually crawl — the point is
+    only to register the correct URL fast, without any HTTP probing.
+    """
+    low = url.lower()
+    try:
+        parsed = urlparse(low)
+        hay = (parsed.path or "") + "?" + (parsed.query or "")
+    except Exception:
+        hay = low
+    if hay.rstrip("/").endswith(".xml"):
+        return True
+    return any(tok in hay for tok in ("rss", "feed", "atom"))
+
+
+def _resolve_sources(topic: str, candidates: list[dict],
+                     limit: int = 20) -> list[dict]:
+    """Resolve raw ``{name, url}`` candidates into registered sources — FAST,
+    with NO network hunting.
 
     This is the SINGLE resolution path shared by the manual per-topic
     ``suggest_sources`` and the one-click batched flow, so both produce an
-    identical result for the same candidates.  Each returned entry carries a
-    ``type`` (``"rss"`` or ``"scrape"``):
+    identical (and near-instant) result for the same candidates.
 
-    * for each candidate, try RSS ``<link>`` autodiscovery from its URL, then
-      conventional feed paths (``/feed``, ``/rss.xml`` …), then a DuckDuckGo
-      keyword search — tagging the entry ``type="rss"`` when a real feed is
-      found;
-    * many sites publish no RSS at all.  Discovery must NOT filter content —
-      that is the scraper's job (``app/sources/scraper.py`` decides which links
-      are real articles).  So RSS discovery is an *enhancement*, never a gate:
-      every candidate with a usable http(s) URL is KEPT.  When a feed is found
-      the entry is ``type="rss"``; otherwise it is kept as ``type="scrape"``
-      pointing at its article-listing / homepage URL (preferring
-      ``discover_from_url``'s own scrape URL when available).  The collector
-      then scrapes such sources via ``SourceConfig(type="scrape", mode="list")``;
-    * if a topic yields nothing at all, fall back to curated seed sources for
-      *topic*, resolved the same way (RSS when possible, otherwise scrape).
+    The governing principle is: just register the CORRECT source URL; whether
+    and what to crawl is the scraper's job (``app/sources/scraper.py``). So this
+    function does **no** RSS autodiscovery, feed-path probing, or web search
+    (all of which are slow and unreliable). For each candidate it simply:
 
-    *limit* caps how many sources are returned; *max_attempts* caps how many
-    candidates we PROBE over the network for RSS.  Once the probe budget is
-    spent, remaining candidates are still kept as scrape sources (using their
-    URL directly, no extra network) — so the count of returned sources tracks
-    the number of distinct candidate URLs, not just the few that had feeds.
+    * requires a usable ``http(s)`` URL (candidates without one are skipped —
+      a source needs a URL);
+    * dedupes by normalized URL (``rstrip('/')``);
+    * classifies ``type`` by a CHEAP URL heuristic only (``_looks_like_feed_url``):
+      feed-looking URLs → ``type="rss"``, everything else → ``type="scrape"``;
+    * keeps the entry as ``{"name", "url", "type"}``, respecting *limit*.
+
+    If a topic yields nothing, it falls back to the curated seed sources for
+    *topic* (classified the same cheap way). Reachability is validated later
+    (fast, bounded) in the caller's step 5.
     """
-    import time
-    from app.discovery import (discover_from_keyword, discover_from_url,
-                               probe_feed_paths)
-
     out: list[dict] = []
     seen: set[str] = set()
-    attempts = 0
 
     def _resolve_one(name: str, url: str) -> dict | None:
-        """Resolve a single candidate to an RSS feed or a scrape source.
+        url = (url or "").strip()
+        if not url.startswith(("http://", "https://")):
+            return None
+        key = url.rstrip("/")
+        if key in seen:
+            return None
+        seen.add(key)
+        ctype = "rss" if _looks_like_feed_url(url) else "scrape"
+        return {"name": name or url, "url": url, "type": ctype}
 
-        RSS probing runs only while the network *max_attempts* budget lasts;
-        beyond that the candidate is kept as a scrape source without any
-        further network calls.  Returns the resolved ``{name, url, type}`` dict
-        (recording its URL in *seen*) or ``None`` when the candidate has no
-        usable http(s) URL / is a duplicate.
-        """
-        nonlocal attempts
-        scrape_url: str | None = None
-        if attempts < max_attempts:
-            attempts += 1
-            if url:
-                # 1) RSS autodiscovery from the given page. discover_from_url
-                #    also returns a scrape SourceConfig (its own sensible scrape
-                #    URL) when the page advertises no feed — remember it.
-                try:
-                    for src in discover_from_url(url):
-                        if src.type == "rss":
-                            if src.url not in seen:
-                                seen.add(src.url)
-                                return {"name": name, "url": src.url,
-                                        "type": "rss"}
-                        elif scrape_url is None and src.url:
-                            scrape_url = src.url
-                except Exception:
-                    pass
-                # 2) Conventional feed paths on the same domain (no <link> tag).
-                try:
-                    feed = probe_feed_paths(url, deadline=time.monotonic() + 20)
-                    if feed and feed not in seen:
-                        seen.add(feed)
-                        return {"name": name, "url": feed, "type": "rss"}
-                except Exception:
-                    pass
-            # 3) Search the web for the org's feed.
-            for query in (f"{name} blog", f"{name}"):
-                try:
-                    for src in discover_from_keyword(query, max_sites=2):
-                        if src.url not in seen and src.type == "rss":
-                            seen.add(src.url)
-                            return {"name": name, "url": src.url, "type": "rss"}
-                except Exception:
-                    pass
-        # 4) No RSS discoverable (or probe budget spent) — keep the candidate as
-        #    a scrape source rather than dropping it (most sites have no feed).
-        #    Prefer the scrape URL discover_from_url picked; else the candidate.
-        scrape = scrape_url or (url if url.startswith(("http://", "https://"))
-                                else "")
-        if scrape and scrape not in seen:
-            seen.add(scrape)
-            return {"name": name, "url": scrape, "type": "scrape"}
-        return None
-
-    # Phase A: resolve LLM/candidate suggestions. Bounded by *limit* only —
-    # every distinct candidate URL is kept (RSS-probed while budget lasts).
+    # Phase A: resolve LLM/candidate suggestions (bounded by *limit*).
     for item in candidates:
         if len(out) >= limit:
             break
-        name = item.get("name", "")
-        url = item.get("url", "")
-        if name:
-            resolved = _resolve_one(name, url)
-            if resolved:
-                out.append(resolved)
+        resolved = _resolve_one(item.get("name", ""), item.get("url", ""))
+        if resolved:
+            out.append(resolved)
 
-    # Phase B: seed fallback — resolve curated seeds the same way so a topic is
-    # never emptier than its seed list (RSS when discoverable, else scrape).
+    # Phase B: seed fallback — resolve curated seeds the same cheap way so a
+    # topic is never emptier than its seed list.
     if not out:
         for item in _SOURCE_SEED.get(topic.lower(), []):
             if len(out) >= limit:
                 break
-            name, url = item["name"], item["url"]
-            if not name or not url or any(o["name"] == name for o in out):
-                continue
-            resolved = _resolve_one(name, url)
+            resolved = _resolve_one(item.get("name", ""), item.get("url", ""))
             if resolved:
                 out.append(resolved)
 
@@ -496,19 +465,16 @@ def suggest_keywords(subtopic: str, provider: LLMProvider,
 
 
 def suggest_sources(topic: str, provider: LLMProvider,
-                    limit: int = 20, max_attempts: int = 10) -> list[dict]:
+                    limit: int = 20) -> list[dict]:
     """Recommend frontier companies / orgs / media (with their news/blog URLs)
-    for a topic, so the caller can auto-discover feeds from them.
+    for a topic, so the caller can register them as sources.
 
     Uses a two-phase approach:
-    1. Ask the LLM for well-known company/org names in the field
-    2. For each name, use web search + RSS autodiscovery to find actual
-       feed URLs (LLMs hallucinate URLs — they guess plausible-looking
-       paths like /blog or /news that often return 404)
-
-    *max_attempts* caps how many candidates we probe over the network so a
-    single topic can't fan out into dozens of slow HTTP requests (each probe
-    may issue several requests when a site is slow/unreachable).
+    1. Ask the LLM for well-known company/org names (with URLs) in the field
+    2. Resolve those candidates into registered sources via ``_resolve_sources``
+       — a fast, network-free step that just keeps the correct URL and tags a
+       cheap ``rss``/``scrape`` type. Whether/what to crawl is the scraper's
+       job, so no slow RSS probing happens here.
     """
     topic = topic.strip()
     if not topic:
@@ -524,15 +490,15 @@ def suggest_sources(topic: str, provider: LLMProvider,
         f"主题：{topic}\n"
         '只输出 JSON 数组，每个元素形如 '
         '{"name": "OpenAI", "url": "https://openai.com/news/"}，'
-        "url 尽量给出该机构发布新闻或博客的官方主页（不确定可留空）。"
+        "每个元素都必须给出 url：填写该机构发布新闻或博客的官方主页；"
+        "即使不确定，也要给出你认为最可能的官方网站 URL，绝不要留空。"
         "不要任何额外说明。"
     )
     llm_items = _parse_objects(provider.chat([Message(role="user", content=prompt)]))
 
     # Resolution + seed fallback is shared with the one-click batched flow so
     # both paths yield identical candidates for the same LLM suggestions.
-    return _resolve_sources(topic, llm_items, limit=limit,
-                            max_attempts=max_attempts)
+    return _resolve_sources(topic, llm_items, limit=limit)
 
 
 def _norm_key_map(data: dict) -> dict[str, object]:
@@ -584,18 +550,14 @@ def suggest_keywords_batch(subtopics: list[str], provider: LLMProvider,
     return out
 
 
-def suggest_source_names_batch(topics: list[str],
-                               provider: LLMProvider) -> dict[str, list[dict]]:
-    """Frontier org/media candidates for MANY topics in a SINGLE LLM call.
+def _suggest_source_names_chunk(topics: list[str],
+                                provider: LLMProvider) -> dict:
+    """One chunk → one agent call. Returns the raw parsed object map (or {}).
 
-    Returns {topic: [{name, url}]} of RAW candidates (no network discovery —
-    the caller resolves real RSS feeds separately, in parallel). Falls back to
-    curated seed sources for any topic the model omits.
+    Kept separate from :func:`suggest_source_names_batch` so the chunk loop can
+    call ``provider.chat`` once per chunk (each with its own bounded timeout)
+    and merge results — one oversized/failed chunk can't zero the others.
     """
-    topics = [t.strip() for t in topics if t.strip()]
-    if not topics:
-        return {}
-
     listing = "\n".join(f"- {t}" for t in topics)
     prompt = (
         "你是行业研究员。针对下面每一个主题，分别列出该领域全球最前沿、最值得"
@@ -604,22 +566,58 @@ def suggest_source_names_batch(topics: list[str],
         f"主题列表：\n{listing}\n"
         "只输出一个 JSON 对象，键为主题原文，值为数组，元素形如 "
         '{"name": "OpenAI", "url": "https://openai.com/news/"}。'
-        "url 尽量给出该机构发布新闻或博客的官方主页（不确定可留空）。"
+        "每个元素都必须给出 url：填写该机构发布新闻或博客的官方主页；"
+        "即使不确定，也要给出你认为最可能的官方网站 URL，绝不要留空。"
         "不要任何额外说明。"
     )
-    data = _parse_object_map(provider.chat([Message(role="user", content=prompt)]))
-    norm = _norm_key_map(data)
+    return _parse_object_map(
+        provider.chat([Message(role="user", content=prompt)]))
+
+
+def suggest_source_names_batch(topics: list[str],
+                               provider: LLMProvider) -> dict[str, list[dict]]:
+    """Frontier org/media candidates for MANY topics via CHUNKED agent calls.
+
+    Returns {topic: [{name, url}]} of RAW candidates (no network discovery —
+    the caller resolves real RSS feeds separately, in parallel).
+
+    Topics are split into chunks of :data:`_SOURCE_BATCH_CHUNK` and one agent
+    call is issued per chunk. A single call covering 20+ topics WITH URLs
+    produces a JSON blob large enough that CLI agents truncate/time out on it,
+    which previously zeroed EVERY topic. Chunking bounds each call's output so
+    a failed/empty chunk only falls back to curated seeds for ITS topics
+    without losing the other chunks' results. Falls back to curated seed
+    sources for any topic the model omits.
+    """
+    topics = [t.strip() for t in topics if t.strip()]
+    if not topics:
+        return {}
 
     out: dict[str, list[dict]] = {}
-    for t in topics:
-        items = data.get(t)
-        if not isinstance(items, list):
-            items = norm.get(t.strip().lower())
-        coerced = _coerce_source_objs(items)
-        if not coerced:
-            coerced = [{"name": it["name"], "url": it["url"]}
-                       for it in _SOURCE_SEED.get(t.lower(), [])]
-        out[t] = coerced
+    for start in range(0, len(topics), _SOURCE_BATCH_CHUNK):
+        chunk = topics[start:start + _SOURCE_BATCH_CHUNK]
+        try:
+            data = _suggest_source_names_chunk(chunk, provider)
+        except Exception as exc:  # a chunk failure must not abort the rest
+            logger.warning("suggest_source_names_batch: chunk %s failed: %s",
+                           chunk, exc)
+            data = {}
+        norm = _norm_key_map(data)
+
+        chunk_raw = 0
+        for t in chunk:
+            items = data.get(t)
+            if not isinstance(items, list):
+                items = norm.get(t.strip().lower())
+            coerced = _coerce_source_objs(items)
+            if not coerced:
+                coerced = [{"name": it["name"], "url": it["url"]}
+                           for it in _SOURCE_SEED.get(t.lower(), [])]
+            out[t] = coerced
+            chunk_raw += len(coerced)
+        logger.info("suggest_source_names_batch: chunk %d-%d (%d topics) → "
+                    "%d raw candidates",
+                    start, start + len(chunk), len(chunk), chunk_raw)
     return out
 
 

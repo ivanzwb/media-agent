@@ -37,7 +37,8 @@ from app.pipeline.narration import (
 from app.pipeline.orchestrator import run_pipeline, _append_prompt
 from app.pipeline.recommender import (
     suggest_subtopics, suggest_keywords, suggest_sources, compute_hotness,
-    suggest_keywords_batch, suggest_source_names_batch, _resolve_sources)
+    suggest_keywords_batch, suggest_source_names_batch, _resolve_sources,
+    _SOURCE_BATCH_CHUNK)
 from app.pipeline.score import compute_draft_score
 from app.pipeline.localize import localize_one
 from app.pipeline.rewriter import rewrite
@@ -1891,10 +1892,23 @@ def create_app(config: Config | None = None,
             logger.info("[auto-discover] step 4/5: batch suggest sources for %d topics",
                         len(added_names))
 
-            src_provider = _ChatTimeout(provider, timeout=300)
+            # suggest_source_names_batch now chunks internally (one agent call
+            # per _SOURCE_BATCH_CHUNK topics) so a single oversized/failed call
+            # can't zero every topic. The per-call timeout bounds ONE chunk;
+            # the overall budget must cover all chunks running sequentially,
+            # plus margin. The single-item collector still heartbeats every ~3s
+            # so the UI never looks frozen during the long chunked call.
+            src_n_chunks = max(1, math.ceil(len(added_names) / _SOURCE_BATCH_CHUNK))
+            src_chunk_timeout = 150.0
+            src_overall_timeout = src_n_chunks * src_chunk_timeout + 90.0
+            src_provider = _ChatTimeout(provider, timeout=src_chunk_timeout)
+            logger.info("[auto-discover] step 4: %d topics → %d chunk(s), "
+                        "per-chunk timeout=%.0fs, overall=%.0fs",
+                        len(added_names), src_n_chunks, src_chunk_timeout,
+                        src_overall_timeout)
             name_res, _ = _collect_parallel(
                 lambda _: suggest_source_names_batch(added_names, src_provider),
-                [None], workers=1, overall_timeout=320,
+                [None], workers=1, overall_timeout=src_overall_timeout,
                 on_progress=lambda n, m: _bump(
                     detail=f"正在向 Agent 批量获取 {len(added_names)} 个主题的候选来源…"),
                 label="step 4 llm")
@@ -1909,49 +1923,46 @@ def create_app(config: Config | None = None,
             name_map = name_map or {}
 
             raw_total = sum(len(name_map.get(t) or []) for t in added_names)
+            raw_with_url = sum(
+                1 for t in added_names for c in (name_map.get(t) or [])
+                if str((c or {}).get("url") or "").startswith("http"))
             topics_with_cands = sum(1 for t in added_names if name_map.get(t))
             logger.info("[auto-discover] step 4: batch returned candidates for "
-                        "%d/%d topics (%d raw candidates)",
-                        topics_with_cands, len(added_names), raw_total)
+                        "%d/%d topics (%d raw candidates, %d with usable URL)",
+                        topics_with_cands, len(added_names), raw_total,
+                        raw_with_url)
 
-            # Resolve real feeds / best-effort sources per topic via the SAME
-            # helper the manual per-topic suggest_sources uses, so the one-click
-            # flow yields identical candidates (best-effort URLs included).
-            # Network-only (no agent); parallelize across topics for speed.
+            # Resolve candidates into registered sources via the SAME helper the
+            # manual per-topic suggest_sources uses, so the one-click flow yields
+            # identical results. _resolve_sources is now network-free (it just
+            # keeps the correct URL and tags a cheap rss/scrape type — the
+            # scraper decides what to crawl), so this is CPU-only and returns
+            # near-instantly; resolve all topics inline (no parallel network
+            # phase / long timeouts needed). The UI still heartbeats here and
+            # reachability is validated in step 5.
             resolve_topics = list(added_names)
-            if resolve_topics:
-                _bump(detail=f"正在解析 {len(resolve_topics)} 个主题的来源…",
-                      current=0, total=len(resolve_topics))
-
-                def _do_resolve(t):
-                    return (t, _resolve_sources(t, name_map.get(t) or []))
-
-                res_workers = min(len(resolve_topics), 10)
-                res_timeout = max(120.0, math.ceil(len(resolve_topics) / res_workers) * 60)
-                resolve_res, _ = _collect_parallel(
-                    _do_resolve, resolve_topics, workers=res_workers,
-                    overall_timeout=res_timeout,
-                    on_progress=lambda n, m: _bump(current=n,
-                                                   detail=f"解析来源 [{n}/{m}]"),
-                    label="step 4 resolve")
-                for idx, res in resolve_res.items():
-                    if isinstance(res, Exception) or not res:
-                        continue
-                    t, items = res
-                    for it in items:
-                        url = (it.get("url") or "").rstrip("/")
-                        if url and url not in seen_urls:
-                            seen_urls.add(url)
-                            all_candidates.append(
-                                {"name": it["name"], "url": it["url"],
-                                 "type": it.get("type", "rss"), "topics": [t]})
+            _bump(detail=f"正在解析 {len(resolve_topics)} 个主题的来源…",
+                  current=0, total=len(resolve_topics))
+            for i, t in enumerate(resolve_topics, 1):
+                for it in _resolve_sources(t, name_map.get(t) or []):
+                    url = (it.get("url") or "").rstrip("/")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        all_candidates.append(
+                            {"name": it["name"], "url": it["url"],
+                             "type": it.get("type", "scrape"), "topics": [t]})
+                _bump(current=i, detail=f"解析来源 [{i}/{len(resolve_topics)}]")
 
             logger.info("[auto-discover] step 4: resolved %d sources from %d topics",
                         len(all_candidates), len(resolve_topics))
 
             if not all_candidates:
-                reason = ("Agent 未返回候选来源" if raw_total == 0
-                          else "候选均未解析出可用来源")
+                if raw_total == 0:
+                    reason = "Agent 未返回候选来源"
+                elif raw_with_url == 0:
+                    reason = "候选来源均缺少可用 URL"
+                else:
+                    reason = "候选均未解析出可用来源"
                 _bump(running=False, step=4, step_name="发现来源",
                       detail=f"没有发现来源（{reason}）",
                       result={"added_topics": len(added_names),
