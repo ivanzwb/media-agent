@@ -336,7 +336,7 @@ def suggest_keywords(subtopic: str, provider: LLMProvider,
 
 
 def suggest_sources(topic: str, provider: LLMProvider,
-                    limit: int = 20) -> list[dict]:
+                    limit: int = 20, max_attempts: int = 10) -> list[dict]:
     """Recommend frontier companies / orgs / media (with their news/blog URLs)
     for a topic, so the caller can auto-discover feeds from them.
 
@@ -345,6 +345,10 @@ def suggest_sources(topic: str, provider: LLMProvider,
     2. For each name, use web search + RSS autodiscovery to find actual
        feed URLs (LLMs hallucinate URLs — they guess plausible-looking
        paths like /blog or /news that often return 404)
+
+    *max_attempts* caps how many candidates we probe over the network so a
+    single topic can't fan out into dozens of slow HTTP requests (each probe
+    may issue several requests when a site is slow/unreachable).
     """
     topic = topic.strip()
     if not topic:
@@ -369,6 +373,7 @@ def suggest_sources(topic: str, provider: LLMProvider,
 
     out: list[dict] = []
     seen: set[str] = set()
+    attempts = 0
 
     def _try_discover(name: str, url: str) -> bool:
         """Try to find a real RSS feed for *name* via URL discovery or search."""
@@ -397,21 +402,23 @@ def suggest_sources(topic: str, provider: LLMProvider,
 
     # Phase 2a: process LLM suggestions (discover real RSS feeds)
     for item in llm_items:
-        if len(out) >= limit:
+        if len(out) >= limit or attempts >= max_attempts:
             break
         name = item.get("name", "")
         url = item.get("url", "")
         if name:
+            attempts += 1
             _try_discover(name, url)
 
     # Phase 2b: seed data fallback (try discovery, then add URL as best-effort)
     if not out:
         for item in _SOURCE_SEED.get(topic.lower(), []):
-            if len(out) >= limit:
+            if len(out) >= limit or attempts >= max_attempts:
                 break
             name, url = item["name"], item["url"]
             if not name or not url or any(o["name"] == name for o in out):
                 continue
+            attempts += 1
             if not _try_discover(name, url) and url not in seen:
                 seen.add(url)
                 out.append({"name": name, "url": url})

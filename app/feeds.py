@@ -4,6 +4,7 @@ import logging
 import os
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -156,6 +157,35 @@ def _build_feeds_data(config: FeedsConfig) -> dict:
     return data
 
 
+def _atomic_replace(tmp: str, dst: str, *, retries: int = 12,
+                    base_delay: float = 0.05) -> None:
+    """os.replace with retry/backoff for transient Windows lock errors.
+
+    On Windows, ``os.replace`` raises ``PermissionError`` (WinError 5) or an
+    ``OSError`` sharing violation (WinError 32) when another process holds the
+    destination open — typically antivirus/Search indexer scanning the file we
+    just wrote, a file watcher, or a concurrent reader.  These locks are
+    momentary, so we retry with a short exponential backoff before giving up.
+    """
+    last_exc: BaseException | None = None
+    for attempt in range(retries):
+        try:
+            os.replace(tmp, dst)
+            return
+        except PermissionError as exc:  # WinError 5 (access denied)
+            last_exc = exc
+        except OSError as exc:  # WinError 32 (sharing violation), etc.
+            if getattr(exc, "winerror", None) not in (5, 32):
+                raise
+            last_exc = exc
+        delay = base_delay * (2 ** attempt)
+        logger.warning("feeds.yaml replace locked (attempt %d/%d), retrying in %.2fs: %s",
+                       attempt + 1, retries, delay, last_exc)
+        time.sleep(min(delay, 1.0))
+    assert last_exc is not None
+    raise last_exc
+
+
 def _save_feeds_unlocked(config: FeedsConfig, path: Path | str) -> None:
     """Write feeds.yaml via tempfile + rename (caller MUST hold _feeds_lock)."""
     data = _build_feeds_data(config)
@@ -167,7 +197,7 @@ def _save_feeds_unlocked(config: FeedsConfig, path: Path | str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(yaml_text)
-        os.replace(tmp, str(dst))
+        _atomic_replace(tmp, str(dst))
     except BaseException:
         try:
             os.unlink(tmp)

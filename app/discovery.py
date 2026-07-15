@@ -10,10 +10,10 @@ from app.feeds import SourceConfig
 _UA = {"User-Agent": "media-agent/0.1 (+https://localhost)"}
 
 
-def _get(url: str, fetch=None) -> str:
+def _get(url: str, fetch=None, timeout: float = 8.0) -> str:
     if fetch is not None:
         return fetch(url)
-    resp = httpx.get(url, timeout=20.0, follow_redirects=True, headers=_UA)
+    resp = httpx.get(url, timeout=timeout, follow_redirects=True, headers=_UA)
     resp.raise_for_status()
     return resp.text
 

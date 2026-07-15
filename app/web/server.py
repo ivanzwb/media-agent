@@ -1719,6 +1719,57 @@ def create_app(config: Config | None = None,
             finally:
                 solo.shutdown(wait=False, cancel_futures=True)
 
+        class _ChatTimeout:
+            """Wrap a provider so each chat() call gets a bounded timeout.
+
+            CLI agents default to a very long per-call timeout (cli_timeout,
+            ~500s); during auto-discover we want each recommendation call to
+            fail fast so one slow topic can't starve the whole batch.
+            """
+            def __init__(self, inner, timeout: float):
+                self._inner = inner
+                self._timeout = timeout
+
+            def chat(self, messages, **opts):
+                opts.setdefault("timeout", self._timeout)
+                return self._inner.chat(messages, **opts)
+
+        def _collect_parallel(fn, items, *, workers, overall_timeout,
+                              on_progress, label):
+            """Run fn(item) in parallel, emitting a heartbeat every few seconds
+            (even while waiting) so the UI never looks frozen.  Returns
+            (results, unfinished) where results maps item→value-or-Exception
+            and unfinished lists items that didn't finish before the deadline.
+            """
+            from concurrent.futures import wait, FIRST_COMPLETED
+            results: dict = {}
+            if not items:
+                return results, []
+            pool = ThreadPoolExecutor(max_workers=min(len(items), workers))
+            try:
+                fut_to_item = {pool.submit(fn, it): it for it in items}
+                pending = set(fut_to_item)
+                deadline = time.time() + overall_timeout
+                while pending and time.time() < deadline:
+                    done, pending = wait(pending, timeout=3,
+                                         return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        it = fut_to_item[fut]
+                        try:
+                            results[it] = fut.result()
+                        except Exception as exc:
+                            results[it] = exc
+                    on_progress(len(results), len(items))
+                unfinished = [fut_to_item[f] for f in pending]
+                for f in pending:
+                    f.cancel()
+                if unfinished:
+                    logger.warning("[auto-discover] %s: %d/%d finished, %d timed out",
+                                   label, len(results), len(items), len(unfinished))
+                return results, unfinished
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
+
         try:
             # ── Step 1: suggest subtopics (1 LLM call, bounded) ──
             try:
@@ -1750,35 +1801,29 @@ def create_app(config: Config | None = None,
                   current=0, total=len(subtopics))
             logger.info("[auto-discover] step 2/5: fetch keywords for %d subtopics", len(subtopics))
 
-            kw_results: list[dict] = []
             kw_workers = min(len(subtopics), 5)
             kw_timeout = _parallel_llm_timeout(len(subtopics), workers=kw_workers)
-            pool = ThreadPoolExecutor(max_workers=kw_workers)
-            try:
-                futures = {
-                    pool.submit(suggest_keywords, st, provider): st
-                    for st in subtopics
-                }
-                try:
-                    for i, future in enumerate(as_completed(futures, timeout=kw_timeout)):
-                        st = futures[future]
-                        try:
-                            keywords = future.result()
-                        except Exception as exc:
-                            keywords = []
-                            _log_failure(2, "keywords", st, exc)
-                        kw_results.append({"name": st, "keywords": keywords})
-                        _bump(current=i + 1, detail=f"[{i+1}/{len(subtopics)}] {st}")
-                        logger.info("[auto-discover] step 2: [%d/%d] %s → %d keywords",
-                                    i + 1, len(subtopics), st, len(keywords))
-                except FuturesTimeoutError:
-                    logger.warning("[auto-discover] step 2: timed out after %.0fs, %d/%d completed",
-                                   kw_timeout, len(kw_results), len(subtopics))
-                    for st in subtopics:
-                        if not any(r["name"] == st for r in kw_results):
-                            kw_results.append({"name": st, "keywords": []})
-            finally:
-                pool.shutdown(wait=False, cancel_futures=True)
+            kw_provider = _ChatTimeout(provider, timeout=90)
+            kw_map, kw_unfinished = _collect_parallel(
+                lambda st: suggest_keywords(st, kw_provider),
+                subtopics, workers=kw_workers, overall_timeout=kw_timeout,
+                on_progress=lambda n, m: _bump(current=n,
+                                               detail=f"获取关键词 [{n}/{m}]"),
+                label="step 2")
+
+            kw_results: list[dict] = []
+            for st in subtopics:
+                res = kw_map.get(st)
+                if isinstance(res, Exception):
+                    _log_failure(2, "keywords", st, res)
+                    kw_results.append({"name": st, "keywords": []})
+                elif res is None:  # unfinished / timed out
+                    kw_results.append({"name": st, "keywords": []})
+                else:
+                    kw_results.append({"name": st, "keywords": res})
+            if kw_unfinished:
+                logger.warning("[auto-discover] step 2: %d subtopics timed out",
+                               len(kw_unfinished))
 
             # ── Step 3: add topics to feeds.yaml ──
             _bump(step=3, step_name="添加为主题",
@@ -1786,23 +1831,31 @@ def create_app(config: Config | None = None,
                   current=0, total=len(kw_results))
             logger.info("[auto-discover] step 3/5: add %d topics", len(kw_results))
 
-            added_names: list[str] = []
-            for i, it in enumerate(kw_results):
+            # Collect all topics with keywords, then write them in a SINGLE
+            # atomic update.  Doing one replace instead of N tight-loop
+            # replaces avoids repeatedly tripping Windows file locks
+            # (antivirus/indexer) on feeds.yaml.
+            pending = [it for it in kw_results if it["keywords"]]
+            for it in kw_results:
                 if not it["keywords"]:
                     logger.info("[auto-discover] step 3: skip %s (no keywords)", it["name"])
-                    continue
-                kw_str = ", ".join(it["keywords"])
+
+            added_names: list[str] = []
+            if pending:
+                def _do_add_all(cfg, _items=pending, _added=added_names):
+                    for it in _items:
+                        kw_list = [k.strip() for k in it["keywords"] if str(k).strip()]
+                        if cfg.add_topic(Topic(name=it["name"], keywords=kw_list)) is not None:
+                            _added.append(it["name"])
                 try:
-                    kw_list = [k.strip() for k in kw_str.split(",") if k.strip()]
-                    def _do_add(cfg, _name=it["name"], _kws=kw_list):
-                        cfg.add_topic(Topic(name=_name, keywords=_kws))
-                    update_feeds(feeds_path, _do_add)
-                    added_names.append(it["name"])
-                    logger.info("[auto-discover] step 3: [%d/%d] added topic %s (%d keywords)",
-                                i + 1, len(kw_results), it["name"], len(it["keywords"]))
+                    update_feeds(feeds_path, _do_add_all)
+                    _bump(current=len(kw_results),
+                          detail=f"已添加 {len(added_names)} 个主题")
+                    for name in added_names:
+                        logger.info("[auto-discover] step 3: added topic %s", name)
                 except Exception as exc:
-                    _log_failure(3, "add topic", it["name"], exc)
-                _bump(current=i + 1, detail=f"[{i+1}/{len(kw_results)}] {it['name']}")
+                    added_names.clear()
+                    _log_failure(3, "add topics", f"{len(pending)} 个主题", exc)
 
             if not added_names:
                 _bump(running=False, step=3, step_name="添加为主题",
@@ -1820,39 +1873,56 @@ def create_app(config: Config | None = None,
                   current=0, total=len(added_names))
             logger.info("[auto-discover] step 4/5: suggest sources for %d topics", len(added_names))
 
-            completed_count = 0
             src_workers = min(len(added_names), 5)
             src_timeout = _parallel_llm_timeout(len(added_names), workers=src_workers,
                                                 per_batch_sec=90, minimum=180)
-            pool = ThreadPoolExecutor(max_workers=src_workers)
-            try:
-                futures = {
-                    pool.submit(suggest_sources, t, provider): t
-                    for t in added_names
-                }
-                try:
-                    for i, future in enumerate(as_completed(futures, timeout=src_timeout)):
-                        t = futures[future]
-                        try:
-                            cands = future.result()
-                        except Exception as exc:
-                            cands = []
-                            _log_failure(4, "sources", t, exc)
-                        count = 0
-                        for c in cands:
-                            url = c.get("url", "").rstrip("/")
-                            if url and url not in seen_urls:
-                                seen_urls.add(url)
-                                all_candidates.append({"name": c.get("name", ""), "url": c["url"], "topics": [t]})
-                                count += 1
-                        completed_count = i + 1
-                        _bump(current=completed_count,
-                              detail=f"[{completed_count}/{len(added_names)}] {t} → {count} 个来源")
-                except FuturesTimeoutError:
-                    logger.warning("[auto-discover] step 4: timed out after %.0fs, %d/%d completed",
-                                   src_timeout, completed_count, len(added_names))
-            finally:
-                pool.shutdown(wait=False, cancel_futures=True)
+            # Bound each per-topic LLM call so one slow topic can't starve the
+            # batch (CLI agents otherwise block up to cli_timeout ~500s).
+            src_provider = _ChatTimeout(provider, timeout=90)
+
+            def _do_topic(t):
+                return suggest_sources(t, src_provider)
+
+            def _absorb(results: dict) -> None:
+                for t, res in results.items():
+                    if isinstance(res, Exception):
+                        _log_failure(4, "sources", t, res)
+                        continue
+                    for c in (res or []):
+                        url = c.get("url", "").rstrip("/")
+                        if url and url not in seen_urls:
+                            seen_urls.add(url)
+                            all_candidates.append(
+                                {"name": c.get("name", ""), "url": c["url"], "topics": [t]})
+
+            def _on_prog(done_n, total_n):
+                _bump(current=done_n,
+                      detail=f"[{done_n}/{total_n}] 已发现 {len(all_candidates)} 个来源")
+
+            results, unfinished = _collect_parallel(
+                _do_topic, added_names, workers=src_workers,
+                overall_timeout=src_timeout, on_progress=_on_prog, label="step 4")
+            _absorb(results)
+
+            # Retry the topics that didn't finish in time (transient slowness /
+            # rate limits often clear on a second attempt).
+            if unfinished:
+                _bump(detail=f"重试 {len(unfinished)} 个超时主题…")
+                logger.info("[auto-discover] step 4: retrying %d unfinished topics",
+                            len(unfinished))
+                retry_timeout = _parallel_llm_timeout(
+                    len(unfinished), workers=min(len(unfinished), src_workers),
+                    per_batch_sec=90, minimum=120)
+                retry_results, _still = _collect_parallel(
+                    _do_topic, unfinished, workers=min(len(unfinished), src_workers),
+                    overall_timeout=retry_timeout,
+                    on_progress=lambda n, m: _bump(
+                        detail=f"重试中 [{n}/{m}]，已发现 {len(all_candidates)} 个来源"),
+                    label="step 4 retry")
+                _absorb(retry_results)
+                if _still:
+                    logger.warning("[auto-discover] step 4: %d topics still unfinished after retry",
+                                   len(_still))
 
             if not all_candidates:
                 _bump(running=False, step=4, step_name="发现来源",
@@ -1875,46 +1945,37 @@ def create_app(config: Config | None = None,
             skipped: list[dict] = []
 
             def _check_source(c):
-                url = c["url"]
                 try:
-                    ok = check_url_connectivity(url, timeout=8.0, proxy=proxy)
+                    return check_url_connectivity(c["url"], timeout=8.0, proxy=proxy)
                 except Exception:
-                    ok = False
-                return c, ok
+                    return False
 
             # Each check is bounded at 8s; give the whole batch generous but
             # finite wall-clock headroom so a stalled socket can't freeze us.
             check_workers = min(len(all_candidates), 10)
             check_timeout = max(60.0, math.ceil(len(all_candidates) / check_workers) * 30)
-            pool = ThreadPoolExecutor(max_workers=check_workers)
-            try:
-                futures = {pool.submit(_check_source, c): c for c in all_candidates}
-                try:
-                    for i, future in enumerate(as_completed(futures, timeout=check_timeout)):
-                        c, ok = future.result()
-                        if ok:
-                            validated.append(SourceConfig(
-                                name=c["name"], type="rss", url=c["url"],
-                                topics=c["topics"]))
-                        else:
-                            skipped.append({"name": c["name"], "url": c["url"]})
-                            logger.info("[auto-discover] step 5: skipping unreachable %s (%s)",
-                                        c["name"], c["url"])
-                        _bump(current=i + 1,
-                              detail=f"[{i+1}/{len(all_candidates)}] 验证中…")
-                except FuturesTimeoutError:
-                    logger.warning("[auto-discover] step 5: validation timed out, "
-                                   "%d/%d checked", len(validated) + len(skipped),
-                                   len(all_candidates))
-                    for c in all_candidates:
-                        url = c["url"]
-                        if not any(v.url == url for v in validated) and \
-                           not any(s["url"] == url for s in skipped):
-                            validated.append(SourceConfig(
-                                name=c["name"], type="rss", url=c["url"],
-                                topics=c["topics"]))
-            finally:
-                pool.shutdown(wait=False, cancel_futures=True)
+            check_map, check_unfinished = _collect_parallel(
+                _check_source, all_candidates, workers=check_workers,
+                overall_timeout=check_timeout,
+                on_progress=lambda n, m: _bump(current=n,
+                                               detail=f"验证来源 [{n}/{m}]"),
+                label="step 5")
+
+            for c in all_candidates:
+                res = check_map.get(c)
+                reachable = res is True
+                # Unreachable only when we actually got a False result; if the
+                # check didn't finish, keep the source rather than dropping it.
+                if reachable or res is None:
+                    validated.append(SourceConfig(
+                        name=c["name"], type="rss", url=c["url"], topics=c["topics"]))
+                    if res is None:
+                        logger.info("[auto-discover] step 5: keeping unverified %s (%s)",
+                                    c["name"], c["url"])
+                else:
+                    skipped.append({"name": c["name"], "url": c["url"]})
+                    logger.info("[auto-discover] step 5: skipping unreachable %s (%s)",
+                                c["name"], c["url"])
 
             if skipped:
                 logger.info("[auto-discover] step 5: %d sources skipped (unreachable), "
