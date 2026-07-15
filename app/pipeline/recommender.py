@@ -274,33 +274,38 @@ def suggest_subtopics(themes: list[str], provider: LLMProvider,
     if not themes:
         return []
 
-    # 1) Collect seed entries (curated, ordered by hotness)
+    # 1) Curated seeds — used only as an offline / LLM-failure fallback.
     seed_items: list[str] = []
     for t in themes:
         seed_items.extend(_SUBTOPIC_SEED.get(t.lower(), []))
+    seed_items = _dedupe(seed_items, limit * 2)
 
-    # 2) Ask LLM for comprehensive + hotness-ordered list
+    # 2) Let the LLM produce ONE consolidated, non-overlapping list. An explicit
+    #    "don't repeat similar subtopics" rule fixes redundancy generally
+    #    (e.g. 机器人 / 人形机器人 / 具身智能) instead of relying on a hardcoded
+    #    synonym table.
     prompt = (
-        "你是资深自媒体选题策划。用户给出一个或多个大主题，请全面列出这些主题下"
+        "你是资深自媒体选题策划。用户给出一个或多个大主题，请列出这些主题下"
         "最热门、最值得持续关注的细分子主题（中文名词短语，具体、可检索）。\n"
         "要求：\n"
-        "1. 覆盖越全越好，不要遗漏重要的子领域\n"
+        "1. 覆盖要全，不要遗漏重要的子领域, 但类似的子领域不要重复\n"
         "2. 按当前热度从高到低排序\n"
         "3. 至少输出 20 项\n"
         f"主题：{', '.join(themes)}\n"
         "只输出一个 JSON 字符串数组，不要任何额外说明。"
     )
     result = _parse_list(provider.chat([Message(role="user", content=prompt)]))
-
-    # 3) Merge: seed（热点优先）+ LLM（补充新颖项），去重
-    merged = list(seed_items)
     if result:
-        merged.extend(result)
-    if not merged:
+        return _dedupe(result, limit)
+
+    # 3) Offline / LLM failure → fall back to curated seeds (or a generic
+    #    template when the theme has no seeds).
+    fallback = list(seed_items)
+    if not fallback:
         for t in themes:
-            merged.extend([f"{t}前沿", f"{t}应用", f"{t}趋势",
-                           f"{t}公司", f"{t}产品"])
-    return _dedupe(merged, limit)
+            fallback.extend([f"{t}前沿", f"{t}应用", f"{t}趋势",
+                             f"{t}公司", f"{t}产品"])
+    return _dedupe(fallback, limit)
 
 
 def suggest_keywords(subtopic: str, provider: LLMProvider,

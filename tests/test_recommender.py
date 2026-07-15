@@ -10,20 +10,21 @@ def _make_rss_source(name, url):
     return SourceConfig(name=name, type="rss", url=url)
 
 
-def test_suggest_subtopics_merges_seed_and_llm():
+def test_suggest_subtopics_uses_llm_consolidated_list():
+    # The LLM is authoritative: its consolidated (de-overlapped) list is
+    # returned as-is. Seeds are only passed as hints, not force-merged, so
+    # overlapping subtopics no longer sneak back in from the seed list.
     provider = MockProvider(responses=['["脑机接口", "量子计算"]'])
     out = suggest_subtopics(["科技"], provider)
-    assert "人工智能" in out
-    assert "大语言模型" in out
-    assert "量子计算" in out
+    assert out == ["脑机接口", "量子计算"]
     assert len(out) <= 24
 
 
 def test_suggest_subtopics_extracts_embedded_array():
-    provider = MockProvider(responses=['好的：["具身智能", "机器人"] 仅供参考'])
+    provider = MockProvider(responses=['好的：["具身智能", "量子计算"] 仅供参考'])
     out = suggest_subtopics(["科技"], provider)
-    assert "人工智能" in out
-    assert "机器人" in out
+    assert "具身智能" in out
+    assert "量子计算" in out
 
 
 def test_suggest_subtopics_falls_back_when_unparseable():
