@@ -85,6 +85,9 @@ def get_rewrite_provider(llm_provider: str, llm_api_key: str | None = None,
         return get_provider(llm_provider, api_key=llm_api_key,
                             model=llm_model, base_url=llm_api_base,
                             timeout=timeout)
-    except (ValueError, RuntimeError):
+    except (ValueError, RuntimeError) as exc:
+        import logging
+        logging.warning("LLM provider '%s' unavailable (%s), falling back to MockProvider",
+                        llm_provider, exc)
         from app.llm.providers.mock import MockProvider
         return MockProvider()

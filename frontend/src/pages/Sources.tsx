@@ -79,7 +79,8 @@ export default function Sources() {
     if (!themes.trim()) { setRecoStatus("请先输入主题"); return; }
     setRecoStatus("推荐中…");
     try {
-      const r = await postForm<{ subtopics: string[] }>("/sources/topics/suggest", { themes });
+      const r = await postForm<{ subtopics: string[]; error?: string }>("/sources/topics/suggest", { themes });
+      if (r.error) { setRecoStatus("✗ " + r.error); return; }
       setSubtopics(r.subtopics || []);
       setGroups([]);
       setRecoStatus(r.subtopics?.length ? "" : "没有推荐结果");
@@ -91,7 +92,8 @@ export default function Sources() {
     if (exists) { setGroups(groups.filter((g) => g.name !== st)); return; }
     setGroups((g) => [...g, { name: st, keywords: [] }]);
     try {
-      const r = await postForm<{ keywords: string[] }>("/sources/topics/keywords", { subtopic: st });
+      const r = await postForm<{ keywords: string[]; error?: string }>("/sources/topics/keywords", { subtopic: st });
+      if (r.error) { message.error(r.error); return; }
       setGroups((g) => g.map((x) => x.name === st
         ? { ...x, keywords: (r.keywords || []).map((kw) => ({ kw, on: true })) } : x));
     } catch { /* ignore */ }
@@ -207,7 +209,8 @@ export default function Sources() {
   async function topicDiscover(topic: string) {
     setDiscover((d) => ({ ...d, [topic]: { cands: [], sel: new Set(), status: "推荐中…" } }));
     try {
-      const r = await postForm<{ candidates: Candidate[] }>("/sources/suggest-sources", { topic });
+      const r = await postForm<{ candidates: Candidate[]; error?: string }>("/sources/suggest-sources", { topic });
+      if (r.error) { setDiscover((d) => ({ ...d, [topic]: { cands: [], sel: new Set(), status: "✗ " + r.error } })); return; }
       const cands = r.candidates || [];
       setDiscover((d) => ({ ...d, [topic]: { cands, sel: new Set(cands.map((c) => c.url)), status: cands.length ? "" : "没有推荐结果" } }));
     } catch {
