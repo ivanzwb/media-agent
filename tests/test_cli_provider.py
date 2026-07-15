@@ -111,3 +111,43 @@ def test_get_rewrite_provider_falls_back_when_cli_not_installed():
     provider = get_rewrite_provider("mock", cli_tool="copilot")
     # copilot may or may not be installed; if not, falls back to mock
     assert provider is not None
+
+
+def test_rewrite_priority_agent_first_uses_cli(monkeypatch):
+    from app.llm.base import get_rewrite_provider
+    from app.llm.providers.cli import CLIProvider
+    from app.llm.providers.mock import MockProvider
+
+    monkeypatch.setattr(
+        "app.llm.base._resolve_cli_provider",
+        lambda cli_tool, timeout=None: CLIProvider("opencode"),
+    )
+    provider = get_rewrite_provider("openai", cli_tool="opencode", priority="agent")
+    assert isinstance(provider, CLIProvider)
+
+
+def test_rewrite_priority_llm_first_uses_llm(monkeypatch):
+    from app.llm.base import get_rewrite_provider
+    from app.llm.providers.cli import CLIProvider
+    from app.llm.providers.mock import MockProvider
+
+    monkeypatch.setattr(
+        "app.llm.base._resolve_cli_provider",
+        lambda cli_tool, timeout=None: CLIProvider("opencode"),
+    )
+    provider = get_rewrite_provider("mock", cli_tool="opencode", priority="llm")
+    assert isinstance(provider, CLIProvider)
+
+
+def test_rewrite_priority_llm_first_prefers_openai(monkeypatch):
+    from app.llm.base import get_rewrite_provider
+    from app.llm.providers.cli import CLIProvider
+    from app.llm.providers.openai import OpenAIProvider
+
+    monkeypatch.setattr(
+        "app.llm.base._resolve_cli_provider",
+        lambda cli_tool, timeout=None: CLIProvider("opencode"),
+    )
+    provider = get_rewrite_provider(
+        "openai", llm_api_key="sk-test", cli_tool="opencode", priority="llm")
+    assert isinstance(provider, OpenAIProvider)

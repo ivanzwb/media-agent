@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -269,7 +270,8 @@ def create_app(config: Config | None = None,
         provider = get_rewrite_provider(
             run_config.llm_provider, run_config.llm_api_key,
             run_config.llm_model, llm_api_base=run_config.llm_api_base,
-            cli_tool=run_config.cli_tool, timeout=run_config.cli_timeout)
+            cli_tool=run_config.cli_tool, timeout=run_config.cli_timeout,
+            priority=run_config.rewrite_priority)
         image_provider = get_image_provider(
             run_config.image_provider,
             run_config.image_api_key or run_config.llm_api_key,
@@ -576,7 +578,8 @@ def create_app(config: Config | None = None,
                     run_config.llm_provider, run_config.llm_api_key,
                     run_config.llm_model, llm_api_base=run_config.llm_api_base,
                     cli_tool=run_config.cli_tool,
-                    timeout=run_config.cli_timeout)
+                    timeout=run_config.cli_timeout,
+                    priority=run_config.rewrite_priority)
                 image_provider = get_image_provider(
                     run_config.image_provider,
                     run_config.image_api_key or run_config.llm_api_key,
@@ -1363,14 +1366,14 @@ def create_app(config: Config | None = None,
             return None
 
     def _resolve_provider(rc: Config | None = None) -> LLMProvider:
-        """Get LLM provider respecting cli_tool: Agent (opencode/codex/copilot)
-        first, then configured LLM provider, then mock."""
+        """Get LLM provider for rewriting, honoring rewrite_priority."""
         if rc is None:
             rc = Config.load(store=get_store())
         return get_rewrite_provider(
             rc.llm_provider, rc.llm_api_key,
             rc.llm_model, llm_api_base=rc.llm_api_base,
-            cli_tool=rc.cli_tool, timeout=rc.cli_timeout)
+            cli_tool=rc.cli_tool, timeout=rc.cli_timeout,
+            priority=rc.rewrite_priority)
 
     def _build_tts(rc, tts_provider=None, tts_voice=None):
         provider = tts_provider if tts_provider is not None else rc.tts_provider
@@ -1657,6 +1660,15 @@ def create_app(config: Config | None = None,
     async def sources_check_reachability_progress():
         return check_progress
 
+    def _parallel_llm_timeout(item_count: int, *, workers: int = 5,
+                              per_batch_sec: int = 60, minimum: int = 120) -> float:
+        """Wall-clock budget for parallel LLM fan-out (as_completed timeout)."""
+        if item_count <= 0:
+            return minimum
+        batch_workers = min(item_count, workers)
+        batches = math.ceil(item_count / batch_workers)
+        return max(minimum, batches * per_batch_sec)
+
     # ---- auto-discover (single endpoint, server-side parallelism) ----
     auto_discover_progress = {
         "running": False, "step": 0, "total_steps": 5,
@@ -1699,13 +1711,16 @@ def create_app(config: Config | None = None,
             logger.info("[auto-discover] step 2/5: fetch keywords for %d subtopics", len(subtopics))
 
             kw_results: list[dict] = []
-            with ThreadPoolExecutor(max_workers=min(len(subtopics), 5)) as pool:
+            kw_workers = min(len(subtopics), 5)
+            kw_timeout = _parallel_llm_timeout(len(subtopics), workers=kw_workers)
+            pool = ThreadPoolExecutor(max_workers=kw_workers)
+            try:
                 futures = {
                     pool.submit(suggest_keywords, st, provider): st
                     for st in subtopics
                 }
                 try:
-                    for i, future in enumerate(as_completed(futures, timeout=120)):
+                    for i, future in enumerate(as_completed(futures, timeout=kw_timeout)):
                         st = futures[future]
                         try:
                             keywords = future.result()
@@ -1718,12 +1733,13 @@ def create_app(config: Config | None = None,
                         logger.info("[auto-discover] step 2: [%d/%d] %s → %d keywords",
                                     i + 1, len(subtopics), st, len(keywords))
                 except TimeoutError:
-                    logger.warning("[auto-discover] step 2: timed out after 120s, %d/%d completed",
-                                   len(kw_results), len(subtopics))
-                    # Collect whatever completed, fill the rest as empty
+                    logger.warning("[auto-discover] step 2: timed out after %.0fs, %d/%d completed",
+                                   kw_timeout, len(kw_results), len(subtopics))
                     for st in subtopics:
                         if not any(r["name"] == st for r in kw_results):
                             kw_results.append({"name": st, "keywords": []})
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
 
             # ── Step 3: add topics to feeds.yaml ──
             p.update(step=3, step_name="添加为主题",
@@ -2878,6 +2894,7 @@ def create_app(config: Config | None = None,
             "sensitive_words": _get("sensitive_words") or (config.sensitive_words or ""),
             "promotion_footer": _get("promotion_footer") or (config.promotion_footer or ""),
             "cli_tool": _get("cli_tool") or (config.cli_tool or "auto"),
+            "rewrite_priority": _get("rewrite_priority") or config.rewrite_priority,
             "download_images": (store.get_setting("download_images") or "1") not in ("0", "false", "no", ""),
             "download_videos": (store.get_setting("download_videos") or "1") not in ("0", "false", "no", ""),
             "wechat_appid": _get("wechat_appid") or (config.wechat_appid or ""),
@@ -2922,6 +2939,7 @@ def create_app(config: Config | None = None,
                        download_images: str = Form("0"),
                        download_videos: str = Form("0"),
                         cli_tool: str = Form(""),
+                        rewrite_priority: str = Form(""),
                         rewrite_style: str = Form(""),
                         schedule_cron: str = Form(""),
                        schedule_enabled: str = Form("0")):
@@ -2947,6 +2965,7 @@ def create_app(config: Config | None = None,
             "wechat_appid": wechat_appid.strip(),
             "wechat_author": wechat_author.strip(),
             "cli_tool": cli_tool.strip(),
+            "rewrite_priority": rewrite_priority.strip(),
         }
         for db_key, value in str_fields.items():
             if value:

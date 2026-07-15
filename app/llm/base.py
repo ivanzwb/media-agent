@@ -52,42 +52,73 @@ def get_provider(name: str, api_key: str | None = None,
     raise ValueError(f"Unknown LLM provider: {name}")
 
 
-def get_rewrite_provider(llm_provider: str, llm_api_key: str | None = None,
-                         llm_model: str | None = None,
-                         llm_api_base: str | None = None,
-                         cli_tool: str | None = None,
-                         timeout: int | None = None) -> LLMProvider:
-    """Return the best available provider for article rewriting.
+def _resolve_cli_provider(cli_tool: str | None,
+                          timeout: int | None = None) -> LLMProvider | None:
+    if not cli_tool or cli_tool in ("none", ""):
+        return None
+    from app.llm.providers.cli import CLIProvider, detect, detect_all
+    tool_id = cli_tool if cli_tool != "auto" else detect_all()
+    if not tool_id or detect(tool_id) is None:
+        return None
+    kwargs: dict = {}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    return CLIProvider(tool_id, **kwargs)
 
-    Priority:
-    1. CLI agent (opencode / codex / copilot) if *cli_tool* is set and the
-       tool is installed.
-    2. The configured LLM provider.
 
-    Falls back to MockProvider when nothing else is available.
-    """
-    if cli_tool and cli_tool not in ("none", ""):
-        from app.llm.providers.cli import detect_all, detect
-        tool_id = cli_tool if cli_tool != "auto" else detect_all()
-        if tool_id:
-            path = detect(tool_id)
-            if path is not None:
-                from app.llm.providers.cli import CLIProvider
-                # Don't pass llm_model here — CLI tools have their own
-                # model defaults (e.g. opencode/big-pickle) that are
-                # independent of the user's LLM provider model config.
-                kwargs = {}
-                if timeout is not None:
-                    kwargs["timeout"] = timeout
-                return CLIProvider(tool_id, **kwargs)
-    # Fall back to regular LLM provider (or mock)
+def _resolve_llm_provider(llm_provider: str, llm_api_key: str | None = None,
+                          llm_model: str | None = None,
+                          llm_api_base: str | None = None,
+                          timeout: int | None = None) -> LLMProvider | None:
     try:
         return get_provider(llm_provider, api_key=llm_api_key,
                             model=llm_model, base_url=llm_api_base,
                             timeout=timeout)
     except (ValueError, RuntimeError) as exc:
         import logging
-        logging.warning("LLM provider '%s' unavailable (%s), falling back to MockProvider",
+        logging.warning("LLM provider '%s' unavailable (%s)",
                         llm_provider, exc)
-        from app.llm.providers.mock import MockProvider
-        return MockProvider()
+        return None
+
+
+def get_rewrite_provider(llm_provider: str, llm_api_key: str | None = None,
+                         llm_model: str | None = None,
+                         llm_api_base: str | None = None,
+                         cli_tool: str | None = None,
+                         timeout: int | None = None,
+                         priority: str = "agent") -> LLMProvider:
+    """Return the best available provider for article rewriting.
+
+    *priority* controls which backend is tried first when both are configured:
+    - ``agent``: CLI agent first, then LLM provider (default).
+    - ``llm``: configured LLM provider first, then CLI agent.
+
+    Mock LLM is only preferred under ``llm`` priority when no CLI agent is
+    available. Falls back to MockProvider when nothing else works.
+    """
+    from app.llm.providers.mock import MockProvider
+
+    priority = (priority or "agent").strip().lower()
+    if priority not in ("agent", "llm"):
+        priority = "agent"
+
+    cli = _resolve_cli_provider(cli_tool, timeout=timeout)
+    has_real_llm = llm_provider not in ("mock", "", None)
+
+    if priority == "llm":
+        if has_real_llm:
+            llm = _resolve_llm_provider(
+                llm_provider, llm_api_key, llm_model, llm_api_base, timeout)
+            if llm is not None:
+                return llm
+        if cli is not None:
+            return cli
+        return _resolve_llm_provider(
+            llm_provider, llm_api_key, llm_model, llm_api_base, timeout
+        ) or MockProvider()
+
+    if cli is not None:
+        return cli
+    return _resolve_llm_provider(
+        llm_provider, llm_api_key, llm_model, llm_api_base, timeout
+    ) or MockProvider()

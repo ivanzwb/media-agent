@@ -61,6 +61,7 @@ export default function Settings() {
         llm_provider: data.llm_provider, llm_model: data.llm_model, llm_api_base: data.llm_api_base,
         image_provider: data.image_provider, image_api_base: data.image_api_base, image_model: data.image_model,
         cli_tool: data.cli_tool,
+        rewrite_priority: data.rewrite_priority,
         tts_provider: data.tts_provider, tts_api_base: data.tts_api_base, tts_model: data.tts_model, tts_voice: data.tts_voice,
         max_age_days: data.max_age_days, max_per_source: data.max_per_source, download_workers: data.download_workers,
         video_fit: data.video_fit, video_brand_name: data.video_brand_name,
@@ -97,7 +98,13 @@ export default function Settings() {
                     <Input.Password placeholder={data.image_api_key.set ? "留空则保持不变" : "输入 API Key"} />
                   </Form.Item>
                 </Card>
-                <Card title="Agent（优先于 LLM Provider）" size="small">
+                <Card title="转写 Provider" size="small">
+                  <Form.Item name="rewrite_priority" label="优先级">
+                    <Select options={[
+                      { value: "agent", label: "Agent 优先" },
+                      { value: "llm", label: "大模型优先" },
+                    ]} style={{ width: 200 }} />
+                  </Form.Item>
                   <Space align="end">
                     <Form.Item name="cli_tool" label="CLI Agent" style={{ marginBottom: 0 }}>
                       <Select options={["auto", "opencode", "claude", "codex", "copilot", "cursor-agent", "none"].map((v) => ({ value: v }))} style={{ width: 200 }} />
