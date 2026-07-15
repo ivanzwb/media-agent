@@ -134,6 +134,12 @@ export default function Sources() {
       await new Promise<void>((resolve, reject) => {
         let notStartedCount = 0;
         const NOT_STARTED_LIMIT = 10; // ~6s — if backend hasn't started by then, abort
+        // Stall watchdog: every step is wall-clock bounded server-side, so if the
+        // backend heartbeat (updated_at) doesn't advance for this long, treat it
+        // as a hang and recover instead of spinning forever.
+        const STALL_LIMIT_MS = 7 * 60 * 1000;
+        let lastBeat = 0;
+        let lastBeatSeenAt = Date.now();
         const poll = setInterval(async () => {
           try {
             const r = await getJson<{
@@ -142,6 +148,7 @@ export default function Sources() {
               current: number; total: number;
               result: { added_topics: number; added_sources: number; total: number } | null;
               error: string | null;
+              updated_at?: number;
             }>("/sources/auto-discover/progress");
 
             if (r.error && !r.running) {
@@ -153,6 +160,16 @@ export default function Sources() {
             }
             if (r.running) {
               notStartedCount = 0; // reset — backend is alive
+              // Track heartbeat to detect a truly stuck backend
+              const beat = r.updated_at ?? 0;
+              if (beat !== lastBeat) { lastBeat = beat; lastBeatSeenAt = Date.now(); }
+              else if (Date.now() - lastBeatSeenAt > STALL_LIMIT_MS) {
+                setRecoStatus("✗ 自动发现卡住了（后端长时间无进展），已中止，请重试");
+                setAutoProg(null);
+                clearInterval(poll);
+                reject(new Error("自动发现卡住"));
+                return;
+              }
               const emojis = ["①", "②", "③", "④", "⑤"];
               const emoji = emojis[r.step - 1] || "●";
               const pct = r.total > 0 ? ` (${r.current}/${r.total})` : "";

@@ -325,7 +325,13 @@ class CLIProvider:
                 a.replace("{prompt}", prompt) for a in raw_args
             ]
             logger.debug("running: %s", args)
-            self._proc = subprocess.Popen(
+            # Use a *local* handle for this call.  The provider instance is
+            # shared across threads (auto-discover fans out parallel chat()
+            # calls), so relying on self._proc for communicate()/kill() would
+            # race — one thread could wait on / kill another thread's process
+            # and deadlock.  self._proc is only mirrored for best-effort
+            # cancel()/is_running observability.
+            proc = subprocess.Popen(
                 args,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -333,19 +339,19 @@ class CLIProvider:
                 errors="replace",
                 cwd=self._cwd,
             )
+            self._proc = proc
             returncode = -1
             try:
-                stdout, stderr = self._proc.communicate(timeout=timeout)
-                returncode = self._proc.returncode
+                stdout, stderr = proc.communicate(timeout=timeout)
+                returncode = proc.returncode
             except subprocess.TimeoutExpired:
-                self._proc.kill()
-                self._proc.wait(timeout=5)
-                self._proc = None
+                proc.kill()
+                proc.wait(timeout=5)
                 raise RuntimeError(f"{self._td.label} timed out after {timeout}s")
             finally:
-                self._proc = None
+                if self._proc is proc:
+                    self._proc = None
         except ValueError as e:
-            self._proc = None
             raise RuntimeError(
                 f"{self._td.label} rejected: {e}. "
                 "The prompt contains characters the OS cannot pass via command line."

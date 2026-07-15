@@ -1675,11 +1675,15 @@ def create_app(config: Config | None = None,
         "step_name": "", "detail": "",
         "current": 0, "total": 0,
         "result": None, "error": None,
+        "started_at": 0.0, "updated_at": 0.0,
     }
 
     @app.post("/sources/auto-discover")
     def sources_auto_discover(themes: str = Form(...)):
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import (
+            ThreadPoolExecutor, as_completed,
+            TimeoutError as FuturesTimeoutError,
+        )
 
         p = auto_discover_progress
         provider = _resolve_provider()
@@ -1688,26 +1692,62 @@ def create_app(config: Config | None = None,
             p.update(running=False, error="请输入主题")
             return {"error": "请输入主题"}
 
+        _now = time.time()
         p.update(running=True, step=1, step_name="推荐子主题",
                  detail=f"主题：{', '.join(theme_list)}",
-                 current=0, total=0, result=None, error=None)
+                 current=0, total=0, result=None, error=None,
+                 started_at=_now, updated_at=_now)
         logger.info("[auto-discover] step 1/5: suggest subtopics for %s", theme_list)
 
+        def _log_failure(step: int, what: str, name: str, exc: BaseException) -> None:
+            logger.warning(
+                "[auto-discover] step %d: %s failed for %s: %s",
+                step, what, name, exc, exc_info=True)
+
+        def _bump(**kw) -> None:
+            """Heartbeat + optional progress fields so the UI can detect stalls."""
+            kw["updated_at"] = time.time()
+            p.update(kw)
+
+        def _run_bounded(fn, *args, timeout: float):
+            """Run a single blocking call with a hard wall-clock timeout so a
+            hung LLM/agent can never freeze the whole pipeline."""
+            solo = ThreadPoolExecutor(max_workers=1)
+            try:
+                fut = solo.submit(fn, *args)
+                return fut.result(timeout=timeout)
+            finally:
+                solo.shutdown(wait=False, cancel_futures=True)
+
         try:
-            # ── Step 1: suggest subtopics (1 LLM call) ──
-            subtopics = suggest_subtopics(theme_list, provider)
+            # ── Step 1: suggest subtopics (1 LLM call, bounded) ──
+            try:
+                subtopics = _run_bounded(
+                    suggest_subtopics, theme_list, provider,
+                    timeout=_parallel_llm_timeout(1))
+            except FuturesTimeoutError:
+                _bump(running=False, step=1, step_name="推荐子主题",
+                      detail="推荐子主题超时", error="推荐子主题超时（LLM/Agent 无响应）")
+                logger.warning("[auto-discover] step 1: suggest_subtopics timed out")
+                return {"error": "推荐子主题超时"}
+            except Exception as exc:
+                _bump(running=False, step=1, step_name="推荐子主题",
+                      detail=f"推荐子主题失败：{exc}", error=str(exc))
+                logger.warning("[auto-discover] step 1: suggest_subtopics failed: %s",
+                               exc, exc_info=True)
+                return {"error": str(exc)}
             if not subtopics:
-                p.update(running=False, step=1, step_name="推荐子主题",
-                         detail="没有推荐出子主题", error="没有推荐出子主题")
+                _bump(running=False, step=1, step_name="推荐子主题",
+                      detail="没有推荐出子主题", error="没有推荐出子主题")
                 logger.info("[auto-discover] step 1: no subtopics returned")
                 return {"error": "没有推荐出子主题"}
             logger.info("[auto-discover] step 1: got %d subtopics: %s",
                         len(subtopics), subtopics)
 
             # ── Step 2: fetch keywords for each subtopic (parallel LLM calls) ──
-            p.update(step=2, step_name="获取关键词",
-                     detail=f"共 {len(subtopics)} 个子主题",
-                     current=0, total=len(subtopics))
+            _bump(step=2, step_name="获取关键词",
+                  detail=f"共 {len(subtopics)} 个子主题",
+                  current=0, total=len(subtopics))
             logger.info("[auto-discover] step 2/5: fetch keywords for %d subtopics", len(subtopics))
 
             kw_results: list[dict] = []
@@ -1724,15 +1764,14 @@ def create_app(config: Config | None = None,
                         st = futures[future]
                         try:
                             keywords = future.result()
-                        except Exception:
+                        except Exception as exc:
                             keywords = []
-                            logger.warning("[auto-discover] step 2: keywords failed for %s", st)
+                            _log_failure(2, "keywords", st, exc)
                         kw_results.append({"name": st, "keywords": keywords})
-                        p["current"] = i + 1
-                        p["detail"] = f"[{i+1}/{len(subtopics)}] {st}"
+                        _bump(current=i + 1, detail=f"[{i+1}/{len(subtopics)}] {st}")
                         logger.info("[auto-discover] step 2: [%d/%d] %s → %d keywords",
                                     i + 1, len(subtopics), st, len(keywords))
-                except TimeoutError:
+                except FuturesTimeoutError:
                     logger.warning("[auto-discover] step 2: timed out after %.0fs, %d/%d completed",
                                    kw_timeout, len(kw_results), len(subtopics))
                     for st in subtopics:
@@ -1742,9 +1781,9 @@ def create_app(config: Config | None = None,
                 pool.shutdown(wait=False, cancel_futures=True)
 
             # ── Step 3: add topics to feeds.yaml ──
-            p.update(step=3, step_name="添加为主题",
-                     detail=f"共 {len(kw_results)} 个子主题",
-                     current=0, total=len(kw_results))
+            _bump(step=3, step_name="添加为主题",
+                  detail=f"共 {len(kw_results)} 个子主题",
+                  current=0, total=len(kw_results))
             logger.info("[auto-discover] step 3/5: add %d topics", len(kw_results))
 
             added_names: list[str] = []
@@ -1761,14 +1800,13 @@ def create_app(config: Config | None = None,
                     added_names.append(it["name"])
                     logger.info("[auto-discover] step 3: [%d/%d] added topic %s (%d keywords)",
                                 i + 1, len(kw_results), it["name"], len(it["keywords"]))
-                except Exception:
-                    logger.warning("[auto-discover] step 3: failed to add %s", it["name"])
-                p["current"] = i + 1
-                p["detail"] = f"[{i+1}/{len(kw_results)}] {it['name']}"
+                except Exception as exc:
+                    _log_failure(3, "add topic", it["name"], exc)
+                _bump(current=i + 1, detail=f"[{i+1}/{len(kw_results)}] {it['name']}")
 
             if not added_names:
-                p.update(running=False, step=3, step_name="添加为主题",
-                         detail="没有新增主题", result={"added_topics": 0, "added_sources": 0})
+                _bump(running=False, step=3, step_name="添加为主题",
+                      detail="没有新增主题", result={"added_topics": 0, "added_sources": 0})
                 logger.info("[auto-discover] step 3: no topics added")
                 return {"error": "没有新增主题"}
 
@@ -1777,25 +1815,29 @@ def create_app(config: Config | None = None,
             # ── Step 4: suggest sources for each topic (parallel LLM calls) ──
             all_candidates: list[dict] = []
             seen_urls: set[str] = set()
-            p.update(step=4, step_name="发现来源",
-                     detail=f"共 {len(added_names)} 个主题",
-                     current=0, total=len(added_names))
+            _bump(step=4, step_name="发现来源",
+                  detail=f"共 {len(added_names)} 个主题",
+                  current=0, total=len(added_names))
             logger.info("[auto-discover] step 4/5: suggest sources for %d topics", len(added_names))
 
             completed_count = 0
-            with ThreadPoolExecutor(max_workers=min(len(added_names), 5)) as pool:
+            src_workers = min(len(added_names), 5)
+            src_timeout = _parallel_llm_timeout(len(added_names), workers=src_workers,
+                                                per_batch_sec=90, minimum=180)
+            pool = ThreadPoolExecutor(max_workers=src_workers)
+            try:
                 futures = {
                     pool.submit(suggest_sources, t, provider): t
                     for t in added_names
                 }
                 try:
-                    for i, future in enumerate(as_completed(futures, timeout=300)):
+                    for i, future in enumerate(as_completed(futures, timeout=src_timeout)):
                         t = futures[future]
                         try:
                             cands = future.result()
-                        except Exception:
+                        except Exception as exc:
                             cands = []
-                            logger.warning("[auto-discover] step 4: sources failed for %s", t)
+                            _log_failure(4, "sources", t, exc)
                         count = 0
                         for c in cands:
                             url = c.get("url", "").rstrip("/")
@@ -1804,27 +1846,27 @@ def create_app(config: Config | None = None,
                                 all_candidates.append({"name": c.get("name", ""), "url": c["url"], "topics": [t]})
                                 count += 1
                         completed_count = i + 1
-                        p["current"] = completed_count
-                        p["detail"] = f"[{completed_count}/{len(added_names)}] {t} → {count} 个来源"
-                except TimeoutError:
-                    logger.warning("[auto-discover] step 4: timed out after 300s, %d/%d completed",
-                                   completed_count, len(added_names))
-                    logger.info("[auto-discover] step 4: [%d/%d] %s → %d sources",
-                                i + 1, len(added_names), t, count)
+                        _bump(current=completed_count,
+                              detail=f"[{completed_count}/{len(added_names)}] {t} → {count} 个来源")
+                except FuturesTimeoutError:
+                    logger.warning("[auto-discover] step 4: timed out after %.0fs, %d/%d completed",
+                                   src_timeout, completed_count, len(added_names))
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
 
             if not all_candidates:
-                p.update(running=False, step=4, step_name="发现来源",
-                         detail="没有发现来源",
-                         result={"added_topics": len(added_names), "added_sources": 0})
+                _bump(running=False, step=4, step_name="发现来源",
+                      detail="没有发现来源",
+                      result={"added_topics": len(added_names), "added_sources": 0})
                 logger.info("[auto-discover] step 4: no candidates found")
                 return {"added_topics": len(added_names), "added_sources": 0, "total": 0}
 
             logger.info("[auto-discover] step 4: found %d unique sources", len(all_candidates))
 
             # ── Step 5: validate + batch add sources ──
-            p.update(step=5, step_name="验证并添加来源",
-                     detail=f"正在验证 {len(all_candidates)} 个来源的可达性",
-                     current=0, total=len(all_candidates))
+            _bump(step=5, step_name="验证并添加来源",
+                  detail=f"正在验证 {len(all_candidates)} 个来源的可达性",
+                  current=0, total=len(all_candidates))
             logger.info("[auto-discover] step 5/5: validate & add %d sources", len(all_candidates))
 
             # Validate reachability in parallel before adding
@@ -1840,10 +1882,15 @@ def create_app(config: Config | None = None,
                     ok = False
                 return c, ok
 
-            with ThreadPoolExecutor(max_workers=min(len(all_candidates), 10)) as pool:
+            # Each check is bounded at 8s; give the whole batch generous but
+            # finite wall-clock headroom so a stalled socket can't freeze us.
+            check_workers = min(len(all_candidates), 10)
+            check_timeout = max(60.0, math.ceil(len(all_candidates) / check_workers) * 30)
+            pool = ThreadPoolExecutor(max_workers=check_workers)
+            try:
                 futures = {pool.submit(_check_source, c): c for c in all_candidates}
                 try:
-                    for i, future in enumerate(as_completed(futures, timeout=60)):
+                    for i, future in enumerate(as_completed(futures, timeout=check_timeout)):
                         c, ok = future.result()
                         if ok:
                             validated.append(SourceConfig(
@@ -1853,9 +1900,9 @@ def create_app(config: Config | None = None,
                             skipped.append({"name": c["name"], "url": c["url"]})
                             logger.info("[auto-discover] step 5: skipping unreachable %s (%s)",
                                         c["name"], c["url"])
-                        p["current"] = i + 1
-                        p["detail"] = f"[{i+1}/{len(all_candidates)}] 验证中…"
-                except TimeoutError:
+                        _bump(current=i + 1,
+                              detail=f"[{i+1}/{len(all_candidates)}] 验证中…")
+                except FuturesTimeoutError:
                     logger.warning("[auto-discover] step 5: validation timed out, "
                                    "%d/%d checked", len(validated) + len(skipped),
                                    len(all_candidates))
@@ -1866,6 +1913,8 @@ def create_app(config: Config | None = None,
                             validated.append(SourceConfig(
                                 name=c["name"], type="rss", url=c["url"],
                                 topics=c["topics"]))
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
 
             if skipped:
                 logger.info("[auto-discover] step 5: %d sources skipped (unreachable), "
@@ -1873,13 +1922,13 @@ def create_app(config: Config | None = None,
 
             added_count = _append_sources(validated, skip_connectivity=True) if validated else 0
 
-            p.update(running=False, step=5, step_name="完成",
-                     detail=f"新增 {added_count} 个来源（跳过 {len(skipped)} 个不可达来源）",
-                     current=len(all_candidates), total=len(all_candidates),
-                     result={"added_topics": len(added_names),
-                             "added_sources": added_count,
-                             "total": len(all_candidates),
-                             "skipped": len(skipped)})
+            _bump(running=False, step=5, step_name="完成",
+                  detail=f"新增 {added_count} 个来源（跳过 {len(skipped)} 个不可达来源）",
+                  current=len(all_candidates), total=len(all_candidates),
+                  result={"added_topics": len(added_names),
+                          "added_sources": added_count,
+                          "total": len(all_candidates),
+                          "skipped": len(skipped)})
             logger.info("[auto-discover] step 5: added %d sources, skipped %d unreachable. DONE.",
                         added_count, len(skipped))
             return {"added_topics": len(added_names),
@@ -1887,7 +1936,7 @@ def create_app(config: Config | None = None,
                     "total": len(all_candidates)}
 
         except Exception as exc:
-            p.update(running=False, error=str(exc))
+            p.update(running=False, error=str(exc), updated_at=time.time())
             logger.error("[auto-discover] failed: %s", exc, exc_info=True)
             return {"error": str(exc)}
 
