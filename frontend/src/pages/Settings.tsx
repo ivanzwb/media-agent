@@ -3,7 +3,7 @@ import {
   App as AntApp, Button, Card, Divider, Form, Input, InputNumber, Select,
   Space, Switch, Tag, Typography, List, Upload, Popconfirm, Tabs, Modal,
 } from "antd";
-import { UploadOutlined, AudioOutlined, StopOutlined, CheckOutlined, CloseOutlined } from "@ant-design/icons";
+import { UploadOutlined, AudioOutlined, StopOutlined, CheckOutlined, CloseOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useState, useRef, useEffect } from "react";
 import { api, getJson, postForm } from "../api/client";
 
@@ -98,9 +98,12 @@ export default function Settings() {
                   </Form.Item>
                 </Card>
                 <Card title="Agent（优先于 LLM Provider）" size="small">
-                  <Form.Item name="cli_tool" label="CLI Agent">
-                    <Select options={["auto", "opencode", "claude", "codex", "copilot", "cursor-agent", "none"].map((v) => ({ value: v }))} />
-                  </Form.Item>
+                  <Space.Compact style={{ width: "100%" }}>
+                    <Form.Item name="cli_tool" label="CLI Agent" style={{ flex: 1, marginBottom: 0 }}>
+                      <Select options={["auto", "opencode", "claude", "codex", "copilot", "cursor-agent", "none"].map((v) => ({ value: v }))} />
+                    </Form.Item>
+                    <CliTestButton />
+                  </Space.Compact>
                 </Card>
               </>
             ),
@@ -430,4 +433,29 @@ function VoiceRecorder({ onSave }: { onSave: () => void }) {
       <Button size="small" icon={<CloseOutlined />} onClick={closePanel}>取消</Button>
     </div>
   );
+}
+
+function CliTestButton() {
+  const { message } = AntApp.useApp();
+  const [loading, setLoading] = useState(false);
+  const cliTool = Form.useWatch("cli_tool", Form.useForm()[0]);
+
+  async function testCli() {
+    const tool = cliTool || "auto";
+    setLoading(true);
+    try {
+      const fd = new FormData(); fd.append("tool_id", tool);
+      const r = await api.post<{ found: boolean; path?: string; version?: string; label?: string; error?: string }>("/api/test-cli-agent", fd);
+      const d = r.data;
+      if (d.found) {
+        message.success(`${d.label || tool} 已找到：${d.path}${d.version ? ` (${d.version})` : ""}`);
+      } else {
+        message.warning(d.error || `${tool} 未找到`);
+      }
+    } catch (e: any) {
+      message.error("检测失败：" + (e?.message || e));
+    } finally { setLoading(false); }
+  }
+
+  return <Button icon={<ThunderboltOutlined />} loading={loading} onClick={testCli}>检测</Button>;
 }
