@@ -388,6 +388,41 @@ class Store:
             except OSError:
                 pass
 
+    def delete_articles(self, ids: list[int]) -> int:
+        """Delete specific articles (and their dependent drafts) from the DB and
+        remove their archive/draft files. Returns the number of articles deleted."""
+        if not ids:
+            return 0
+        deleted = 0
+        for aid in ids:
+            art = self.get_article(aid)
+            if not art:
+                continue
+            # Dependent drafts first (FK): remove rows + files.
+            drows = self.conn.execute(
+                "SELECT id, draft_path FROM drafts WHERE article_id=?",
+                (aid,)).fetchall()
+            for d in drows:
+                self.conn.execute("DELETE FROM drafts WHERE id=?", (d["id"],))
+                if d["draft_path"]:
+                    dp = self.config.data_dir / d["draft_path"]
+                    try:
+                        if dp.exists():
+                            dp.unlink()
+                    except OSError:
+                        pass
+            self.conn.execute("DELETE FROM articles WHERE id=?", (aid,))
+            if art["archive_path"]:
+                ap = self.config.data_dir / art["archive_path"]
+                try:
+                    if ap.exists():
+                        ap.unlink()
+                except OSError:
+                    pass
+            deleted += 1
+        self.conn.commit()
+        return deleted
+
     def list_topics(self):
         rows = self.conn.execute(
             "SELECT DISTINCT topic FROM articles WHERE topic IS NOT NULL "

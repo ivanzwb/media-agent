@@ -4,7 +4,7 @@ import {
 } from "antd";
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getJson, postForm } from "../api/client";
+import { api, getJson, postForm } from "../api/client";
 import ArticleViewModal from "../components/ArticleViewModal";
 
 const { Title, Text } = Typography;
@@ -28,6 +28,7 @@ export default function Archive() {
   const [style, setStyle] = useState("");
   const [viewId, setViewId] = useState<number | null>(null);
   const [polling, setPolling] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
 
   const { data } = useQuery({
     queryKey: ["archive", topic],
@@ -63,6 +64,23 @@ export default function Archive() {
       setPolling(true);
       qc.invalidateQueries({ queryKey: ["rewrite-all-status"] });
     } catch { message.error("转写请求失败"); }
+  }
+
+  function batchDelete() {
+    if (!selectedIds.length) return;
+    modal.confirm({
+      title: `确定删除选中的 ${selectedIds.length} 篇文章？`,
+      content: "将同时删除归档文件及关联的草稿，且不可恢复。",
+      okText: "删除", okType: "danger", cancelText: "取消",
+      onOk: async () => {
+        try {
+          const r = await api.post<{ ok: boolean; deleted: number }>("/api/archive/delete", { ids: selectedIds });
+          message.success(`已删除 ${r.data.deleted} 篇`);
+          setSelectedIds([]);
+          qc.invalidateQueries({ queryKey: ["archive"] });
+        } catch { message.error("删除失败"); }
+      },
+    });
   }
 
   async function refetch(id: number) {
@@ -102,17 +120,28 @@ export default function Archive() {
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
       <Title level={2} style={{ margin: 0 }}>归档浏览</Title>
 
+      {/* 主题筛选工具栏 */}
       <Space wrap>
         <Text strong>主题</Text>
         <Tag.CheckableTag checked={!topic} onChange={() => setParams({})}>全部</Tag.CheckableTag>
         {(data?.topics || []).map((t) => (
           <Tag.CheckableTag key={t} checked={topic === t} onChange={() => setParams({ topic: t })}>{t}</Tag.CheckableTag>
         ))}
-        <span style={{ marginLeft: "auto" }} />
+      </Space>
+
+      {/* 批量操作工具栏 */}
+      <Space wrap style={{
+        width: "100%", padding: "8px 12px", background: "#fafafa",
+        border: "1px solid #f0f0f0", borderRadius: 8,
+      }}>
+        {selectedIds.length > 0 && <Tag color="blue">已选 {selectedIds.length}</Tag>}
         <Text>转写风格</Text>
         <Select size="small" style={{ width: 200 }} value={style} onChange={setStyle}
           options={[{ value: "", label: "默认（全局）" },
             ...(styleData?.styles || []).map((s) => ({ value: s.id, label: s.name + (s.is_builtin ? "" : "（自定义）") }))]} />
+        <Button danger size="small" disabled={!selectedIds.length} onClick={batchDelete}>
+          批量删除{selectedIds.length ? ` (${selectedIds.length})` : ""}
+        </Button>
       </Space>
 
       {data?.groups?.length ? (
@@ -120,7 +149,14 @@ export default function Archive() {
           key: g.date,
           label: <Space><b>{g.date}</b><Badge count={g.articles.length} color="#07C160" /></Space>,
           children: <Table rowKey="id" size="small" pagination={false}
-            dataSource={g.articles} columns={columns} />,
+            dataSource={g.articles} columns={columns}
+            rowSelection={{
+              selectedRowKeys: selectedIds.filter((id) => g.articles.some((a) => a.id === id)),
+              onChange: (keys) => {
+                const groupIds = new Set(g.articles.map((a) => a.id));
+                setSelectedIds((prev) => [...prev.filter((id) => !groupIds.has(id)), ...(keys as number[])]);
+              },
+            }} />,
         }))} />
       ) : <Text type="secondary">暂无文章。</Text>}
 
