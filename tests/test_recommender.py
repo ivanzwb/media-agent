@@ -1,10 +1,13 @@
 import json
+import sqlite3
 
+from app.db import init_db
+from app.feeds import FeedsConfig, SourceConfig, Topic
 from app.llm.providers.mock import MockProvider
 from app.pipeline.recommender import (
     suggest_subtopics, suggest_keywords, suggest_sources,
     suggest_keywords_batch, suggest_source_names_batch, _resolve_sources,
-    _KEYWORD_SEED)
+    compute_hotness, _KEYWORD_SEED)
 
 
 def test_suggest_subtopics_uses_llm_consolidated_list():
@@ -285,6 +288,67 @@ def test_suggest_source_names_batch_bad_chunk_falls_back_to_seeds():
         assert all(c["url"].startswith("http") for c in out[t])
         seed_names = {it["name"] for it in _SOURCE_SEED[t.lower()]}
         assert {c["name"] for c in out[t]} == seed_names
+
+
+class _FakeStore:
+    """Minimal store exposing only what compute_hotness needs: a `.conn`."""
+
+    def __init__(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        init_db(self.conn)
+
+    def add_article(self, source_name, topic="t", fingerprint=None):
+        n = self.conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+        self.conn.execute(
+            "INSERT INTO articles (title, url, source_name, topic, "
+            "fetched_at, fingerprint) VALUES (?,?,?,?,?,?)",
+            (f"title{n}", f"https://x/{n}", source_name, topic,
+             "2020-01-01T00:00:00+00:00", fingerprint or f"fp{n}"),
+        )
+        self.conn.commit()
+
+
+def test_compute_hotness_collapses_duplicate_source_entries(monkeypatch):
+    """A single real source registered under multiple topics with URL variants
+    (the feeds.yaml pattern) must appear ONCE in the hotness `sources` list.
+
+    This is the root-cause scenario behind duplicate 「来源热度」 rows: feeds.yaml
+    holds several rows with an identical display name but different URLs
+    (feeds.add_source only dedupes by exact url), and compute_hotness used to
+    emit one entry per feed row.
+    """
+    # Keep the DDG freshness phase network-free & fast.
+    monkeypatch.setattr("app.pipeline.recommender.search_web",
+                        lambda *a, **k: [])
+
+    store = _FakeStore()
+    store.add_article("Boston Dynamics")
+
+    feeds_cfg = FeedsConfig(
+        topics=[Topic(name="人形机器人与具身智能"),
+                Topic(name="机器人操作系统与仿真")],
+        sources=[
+            # Same org, two topics, www vs non-www URL variant.
+            SourceConfig(name="Boston Dynamics", type="scrape",
+                         url="https://www.bostondynamics.com/blog"),
+            SourceConfig(name="Boston Dynamics", type="scrape",
+                         url="https://bostondynamics.com/blog"),
+            # Same org, two topics, trailing-slash + path variant.
+            SourceConfig(name="Google DeepMind", type="scrape",
+                         url="https://deepmind.google/discover/blog/"),
+            SourceConfig(name="Google DeepMind", type="scrape",
+                         url="https://deepmind.google/research/"),
+        ],
+    )
+
+    out = compute_hotness(store, feeds_cfg=feeds_cfg, provider=MockProvider())
+
+    names = [s["name"] for s in out["sources"]]
+    assert names.count("Boston Dynamics") == 1
+    assert names.count("Google DeepMind") == 1
+    # No duplicates at all — one row per distinct source identity.
+    assert len(names) == len(set(names))
 
 
 def test_batched_keywords_superset_of_seed_and_matches_manual():

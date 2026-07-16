@@ -621,6 +621,34 @@ def suggest_source_names_batch(topics: list[str],
     return out
 
 
+def _source_identity(name: str) -> str:
+    """Normalised identity for a source *name* used to collapse feed rows that
+    denote the same source.
+
+    The same organisation is registered in feeds.yaml under several topics and
+    with URL variants, but always with the same human-facing display name, so
+    the display name (case/space-insensitive) is the correct source identity
+    here — it is also what the LLM scores and what an article's ``source_name``
+    is meant to carry. Normalising by ``strip().casefold()`` additionally folds
+    away incidental whitespace/case differences.
+    """
+    return (name or "").strip().casefold()
+
+
+def _dedupe_by_identity(names: list[str]) -> list[str]:
+    """Collapse names that share a normalised source identity, keeping the
+    first-seen display spelling and preserving order."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for n in names:
+        key = _source_identity(n)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(n)
+    return out
+
+
 def _parse_hotness_json(raw: str) -> dict:
     """Extract {'topics': {...}, 'sources': {...}} from an LLM response."""
     try:
@@ -701,11 +729,21 @@ def compute_hotness(
         if feeds_cfg and feeds_cfg.topics
         else sorted(t_stats.keys())
     )
-    source_names: list[str] = (
+    # A single real source is legitimately registered in feeds.yaml MULTIPLE
+    # times — once per topic it belongs to, and often with URL variants of the
+    # same site (trailing slash, www vs non-www, /blog vs /research, locale
+    # paths, ...). feeds.add_source only dedupes by EXACT url string, so those
+    # variants coexist as separate feed rows that share an identical display
+    # `name`. The hotness panel ranks *sources* (organisations/media), not feed
+    # rows, so we must collapse feed entries that denote the same source into
+    # one — keyed by a normalised source identity — otherwise the same name is
+    # emitted once per feed row and shows up as a duplicate in 「来源热度」.
+    raw_source_names: list[str] = (
         [s.name for s in feeds_cfg.sources]
         if feeds_cfg and feeds_cfg.sources
         else sorted(s_stats.keys())
     )
+    source_names = _dedupe_by_identity(raw_source_names)
 
     # ── Phase 1: LLM baseline (one API call) ──────────────────────────
     llm_topic_scores: dict[str, int] = {}
