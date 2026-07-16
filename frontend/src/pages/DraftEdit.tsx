@@ -2,11 +2,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App as AntApp, Button, Card, Col, Row, Select, Space, Tabs, Tag, Typography,
   Input, Collapse, Modal, Drawer, Tooltip, Divider, FloatButton, ColorPicker,
+  Popover, Segmented,
 } from "antd";
 import {
   RobotOutlined, HighlightOutlined, FontColorsOutlined,
   AlignCenterOutlined, BulbOutlined, CloudDownloadOutlined, CloseOutlined,
-  ColumnWidthOutlined,
+  ColumnWidthOutlined, BgColorsOutlined,
 } from "@ant-design/icons";
 import MDEditor, { commands, type ICommand } from "@uiw/react-md-editor";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
@@ -17,6 +18,53 @@ import SceneEditor from "../components/SceneEditor";
 import { remarkAppDirectives, previewComponents } from "../lib/mdPreview";
 
 const { Title, Text, Paragraph } = Typography;
+
+// Directives whose open line accepts color=/align= params (mirror formatter.py).
+const _PARAM_TYPES = new Set([
+  "tip", "info", "warning", "success", "danger", "highlight", "note",
+  "box", "border", "blocktitle", "card",
+]);
+
+// Given full markdown text + a cursor offset, return the line index of the
+// enclosing param-capable `:::type` directive open line, or -1 if the cursor
+// isn't inside one.
+function _findDirectiveLine(text: string, cursor: number): number {
+  const curLine = text.slice(0, cursor).split("\n").length - 1;
+  const lines = text.split("\n");
+  for (let i = curLine; i >= 0; i--) {
+    const s = lines[i].trim();
+    if (i < curLine && /^:::[ \t]*$/.test(s)) return -1; // closed above cursor
+    const m = s.match(/^:::([a-zA-Z]+)/);
+    if (m) return _PARAM_TYPES.has(m[1].toLowerCase()) ? i : -1;
+  }
+  return -1;
+}
+
+// Rewrite a directive open line's color/align params. Returns new text or null
+// (when the cursor isn't in a param directive, or the open line carries a
+// non-param one-liner body which we won't clobber).
+function _applyDirectiveParams(
+  text: string, cursor: number,
+  patch: { color?: string; align?: string | null },
+): { text: string; ok: boolean; reason?: string } {
+  const li = _findDirectiveLine(text, cursor);
+  if (li < 0) return { text, ok: false, reason: "把光标放在组件（:::）内再调整样式" };
+  const lines = text.split("\n");
+  const m = lines[li].match(/^(\s*):::([a-zA-Z]+)[ \t]*(.*)$/);
+  if (!m) return { text, ok: false, reason: "未找到组件" };
+  const [, indent, type, argStr] = m;
+  const tokens = argStr.split(/\s+/).filter(Boolean);
+  if (tokens.some((t) => !t.includes("="))) {
+    return { text, ok: false, reason: "该组件为单行写法，请改为多行后再调样式" };
+  }
+  const params: Record<string, string> = {};
+  tokens.forEach((t) => { const i = t.indexOf("="); params[t.slice(0, i).toLowerCase()] = t.slice(i + 1); });
+  if (patch.color !== undefined) params.color = patch.color;
+  if (patch.align !== undefined) { if (patch.align) params.align = patch.align; else delete params.align; }
+  const argOut = Object.entries(params).map(([k, v]) => `${k}=${v}`).join(" ");
+  lines[li] = `${indent}:::${type}${argOut ? " " + argOut : ""}`;
+  return { text: lines.join("\n"), ok: true };
+}
 
 interface DraftData {
   ok: boolean; id: number; status: string; title_cn: string;
@@ -410,9 +458,51 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     icon: <CloudDownloadOutlined />,
     execute: () => { if (!localizing) localizeMedia(); },
   };
+
+  // 14b — insert-time style panel: adjust color/align of the :::directive the
+  // cursor is inside, rewriting its open-line params in place.
+  function tweakDirective(patch: { color?: string; align?: string | null }) {
+    const ta = editorRef.current?.querySelector<HTMLTextAreaElement>(".w-md-editor-text-input");
+    const cursor = ta ? ta.selectionStart : body.length;
+    const r = _applyDirectiveParams(body, cursor, patch);
+    if (!r.ok) { message.info(r.reason || "无法调整样式"); return; }
+    setBody(r.text);
+  }
+  const styleParamCommand: ICommand = {
+    name: "styleparam", keyCommand: "styleparam",
+    buttonProps: { title: "组件样式（把光标放在 ::: 组件内，调整颜色/对齐）" },
+    icon: <BgColorsOutlined />,
+    render: (_command, _disabled, _exec) => (
+      <Popover trigger="click" placement="bottom"
+        content={
+          <div style={{ width: 200 }}>
+            <div style={{ marginBottom: 8, fontSize: 12, color: "#888" }}>
+              把光标放在组件（:::）内
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <Text style={{ fontSize: 12 }}>颜色</Text>{" "}
+              <ColorPicker onChangeComplete={(c) => tweakDirective({ color: c.toHexString() })}
+                presets={[{ label: "推荐", colors: ["#409eff", "#67c23a", "#e6a23c", "#f56c6c", "#8e44ad", "#2f6fb3", "#fff2e8"] }]} />
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <Text style={{ fontSize: 12 }}>对齐</Text>
+              <Segmented size="small" block options={[
+                { label: "左", value: "left" }, { label: "中", value: "center" },
+                { label: "右", value: "right" }, { label: "清除", value: "" },
+              ]} onChange={(v) => tweakDirective({ align: (v as string) || null })} />
+            </div>
+          </div>
+        }>
+        <span role="button" title="组件样式" style={{ padding: "0 4px", cursor: "pointer" }}>
+          <BgColorsOutlined />
+        </span>
+      </Popover>
+    ),
+    execute: () => {},
+  };
   const editorCommands: ICommand[] = [
     ...commands.getCommands(), commands.divider,
-    ...styleCommands, commands.divider, localizeCommand, commands.divider, templateGroup, panelCommand,
+    ...styleCommands, styleParamCommand, commands.divider, localizeCommand, commands.divider, templateGroup, panelCommand,
   ];
 
   return (
