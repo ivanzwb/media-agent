@@ -65,6 +65,7 @@ export default function Settings() {
         tts_provider: data.tts_provider, tts_api_base: data.tts_api_base, tts_model: data.tts_model, tts_voice: data.tts_voice,
         max_age_days: data.max_age_days, max_per_source: data.max_per_source, download_workers: data.download_workers,
         video_fit: data.video_fit, video_brand_name: data.video_brand_name,
+        fetch_proxy: data.fetch_proxy,
         sensitive_level: data.sensitive_level, sensitive_words: data.sensitive_words,
         promotion_footer: data.promotion_footer,
         wechat_appid: data.wechat_appid, wechat_author: data.wechat_author,
@@ -177,6 +178,10 @@ export default function Settings() {
                     <Select options={["fit", "crop", "blur"].map((v) => ({ value: v }))} />
                   </Form.Item>
                   <Form.Item name="video_brand_name" label="视频品牌名"><Input /></Form.Item>
+                  <Form.Item name="fetch_proxy" label="网络代理"
+                    tooltip="RSS/网页抓取与媒体下载走此 HTTP/HTTPS 代理，可用于绕过 Cloudflare/WAF 或访问受限站点；留空则不使用（MEDIA_AGENT_FETCH_PROXY）">
+                    <Input placeholder="如 http://127.0.0.1:7890" />
+                  </Form.Item>
                 </Card>
                 <Card title="定时" size="small">
                   <Form.Item name="schedule_cron" label="Cron 表达式"><Input placeholder="如 0 8 * * *" /></Form.Item>

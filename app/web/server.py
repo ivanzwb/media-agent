@@ -3147,6 +3147,7 @@ def create_app(config: Config | None = None,
             "promotion_footer": _get("promotion_footer") or (config.promotion_footer or ""),
             "cli_tool": _get("cli_tool") or (config.cli_tool or "auto"),
             "rewrite_priority": _get("rewrite_priority") or config.rewrite_priority,
+            "fetch_proxy": _get("fetch_proxy") or (config.fetch_proxy or ""),
             "download_images": (store.get_setting("download_images") or "1") not in ("0", "false", "no", ""),
             "download_videos": (store.get_setting("download_videos") or "1") not in ("0", "false", "no", ""),
             "relevance_filter": (store.get_setting("relevance_filter") or "1") not in ("0", "false", "no", ""),
@@ -3194,6 +3195,7 @@ def create_app(config: Config | None = None,
                        relevance_filter: str = Form("0"),
                         cli_tool: str = Form(""),
                         rewrite_priority: str = Form(""),
+                        fetch_proxy: str = Form(""),
                         rewrite_style: str = Form(""),
                         schedule_cron: str = Form(""),
                        schedule_enabled: str = Form("0")):
@@ -3220,6 +3222,7 @@ def create_app(config: Config | None = None,
             "wechat_author": wechat_author.strip(),
             "cli_tool": cli_tool.strip(),
             "rewrite_priority": rewrite_priority.strip(),
+            "fetch_proxy": fetch_proxy.strip(),
         }
         for db_key, value in str_fields.items():
             if value:

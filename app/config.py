@@ -169,6 +169,7 @@ class Config:
             "rewrite_style": "rewrite_style",
             "cli_tool": "cli_tool",
             "rewrite_priority": "rewrite_priority",
+            "fetch_proxy": "fetch_proxy",
         }
         for attr, db_key in str_overrides.items():
             val = store.get_setting(db_key)
