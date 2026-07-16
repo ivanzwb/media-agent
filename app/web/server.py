@@ -1721,7 +1721,27 @@ def create_app(config: Config | None = None,
         )
 
         p = auto_discover_progress
-        provider = _resolve_provider()
+        rc = Config.load(store=get_store())
+        provider = _resolve_provider(rc)
+
+        def _provider_label(prov) -> str:
+            """Human name for the backend actually chosen (honors rewrite_priority
+            AND real availability — e.g. shows 'Agent' if an LLM was requested
+            but unavailable and it fell back)."""
+            cls = type(prov).__name__
+            if cls == "CLIProvider":
+                return "Agent"
+            if cls == "MockProvider":
+                return "Mock"
+            return "大模型"
+        prov_label = _provider_label(provider)
+        if (rc.rewrite_priority or "agent").strip().lower() == "llm" \
+                and prov_label != "大模型":
+            logger.warning(
+                "[auto-discover] rewrite_priority=llm but LLM provider '%s' "
+                "is unavailable (no key/unreachable/mock); using %s instead",
+                rc.llm_provider, prov_label)
+
         theme_list = [t.strip() for t in re.split(r"[,，\n]", themes) if t.strip()]
         if not theme_list:
             p.update(running=False, error="请输入主题")
@@ -1845,7 +1865,7 @@ def create_app(config: Config | None = None,
                 lambda _: suggest_keywords_batch(subtopics, kw_provider),
                 [None], workers=1, overall_timeout=320,
                 on_progress=lambda n, m: _bump(
-                    detail=f"正在向 Agent 批量获取 {len(subtopics)} 个子主题的关键词…"),
+                    detail=f"正在向 {prov_label} 批量获取 {len(subtopics)} 个子主题的关键词…"),
                 label="step 2")
             kw_map = kw_batch_res.get(0)
             if isinstance(kw_map, Exception):
@@ -1905,7 +1925,7 @@ def create_app(config: Config | None = None,
             all_candidates: list[dict] = []
             seen_urls: set[str] = set()
             _bump(step=4, step_name="发现来源",
-                  detail=f"正在向 Agent 批量获取 {len(added_names)} 个主题的候选来源…",
+                  detail=f"正在向 {prov_label} 批量获取 {len(added_names)} 个主题的候选来源…",
                   current=0, total=len(added_names))
             logger.info("[auto-discover] step 4/5: batch suggest sources for %d topics",
                         len(added_names))
@@ -1928,7 +1948,7 @@ def create_app(config: Config | None = None,
                 lambda _: suggest_source_names_batch(added_names, src_provider),
                 [None], workers=1, overall_timeout=src_overall_timeout,
                 on_progress=lambda n, m: _bump(
-                    detail=f"正在向 Agent 批量获取 {len(added_names)} 个主题的候选来源…"),
+                    detail=f"正在向 {prov_label} 批量获取 {len(added_names)} 个主题的候选来源…"),
                 label="step 4 llm")
             name_map = name_res.get(0)
             if isinstance(name_map, Exception):
