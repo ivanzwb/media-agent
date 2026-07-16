@@ -280,6 +280,42 @@ def _render_table(lines: list[str], start: int, st: dict) -> tuple[str, int]:
 # ── directive containers (:::type ... :::) ───────────────────────────────
 _CONTAINER_OPEN_RE = re.compile(r'^:::\s*([\w-]+)\s*(.*)$')
 _CONTAINER_CLOSE_RE = re.compile(r'^:::\s*$')
+
+# Directives whose open-line arg is parsed as style params (color=/align=)
+# rather than as body content. (button/titlenum keep their data-arg convention.)
+_PARAM_DIRECTIVES = {"tip", "info", "warning", "success", "danger",
+                     "highlight", "note", "box", "border", "blocktitle",
+                     "card", "center", "right"}
+
+
+def _parse_directive_params(arg: str) -> dict:
+    """Parse a directive open-line arg like ``color=#e74c3c align=center`` into
+    a params dict.  Only ``key=value`` tokens are recognized."""
+    out: dict = {}
+    for tok in (arg or "").split():
+        if "=" in tok:
+            k, _, v = tok.partition("=")
+            out[k.strip().lower()] = v.strip()
+    return out
+
+
+def _param_overrides(dp: dict, kind: str) -> str:
+    """Build an inline-style override suffix from parsed params. In an inline
+    ``style`` attribute the LAST declaration wins, so appending overrides the
+    base style. *kind* selects which CSS property ``color`` maps to."""
+    css = ""
+    color = dp.get("color")
+    if color:
+        if kind == "bg":
+            css += f"background:{color};"
+        elif kind == "border":
+            css += f"border-color:{color};"
+        elif kind == "leftbar":
+            css += f"border-left-color:{color};"
+    align = dp.get("align")
+    if align in ("left", "center", "right"):
+        css += f"text-align:{align};"
+    return css
 _BOX_PALETTES = {
     "tip":     ("#f0f9eb", "#67c23a", "#3c6e2a"),
     "info":    ("#eef5ff", "#409eff", "#2a5b9e"),
@@ -362,9 +398,10 @@ def _render_imgcard(inner_lines: list[str], st: dict) -> str:
 
 
 def _render_container(ctype: str, inner_lines: list[str], st: dict,
-                      params: dict) -> str:
+                      params: dict, arg: str = "") -> str:
     accent = params["accent"]
     fs = params["fs"]
+    dp = _parse_directive_params(arg)
     if ctype in ("center", "right"):
         align = "center" if ctype == "center" else "right"
         inner = _render_blocks(inner_lines, st, params, align=align)
@@ -406,6 +443,8 @@ def _render_container(ctype: str, inner_lines: list[str], st: dict,
     if ctype in ("blocktitle", "dualline"):
         text = _inline(" ".join(l.strip() for l in inner_lines if l.strip()), st)
         style = _BLOCKTITLE_STYLE if ctype == "blocktitle" else _DUALLINE_STYLE
+        if ctype == "blocktitle":
+            style += _param_overrides(dp, "bg")
         return f'<section style="{style}">{text}</section>'
     if ctype == "titlenum":
         raw = next((l.strip() for l in inner_lines if l.strip()), "")
@@ -426,18 +465,22 @@ def _render_container(ctype: str, inner_lines: list[str], st: dict,
     if ctype in ("box", "border"):
         inner = _render_blocks(inner_lines, st, params)
         style = _BOX_BLOCK_STYLE if ctype == "box" else _BORDER_BLOCK_STYLE
+        style += _param_overrides(dp, "bg" if ctype == "box" else "border")
         return f'<section style="{style}">{inner}</section>'
     # box-style cards
     if ctype == "highlight":
         box = (f"background:#fafafa;border-left:4px solid {accent};"
                "padding:14px 16px;margin:16px 0;border-radius:0 6px 6px 0;color:#333;")
+        box += _param_overrides(dp, "leftbar")
     elif ctype == "card":
         box = ("background:#ffffff;border:1px solid #e6e8eb;color:#333;"
                "padding:14px 16px;margin:16px 0;border-radius:8px;")
+        box += _param_overrides(dp, "border")
     else:
         bg, border, fg = _BOX_PALETTES.get(ctype, ("#f7f7f9", accent, "#444444"))
         box = (f"background:{bg};border-left:4px solid {border};color:{fg};"
                "padding:12px 16px;margin:16px 0;border-radius:0 6px 6px 0;")
+        box += _param_overrides(dp, "leftbar")
     inner = _render_blocks(inner_lines, st, params)
     return f'<section style="{box}">{inner}</section>'
 
@@ -591,7 +634,11 @@ def _render_blocks(lines: list[str], st: dict, params: dict,
             ctype = cm.group(1)
             first_arg = cm.group(2).strip()
             inner: list[str] = []
-            if first_arg:
+            # Treat the open-line arg as style params (color=/align=) ONLY when
+            # it looks like params (contains '='); otherwise keep it as the first
+            # body line so one-liners like ":::tip 文字" still work.
+            is_param_dir = ctype in _PARAM_DIRECTIVES and "=" in first_arg
+            if first_arg and not is_param_dir:
                 inner.append(first_arg)
             depth = 1
             while i < len(lines):
@@ -609,7 +656,8 @@ def _render_blocks(lines: list[str], st: dict, params: dict,
                     depth += 1
                 inner.append(lines[i])
                 i += 1
-            out.append(_render_container(ctype, inner, st, params))
+            out.append(_render_container(ctype, inner, st, params,
+                                         arg=first_arg if is_param_dir else ""))
             continue
 
         # ── markdown table ──

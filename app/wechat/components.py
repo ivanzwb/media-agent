@@ -206,6 +206,11 @@ _C = [
     ("footer-qrcode", "二维码关注", "页脚",
      ":::card\n:::center\n![公众号二维码]({二维码图片URL})\n:::\n:::center\n**长按识别二维码关注**\n:::\n:::\n\n",
      ["页脚", "二维码", "关注"]),
+    # ── style-parameterized components (color= / align=) ──
+    ("box-custom-color", "自定义色块", "卡片",
+     ":::box color=#fff2e8\n{自定义背景内容}\n:::\n\n", ["卡片", "背景", "自定义颜色"]),
+    ("callout-custom-color", "自定义强调框", "卡片",
+     ":::tip color=#e74c3c\n{自定义颜色强调内容}\n:::\n\n", ["卡片", "强调", "自定义颜色"]),
 ]
 
 

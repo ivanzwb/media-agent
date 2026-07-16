@@ -150,6 +150,20 @@ def test_box_and_border_wrappers():
     assert "border:1px solid #d9d9d9" in border and "边框内容" in border
 
 
+def test_directive_color_param_overrides():
+    box = render_styled_html(":::box color=#fff2e8\n内容\n:::")
+    assert "background:#fff2e8;" in box and "内容" in box
+    tip = render_styled_html(":::tip color=#e74c3c align=center\n提示\n:::")
+    assert "border-left-color:#e74c3c;" in tip and "text-align:center;" in tip
+    assert "提示" in tip
+
+
+def test_directive_oneliner_arg_is_body_not_params():
+    # An open-line arg without '=' stays body (backward compat), not params.
+    html = render_styled_html(":::tip 单行提示\n:::")
+    assert "单行提示" in html
+
+
 def test_toutiao_theme_and_listing():
     html = render_styled_html("## T\n\n正文", platform="toutiao")
     assert "<section style=" in html and "#f04142" in html  # toutiao red

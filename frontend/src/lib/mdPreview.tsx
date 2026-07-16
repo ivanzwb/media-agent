@@ -127,9 +127,35 @@ function _imgcardNode(rawLines: string[]): any {
     children };
 }
 
+// Parse a directive open-line arg (`color=#e74c3c align=center`) into params.
+function _parseParams(arg: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const tok of (arg || "").trim().split(/\s+/)) {
+    const eq = tok.indexOf("=");
+    if (eq > 0) out[tok.slice(0, eq).toLowerCase()] = tok.slice(eq + 1);
+  }
+  return out;
+}
+
+// Build an inline-style override suffix (last declaration wins) — mirrors
+// formatter.py _param_overrides so preview == WeChat.
+function _paramOverrides(dp: Record<string, string>, kind: string): string {
+  let css = "";
+  const c = dp.color;
+  if (c) {
+    if (kind === "bg") css += `background:${c};`;
+    else if (kind === "border") css += `border-color:${c};`;
+    else if (kind === "leftbar") css += `border-left-color:${c};`;
+  }
+  if (dp.align === "left" || dp.align === "center" || dp.align === "right")
+    css += `text-align:${dp.align};`;
+  return css;
+}
+
 // Build a block-container mdast node (rendered as a styled element via hName).
-function _directiveNode(type: string, inner: string): any {
+function _directiveNode(type: string, inner: string, arg: string = ""): any {
   const t = type.toLowerCase();
+  const dp = _parseParams(arg);
   const rawLines = inner.split(/\n+/).map((s) => s.trim()).filter(Boolean);
 
   // ── decorative dividers (no body) ──
@@ -143,7 +169,7 @@ function _directiveNode(type: string, inner: string): any {
   // ── decorative section titles ──
   if (t === "blocktitle" || t === "dualline")
     return { type: "containerDirective",
-      data: { hName: "section", hProperties: { style: t === "blocktitle" ? _BLOCKTITLE_STYLE : _DUALLINE_STYLE } },
+      data: { hName: "section", hProperties: { style: t === "blocktitle" ? _BLOCKTITLE_STYLE + _paramOverrides(dp, "bg") : _DUALLINE_STYLE } },
       children: _inlineNodes(rawLines.join(" ")) };
   if (t === "titlenum") {
     const raw = rawLines[0] || "";
@@ -185,7 +211,7 @@ function _directiveNode(type: string, inner: string): any {
   });
   if (t === "box" || t === "border")
     return { type: "containerDirective",
-      data: { hName: "section", hProperties: { style: t === "box" ? _BOX_BLOCK_STYLE : _BORDER_BLOCK_STYLE } }, children: kids };
+      data: { hName: "section", hProperties: { style: (t === "box" ? _BOX_BLOCK_STYLE : _BORDER_BLOCK_STYLE) + _paramOverrides(dp, t === "box" ? "bg" : "border") } }, children: kids };
   if (t === "center")
     return { type: "containerDirective",
       data: { hName: "div", hProperties: { style: "text-align:center" } }, children: kids };
@@ -194,10 +220,10 @@ function _directiveNode(type: string, inner: string): any {
       data: { hName: "div", hProperties: { style: "text-align:right" } }, children: kids };
   if (t === "card")
     return { type: "containerDirective",
-      data: { hName: "section", hProperties: { style: _CARD_STYLE } }, children: kids };
+      data: { hName: "section", hProperties: { style: _CARD_STYLE + _paramOverrides(dp, "border") } }, children: kids };
   const [bg, border, color] = _DIRECTIVE_PALETTE[t] || ["#f7f7f7", "#d9d9d9", "#333"];
   const style = `background:${bg};border-left:4px solid ${border};color:${color};`
-    + "padding:10px 14px;border-radius:4px;margin:12px 0;";
+    + "padding:10px 14px;border-radius:4px;margin:12px 0;" + _paramOverrides(dp, "leftbar");
   return { type: "containerDirective",
     data: { hName: "div", hProperties: { style } }, children: kids };
 }
@@ -221,7 +247,7 @@ function _textParagraph(lines: string[]): any {
 // list of nodes: plain paragraphs for the non-directive lines and styled block
 // nodes for each directive. Returns null when the text has no directive block
 // (so the original paragraph — and its inline nodes — is left untouched).
-const _OPEN = /^:::([a-zA-Z]+)[ \t]*$/;
+const _OPEN = /^:::([a-zA-Z]+)[ \t]*(.*)$/;
 const _CLOSE = /^:::[ \t]*$/;
 
 // ── multi-column layout (::::columns / :::col) ───────────────────────────
@@ -336,7 +362,12 @@ function _splitParagraphText(text: string): any[] | null {
       if (j < lines.length) { // found matching close line
         found = true;
         flushText();
-        out.push(_directiveNode(om[1], inner.join("\n")));
+        // Open-line arg is style params only when it contains '='; otherwise
+        // treat it as the first body line (one-liner like ":::tip 文字").
+        const openArg = (om[2] || "").trim();
+        const isParams = openArg.includes("=");
+        const body = isParams ? inner : (openArg ? [openArg, ...inner] : inner);
+        out.push(_directiveNode(om[1], body.join("\n"), isParams ? openArg : ""));
         i = j;
         continue;
       }
