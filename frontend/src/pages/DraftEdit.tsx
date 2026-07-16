@@ -1,9 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App as AntApp, Button, Card, Col, Row, Select, Space, Tabs, Tag, Typography,
-  Input, Collapse, Modal, Drawer, Tooltip, Divider, FloatButton,
+  Input, Collapse, Modal, Drawer, Tooltip, Divider, FloatButton, ColorPicker,
 } from "antd";
-import { RobotOutlined } from "@ant-design/icons";
+import {
+  RobotOutlined, HighlightOutlined, FontColorsOutlined,
+  AlignCenterOutlined, BulbOutlined, CloudDownloadOutlined,
+} from "@ant-design/icons";
 import MDEditor, { commands, type ICommand } from "@uiw/react-md-editor";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -107,17 +110,24 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   const qc = useQueryClient();
   const { message } = AntApp.useApp();
   const editorRef = useRef<HTMLDivElement>(null);
+  const colorRef = useRef("#e67514");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
   const [rewriting, setRewriting] = useLocalState<boolean>(`draftedit-rewriting-${data.id}`, false);
   const [rewriteStyle, setRewriteStyle] = useState("");
   const [platform, setPlatform] = useState("");
+  const [localizing, setLocalizing] = useState(false);
+  const [locLog, setLocLog] = useState<string[]>([]);
   const TOUTIAO_URL = "https://mp.toutiao.com/profile_v4/graphic/publish";
 
   // Track active poll interval so we can clear on unmount
   const rewritePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const locPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
-    return () => { if (rewritePollRef.current) clearInterval(rewritePollRef.current); };
+    return () => {
+      if (rewritePollRef.current) clearInterval(rewritePollRef.current);
+      if (locPollRef.current) clearInterval(locPollRef.current);
+    };
   }, []);
 
   // Resume rewrite polling on mount if backend rewrite is still running
@@ -223,6 +233,28 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     } catch { setRewriting(false); message.error("请求失败"); }
   }
 
+  async function localizeMedia() {
+    setLocalizing(true);
+    setLocLog([]);
+    try {
+      await postForm(`/api/draft/${data.id}/localize`);
+    } catch { setLocalizing(false); message.error("请求失败"); return; }
+    if (locPollRef.current) clearInterval(locPollRef.current);
+    const poll = setInterval(async () => {
+      try {
+        const s = await getJson<{ running: boolean; error: string | null; logs: string[] }>(
+          `/api/draft/${data.id}/localize-status`);
+        if (s.logs) setLocLog(s.logs);
+        if (!s.running) {
+          clearInterval(poll); locPollRef.current = null; setLocalizing(false);
+          if (s.error) message.error("本地化失败：" + s.error);
+          else { message.success("媒体已本地化"); qc.invalidateQueries({ queryKey: ["draft", data.id] }); }
+        }
+      } catch { /* ignore poll errors */ }
+    }, 1200);
+    locPollRef.current = poll;
+  }
+
   async function cover(kind: "scrape" | "generate") {
     message.loading({ content: kind === "scrape" ? "抓取封面中…" : "生成封面中…", key: "cover" });
     const r = await postForm<{ ok: boolean; error?: string }>(`/drafts/${data.id}/cover-${kind}`);
@@ -302,16 +334,30 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   // Custom buttons injected into the MDEditor toolbar (mirrors trunk).
   const label = (t: string): ICommand["icon"] => (<span style={{ fontSize: 12, padding: "0 2px" }}>{t}</span>);
   const styleCommands: ICommand[] = [
-    { name: "hl", keyCommand: "hl", buttonProps: { title: "高亮" }, icon: label("高亮"),
+    { name: "hl", keyCommand: "hl", buttonProps: { title: "高亮" }, icon: <HighlightOutlined />,
       execute: (s, api) => api.replaceSelection(`==${s.selectedText || "高亮"}==`) },
-    { name: "color", keyCommand: "color", buttonProps: { title: "彩色字" }, icon: label("彩色字"),
-      execute: (s, api) => { const c = prompt("颜色（如 #e67514）", "#e67514"); if (c) api.replaceSelection(`{color:${c}}${s.selectedText || "彩色文字"}{/color}`); } },
-    { name: "center", keyCommand: "center", buttonProps: { title: "居中" }, icon: label("居中"),
+    { name: "color", keyCommand: "color", buttonProps: { title: "彩色字" },
+      icon: <FontColorsOutlined />,
+      render: (command, _disabled, executeCommand) => (
+        <ColorPicker
+          value={colorRef.current}
+          onChangeComplete={(c) => { colorRef.current = c.toHexString(); executeCommand(command, command.groupName); }}
+          presets={[{
+            label: "推荐",
+            colors: ["#e67514", "#e60000", "#07C160", "#1e6fff", "#8e44ad", "#333333", "#999999"],
+          }]}
+        >
+          <span role="button" title="彩色字（选中文字后选择颜色应用）"
+            style={{ padding: "0 4px", cursor: "pointer" }}>
+            <FontColorsOutlined style={{ color: colorRef.current }} />
+          </span>
+        </ColorPicker>
+      ),
+      execute: (s, api) => api.replaceSelection(`{color:${colorRef.current}}${s.selectedText || "彩色文字"}{/color}`) },
+    { name: "center", keyCommand: "center", buttonProps: { title: "居中" }, icon: <AlignCenterOutlined />,
       execute: (s, api) => api.replaceSelection(`\n:::center\n${s.selectedText || "居中文字"}\n:::\n\n`) },
-    { name: "tip", keyCommand: "tip", buttonProps: { title: "提示卡片" }, icon: label("提示卡片"),
+    { name: "tip", keyCommand: "tip", buttonProps: { title: "提示卡片" }, icon: <BulbOutlined />,
       execute: (s, api) => api.replaceSelection(`\n:::tip\n💡 ${s.selectedText || "提示内容"}\n:::\n\n`) },
-    { name: "quote2", keyCommand: "quote2", buttonProps: { title: "引用" }, icon: label("引用"),
-      execute: (s, api) => api.replaceSelection((s.selectedText || "引用文字").split("\n").map((l) => `> ${l}`).join("\n")) },
   ];
   const templateGroup: ICommand = commands.group(
     (tplData?.templates || []).map((t) => ({
@@ -324,9 +370,15 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     name: "panel", keyCommand: "panel", buttonProps: { title: "组件面板" }, icon: label("组件面板 ▸"),
     execute: () => setDrawerOpen(true),
   };
+  const localizeCommand: ICommand = {
+    name: "localize", keyCommand: "localize",
+    buttonProps: { title: "本地化媒体（下载正文图片/视频到本地）" },
+    icon: <CloudDownloadOutlined />,
+    execute: () => { if (!localizing) localizeMedia(); },
+  };
   const editorCommands: ICommand[] = [
     ...commands.getCommands(), commands.divider,
-    ...styleCommands, commands.divider, templateGroup, panelCommand,
+    ...styleCommands, commands.divider, localizeCommand, commands.divider, templateGroup, panelCommand,
   ];
 
   return (
@@ -388,7 +440,18 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
                   type={a.primary ? "primary" : "default"} title={a.title} onClick={a.onClick}>{a.label}</Button>
               ))}
               {platform && <Button size="small" onClick={onCopyHtml} title="复制当前平台美化 HTML 到剪贴板">复制HTML</Button>}
+              <Divider type="vertical" />
+              <Button size="small" icon={<CloudDownloadOutlined />} loading={localizing}
+                onClick={localizeMedia} title="下载正文中的图片和视频到本地，并把正文改为本地路径">本地化媒体</Button>
             </Space>
+
+            {localizing && locLog.length > 0 && (
+              <Card size="small" title="本地化进度" style={{ background: "#fafafa", marginBottom: 12 }}>
+                <div style={{ maxHeight: 200, overflowY: "auto", fontFamily: "monospace", fontSize: 12 }}>
+                  {locLog.map((line, i) => <div key={i}>{line}</div>)}
+                </div>
+              </Card>
+            )}
 
             <Input placeholder="文章中文标题" value={titleCn} onChange={(e) => setTitleCn(e.target.value)} style={{ marginBottom: 8, flexShrink: 0 }} />
             <Input.TextArea placeholder="候选标题（每行一个）" value={titleCands} onChange={(e) => setTitleCands(e.target.value)} rows={2} style={{ marginBottom: 8, flexShrink: 0 }} />
@@ -446,7 +509,7 @@ function ComponentDrawer({ open, onClose, onInsert, getSelection }: { open: bool
   }
 
   return (
-    <Drawer open={open} onClose={onClose} title="组件面板" width={400}>
+    <Drawer open={open} onClose={onClose} title="组件面板" width={400} zIndex={100000}>
       <Tabs items={[
         { key: "c", label: "组件库", children: (
           <>

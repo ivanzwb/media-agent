@@ -40,7 +40,8 @@ from app.pipeline.recommender import (
     suggest_keywords_batch, suggest_source_names_batch, _resolve_sources,
     _SOURCE_BATCH_CHUNK)
 from app.pipeline.score import compute_draft_score
-from app.pipeline.localize import localize_one
+from app.pipeline.localize import (
+    localize_one, localize_article, content_images, content_videos)
 from app.pipeline.rewriter import rewrite
 from app.pipeline import styles as rewrite_styles
 from app.wechat import components as editor_components
@@ -2292,6 +2293,103 @@ def create_app(config: Config | None = None,
                 base["done"] = st["done"]
             if not base["running"]:
                 base["script"] = load_narration(draft_id, config)
+        return base
+
+    # ---- media localization (download draft images/videos to local paths) ----
+    # Per-draft state tracking, mirroring the narration flow above.
+    loc_main_lock = threading.Lock()
+    loc_states: dict[int, dict] = {}
+    loc_locks: dict[int, threading.Lock] = {}
+
+    def _loc_state(draft_id: int) -> dict:
+        with loc_main_lock:
+            if draft_id not in loc_states:
+                loc_states[draft_id] = {"running": False, "logs": [],
+                                        "error": None, "done": False,
+                                        "result": None}
+                loc_locks[draft_id] = threading.Lock()
+            return loc_states[draft_id]
+
+    def _loc_log(draft_id: int, msg: str) -> None:
+        st = _loc_state(draft_id)
+        line = f"{datetime.now().strftime('%H:%M:%S')} {msg}"
+        with loc_locks[draft_id]:
+            st["logs"].append(line)
+            if len(st["logs"]) > 300:
+                del st["logs"][:-300]
+
+    @app.post("/api/draft/{draft_id}/localize")
+    def api_draft_localize(draft_id: int, images: bool = Form(True),
+                           videos: bool = Form(True)):
+        st = _loc_state(draft_id)
+        lk = loc_locks[draft_id]
+        with lk:
+            if st["running"]:
+                return {"started": False, "running": True,
+                        "message": "该草稿已有本地化任务在进行"}
+            st.update(running=True, logs=[], error=None, done=False,
+                      result=None)
+
+        def worker():
+            try:
+                store = get_store()
+                body = store.read_draft_body(draft_id)
+                content = body.get("body_md", "") or ""
+                imgs = content_images(content)
+                vids = content_videos(content)
+                _loc_log(draft_id, f"图片 {len(imgs)} 张，视频 {len(vids)} 个")
+                art = Article(
+                    title=body.get("title_cn") or "",
+                    content_md=content,
+                    url=body.get("source_url", "") or "",
+                    source_name=body.get("source_name", "") or "",
+                    source_type="scrape",
+                    published_at=None,
+                    images=list(imgs),
+                    raw_summary=None,
+                    fetched_at=datetime.now(timezone.utc),
+                    videos=list(vids),
+                )
+                localize_article(art, config,
+                                 progress=lambda m: _loc_log(draft_id, m),
+                                 download_images=images,
+                                 download_videos=videos)
+                n_img = sum(1 for u in art.images if u.startswith("/media/"))
+                n_vid = sum(1 for u in art.videos if u.startswith("/media/"))
+                # Persist the rewritten body (local paths) back to the draft,
+                # preserving other front-matter fields.
+                titles = body.get("title_candidates", []) or []
+                store.update_draft_body(
+                    draft_id, title_candidates=titles,
+                    body_md=art.content_md, status=None,
+                    title_cn=body.get("title_cn"))
+                _loc_log(draft_id,
+                         f"完成：本地图片 {n_img} 张，本地视频 {n_vid} 个")
+                with loc_locks[draft_id]:
+                    st["result"] = {"images": n_img, "videos": n_vid}
+                    st["done"] = True
+            except Exception as e:  # noqa: BLE001 - surface to UI
+                with loc_locks[draft_id]:
+                    st["error"] = str(e)
+                _loc_log(draft_id, f"本地化出错：{e}")
+            finally:
+                with loc_locks[draft_id]:
+                    st["running"] = False
+
+        threading.Thread(target=worker, daemon=True).start()
+        return {"started": True, "running": True}
+
+    @app.get("/api/draft/{draft_id}/localize-status")
+    def api_draft_localize_status(draft_id: int):
+        base = {"running": False, "logs": [], "error": None, "done": False,
+                "result": None}
+        st = _loc_state(draft_id)
+        with loc_locks[draft_id]:
+            base["running"] = st["running"]
+            base["logs"] = list(st["logs"])
+            base["error"] = st["error"]
+            base["done"] = st["done"]
+            base["result"] = st["result"]
         return base
 
     @app.get("/api/script/{draft_id}")
