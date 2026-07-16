@@ -244,7 +244,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
       ins = lead + ins + trail;
     }
     const next = before + ins + after;
-    setBody(next);
+    commit(next);
     const caret = before.length + ins.length;
     setTimeout(() => { ta?.focus(); if (ta) { ta.selectionStart = ta.selectionEnd = caret; } }, 0);
   }
@@ -254,7 +254,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     const s = ta.selectionStart ?? 0, e = ta.selectionEnd ?? 0;
     const sel = body.slice(s, e) || placeholder;
     const next = body.slice(0, s) + before + sel + after + body.slice(e);
-    setBody(next);
+    commit(next);
     setTimeout(() => ta.focus(), 0);
   }
   function getSelection(): string {
@@ -279,17 +279,36 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     lastPushRef.current = now;
     setBody(next);
   }
+  // Record one discrete history entry, then set the body. Every *programmatic*
+  // edit (toolbar helpers, component panel, 套用模板 via helper, agent apply,
+  // 组件样式 panel) must go through this so Ctrl+Z can undo it. Manual typing
+  // and MDEditor built-in toolbar commands are recorded via handleChange.
+  function commit(next: string) {
+    if (next === body) return;
+    pastRef.current.push(body);
+    if (pastRef.current.length > 500) pastRef.current.shift();
+    futureRef.current = [];
+    lastPushRef.current = 0;
+    setBody(next);
+  }
+  function refocusEditor() {
+    setTimeout(() => {
+      editorRef.current?.querySelector<HTMLTextAreaElement>(".w-md-editor-text-input")?.focus();
+    }, 0);
+  }
   function undo() {
     if (!pastRef.current.length) return;
     futureRef.current.push(body);
     setBody(pastRef.current.pop()!);
     lastPushRef.current = 0;
+    refocusEditor();
   }
   function redo() {
     if (!futureRef.current.length) return;
     pastRef.current.push(body);
     setBody(futureRef.current.pop()!);
     lastPushRef.current = 0;
+    refocusEditor();
   }
   function onEditorKeyDown(e: ReactKeyboardEvent) {
     if (!(e.ctrlKey || e.metaKey)) return;
@@ -481,7 +500,8 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     const cursor = ta ? ta.selectionStart : body.length;
     const r = _applyDirectiveParams(body, cursor, patch);
     if (!r.ok) { message.info(r.reason || "无法调整样式"); return; }
-    setBody(r.text);
+    commit(r.text);
+    refocusEditor();
   }
   const styleParamCommand: ICommand = {
     name: "styleparam", keyCommand: "styleparam",
@@ -598,7 +618,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
 
       <ComponentDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onInsert={insertAtCursor} getSelection={getSelection} />
       <AgentModal open={agentOpen} draftId={data.id} onClose={() => setAgentOpen(false)}
-        onApplied={(md) => { setBody(md); setAgentOpen(false); }} />
+        onApplied={(md) => { commit(md); setAgentOpen(false); }} />
       <FloatButton icon={<RobotOutlined />} type="primary" tooltip="Agent 编辑"
         onClick={() => setAgentOpen(true)} />
 
