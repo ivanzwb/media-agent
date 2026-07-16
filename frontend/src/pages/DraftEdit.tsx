@@ -16,6 +16,93 @@ import SceneEditor from "../components/SceneEditor";
 
 const { Title, Text, Paragraph } = Typography;
 
+function _escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Flatten an mdast node's text content (soft breaks -> \n).
+function _nodeText(n: any): string {
+  if (!n) return "";
+  if (n.type === "text") return n.value || "";
+  if (n.type === "break") return "\n";
+  if (Array.isArray(n.children)) return n.children.map(_nodeText).join("");
+  return "";
+}
+
+// Render the app's inline directives ({color:..}{/color} and ==highlight==)
+// to an HTML string.
+function _renderInline(text: string): string {
+  const RE = /\{color:(#[0-9a-fA-F]{3,8}|[a-zA-Z][\w-]*)\}([\s\S]*?)\{\/color\}|==([^=]+?)==/g;
+  let out = "";
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = RE.exec(text)) !== null) {
+    if (m.index > last) out += _escapeHtml(text.slice(last, m.index));
+    if (m[1] !== undefined) out += `<span style="color:${m[1]}">${_escapeHtml(m[2])}</span>`;
+    else out += `<mark>${_escapeHtml(m[3])}</mark>`;
+    last = RE.lastIndex;
+  }
+  out += _escapeHtml(text.slice(last));
+  return out;
+}
+
+const _DIRECTIVE_PALETTE: Record<string, [string, string, string]> = {
+  tip: ["#f0f9eb", "#67c23a", "#3c6e2a"],
+  success: ["#f0f9eb", "#67c23a", "#3c6e2a"],
+  info: ["#eef4fd", "#409eff", "#1d4e89"],
+  warning: ["#fdf6ec", "#e6a23c", "#8a6d1f"],
+  danger: ["#fef0f0", "#f56c6c", "#a13333"],
+  highlight: ["#fffbe6", "#faad14", "#874d00"],
+};
+
+function _renderDirective(type: string, inner: string): string {
+  const body = inner
+    .split(/\n+/)
+    .map((line) => _renderInline(line.trim()))
+    .filter(Boolean)
+    .join("<br>");
+  const t = type.toLowerCase();
+  if (t === "center") return `<div style="text-align:center">${body}</div>`;
+  if (t === "right") return `<div style="text-align:right">${body}</div>`;
+  const [bg, border, color] = _DIRECTIVE_PALETTE[t] || ["#f7f7f7", "#d9d9d9", "#333"];
+  return `<div style="background:${bg};border-left:4px solid ${border};color:${color};padding:10px 14px;border-radius:4px;margin:12px 0;">${body}</div>`;
+}
+
+// Preview-only remark plugin: render the app's custom directives so the live
+// preview matches published output — inline `{color:..}{/color}` and `==mark==`,
+// and block `:::type ... :::` containers (center/right/tip/info/...). The source
+// markdown keeps the original syntax (the backend renderers depend on it); this
+// only affects the editor preview, where raw HTML is enabled so spans/divs show.
+function remarkAppDirectives() {
+  const BLOCK = /^:::([a-zA-Z]+)[ \t]*\n?([\s\S]*?)\n?:::[ \t]*$/;
+  const inlineVisit = (node: any) => {
+    if (!node || !Array.isArray(node.children)) return;
+    const next: any[] = [];
+    for (const child of node.children) {
+      if (child.type === "text" && typeof child.value === "string"
+          && (child.value.includes("{color:") || child.value.includes("=="))) {
+        next.push({ type: "html", value: _renderInline(child.value) });
+      } else {
+        inlineVisit(child);
+        next.push(child);
+      }
+    }
+    node.children = next;
+  };
+  return (tree: any) => {
+    if (Array.isArray(tree.children)) {
+      tree.children = tree.children.map((child: any) => {
+        if (child.type === "paragraph") {
+          const m = _nodeText(child).trim().match(BLOCK);
+          if (m) return { type: "html", value: _renderDirective(m[1], m[2]) };
+        }
+        return child;
+      });
+    }
+    inlineVisit(tree);
+  };
+}
+
 interface DraftData {
   ok: boolean; id: number; status: string; title_cn: string;
   title_candidates: string[]; body_md: string; cover_image: string | null;
@@ -150,6 +237,22 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     return () => { cancelled = true; clearInterval(poll); rewritePollRef.current = null; };
   }, [data.article_id]); // intentionally NOT depending on `rewriting` to avoid double-start
 
+  // Resume localize state on mount (survives tab switch / page refresh):
+  // the backend keeps per-draft localize status, so re-attach if still running.
+  useEffect(() => {
+    let cancelled = false;
+    getJson<{ running: boolean; error: string | null; logs: string[] }>(
+      `/api/draft/${data.id}/localize-status`)
+      .then((s) => {
+        if (cancelled || !s.running) return;
+        setLocalizing(true);
+        if (s.logs) setLocLog(s.logs);
+        pollLocalize(false);
+      })
+      .catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
+  }, [data.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const { data: styleData } = useQuery({
     queryKey: ["rewrite-styles"],
     queryFn: () => getJson<{ styles: { id: string; name: string; is_builtin: boolean }[] }>("/api/rewrite-styles"),
@@ -233,12 +336,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     } catch { setRewriting(false); message.error("请求失败"); }
   }
 
-  async function localizeMedia() {
-    setLocalizing(true);
-    setLocLog([]);
-    try {
-      await postForm(`/api/draft/${data.id}/localize`);
-    } catch { setLocalizing(false); message.error("请求失败"); return; }
+  function pollLocalize(notify: boolean) {
     if (locPollRef.current) clearInterval(locPollRef.current);
     const poll = setInterval(async () => {
       try {
@@ -248,11 +346,22 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
         if (!s.running) {
           clearInterval(poll); locPollRef.current = null; setLocalizing(false);
           if (s.error) message.error("本地化失败：" + s.error);
-          else { message.success("媒体已本地化"); qc.invalidateQueries({ queryKey: ["draft", data.id] }); }
+          else if (notify) { message.success("媒体已本地化"); qc.invalidateQueries({ queryKey: ["draft", data.id] }); }
+          else qc.invalidateQueries({ queryKey: ["draft", data.id] });
         }
       } catch { /* ignore poll errors */ }
     }, 1200);
     locPollRef.current = poll;
+  }
+
+  async function localizeMedia() {
+    if (localizing) return;
+    setLocalizing(true);
+    setLocLog([]);
+    try {
+      await postForm(`/api/draft/${data.id}/localize`);
+    } catch { setLocalizing(false); message.error("请求失败"); return; }
+    pollLocalize(true);
   }
 
   async function cover(kind: "scrape" | "generate") {
@@ -372,7 +481,11 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   };
   const localizeCommand: ICommand = {
     name: "localize", keyCommand: "localize",
-    buttonProps: { title: "本地化媒体（下载正文图片/视频到本地）" },
+    buttonProps: {
+      title: localizing ? "正在本地化媒体…" : "本地化媒体（下载正文图片/视频到本地）",
+      disabled: localizing,
+      style: localizing ? { opacity: 0.4, cursor: "not-allowed" } : undefined,
+    },
     icon: <CloudDownloadOutlined />,
     execute: () => { if (!localizing) localizeMedia(); },
   };
@@ -440,17 +553,14 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
                   type={a.primary ? "primary" : "default"} title={a.title} onClick={a.onClick}>{a.label}</Button>
               ))}
               {platform && <Button size="small" onClick={onCopyHtml} title="复制当前平台美化 HTML 到剪贴板">复制HTML</Button>}
-              <Divider type="vertical" />
-              <Button size="small" icon={<CloudDownloadOutlined />} loading={localizing}
-                onClick={localizeMedia} title="下载正文中的图片和视频到本地，并把正文改为本地路径">本地化媒体</Button>
             </Space>
 
             {localizing && locLog.length > 0 && (
-              <Card size="small" title="本地化进度" style={{ background: "#fafafa", marginBottom: 12 }}>
-                <div style={{ maxHeight: 200, overflowY: "auto", fontFamily: "monospace", fontSize: 12 }}>
-                  {locLog.map((line, i) => <div key={i}>{line}</div>)}
-                </div>
-              </Card>
+              <div style={{ background: "#1e1e1e", borderRadius: 10, overflow: "hidden",
+                marginBottom: 12, boxShadow: "0 4px 16px rgba(0,0,0,.25)" }}>
+                <div className="ma-run-head"><span>本地化媒体…</span></div>
+                <pre className="ma-run-logs">{locLog.join("\n")}</pre>
+              </div>
             )}
 
             <Input placeholder="文章中文标题" value={titleCn} onChange={(e) => setTitleCn(e.target.value)} style={{ marginBottom: 8, flexShrink: 0 }} />
@@ -458,7 +568,20 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
 
             <div ref={editorRef} className="ma-editor-wrap" data-color-mode="light" onKeyDownCapture={onEditorKeyDown}>
               <MDEditor value={body} onChange={handleChange} height={editorHeight}
-                preview="live" commands={editorCommands} />
+                preview="live" commands={editorCommands}
+                previewOptions={{
+                  remarkPlugins: [remarkAppDirectives],
+                  components: {
+                    // The rewriter emits each video as an <iframe> plus a
+                    // redundant `[▶ 视频链接](url)` fallback link. The iframe
+                    // already renders the video, so hide the trailing link.
+                    a: ({ children, ...props }: any) => {
+                      const text = String(Array.isArray(children) ? children.join("") : children ?? "");
+                      if (text.trim().startsWith("▶")) return null;
+                      return <a {...props}>{children}</a>;
+                    },
+                  },
+                }} />
             </div>
           </Card>
         </Col>
