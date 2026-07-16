@@ -1951,12 +1951,15 @@ def create_app(config: Config | None = None,
                     detail=f"正在向 {prov_label} 批量获取 {len(added_names)} 个主题的候选来源…"),
                 label="step 4 llm")
             name_map = name_res.get(0)
+            batch_note = ""
             if isinstance(name_map, Exception):
                 _log_failure(4, "sources(batch)", f"{len(added_names)} 个主题", name_map)
+                batch_note = f"{prov_label} 调用失败：{name_map}"
                 name_map = {}
             elif name_map is None:
                 logger.warning("[auto-discover] step 4: batch source call timed out "
                                "(no result within budget)")
+                batch_note = f"{prov_label} 调用超时（未在预算内返回）"
                 name_map = {}
             name_map = name_map or {}
 
@@ -1996,7 +1999,7 @@ def create_app(config: Config | None = None,
 
             if not all_candidates:
                 if raw_total == 0:
-                    reason = "Agent 未返回候选来源"
+                    reason = batch_note or f"{prov_label} 未返回候选来源"
                 elif raw_with_url == 0:
                     reason = "候选来源均缺少可用 URL"
                 else:

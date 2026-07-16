@@ -10,6 +10,21 @@ import { useLocalState } from "../api/hooks";
 
 const { Title, Text, Paragraph } = Typography;
 
+// Desktop notification so the user is told when a long auto-discover run
+// finishes/fails even while on another tab. No-ops if unsupported/denied.
+function notifyDone(title: string, body: string) {
+  try {
+    if (typeof Notification === "undefined") return;
+    if (Notification.permission === "granted") new Notification(title, { body });
+  } catch { /* ignore */ }
+}
+function requestNotifyPermission() {
+  try {
+    if (typeof Notification !== "undefined" && Notification.permission === "default")
+      Notification.requestPermission().catch(() => {});
+  } catch { /* ignore */ }
+}
+
 interface Topic { name: string; keywords: string[]; }
 interface Source {
   name: string; type: string; url: string; topics: string[]; mode: string;
@@ -47,20 +62,32 @@ export default function Sources() {
   // ── on mount: if autoBusy is stuck (e.g. page refreshed mid-process), verify backend state ──
   useEffect(() => {
     if (!autoBusy) return;
-    getJson<{ running: boolean; step: number; step_name: string; detail: string; current: number; total: number }>("/sources/auto-discover/progress")
+    getJson<{
+      running: boolean; step: number; step_name: string; detail: string;
+      current: number; total: number;
+      result: { added_topics: number; added_sources: number; total: number } | null;
+      error: string | null;
+    }>("/sources/auto-discover/progress")
       .then((r) => {
         if (r.running) {
-          // Backend still running — resume progress display
-          const emojis = ["①", "②", "③", "④", "⑤"];
-          const emoji = emojis[r.step - 1] || "●";
-          const pct = r.total > 0 ? ` (${r.current}/${r.total})` : "";
-          setAutoProg({ step: r.step, stepName: r.step_name, detail: r.detail, current: r.current, total: r.total });
-          setRecoStatus(`${emoji} ${r.step_name}${pct} ${r.detail}`);
+          // Backend still running — resume live polling so we also notify on finish
+          resumeAutoPoll();
         } else {
-          // Backend already finished or never started — clear stale state
+          // Backend already finished/failed while we were away or before refresh:
+          // surface WHY it ended instead of silently clearing (so the user isn't
+          // left staring at a frozen "④ 发现来源 (0/N)").
           try { localStorage.setItem("sources-autoBusy", "false"); } catch { /* ignore */ }
           setAutoBusy(false);
           setAutoProg(null);
+          if (r.error) setRecoStatus("✗ " + r.error);
+          else if (r.result) {
+            const rt = r.result;
+            const as = rt.added_sources ?? 0;
+            if (as === 0) setRecoStatus("⚠ " + (r.detail || `新增 ${rt.added_topics ?? 0} 个主题，但未发现来源`));
+            else setRecoStatus(`✓ 完成：新增 ${rt.added_topics ?? 0} 个主题，${as}/${rt.total ?? 0} 个来源`);
+          } else if (r.detail) {
+            setRecoStatus((r.step_name === "完成" ? "✓ " : "") + r.detail);
+          }
         }
       })
       .catch(() => {
@@ -115,8 +142,128 @@ export default function Sources() {
     refetch();
   }
 
+  // Poll the backend progress endpoint until the run reaches a terminal state.
+  // Fires a desktop notification on every terminal outcome so the user is told
+  // even when this tab is in the background.
+  function pollAutoDiscover(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let notStartedCount = 0;
+      const NOT_STARTED_LIMIT = 10; // ~6s — if backend hasn't started by then, abort
+      // Stall watchdog: every step is wall-clock bounded server-side, so if the
+      // backend heartbeat (updated_at) doesn't advance for this long, treat it
+      // as a hang and recover instead of spinning forever.
+      const STALL_LIMIT_MS = 7 * 60 * 1000;
+      let lastBeat = 0;
+      let lastBeatSeenAt = Date.now();
+      const poll = setInterval(async () => {
+        try {
+          const r = await getJson<{
+            running: boolean; step: number; total_steps: number;
+            step_name: string; detail: string;
+            current: number; total: number;
+            result: { added_topics: number; added_sources: number; total: number } | null;
+            error: string | null;
+            updated_at?: number;
+          }>("/sources/auto-discover/progress");
+
+          if (r.error && !r.running) {
+            setRecoStatus("✗ " + r.error);
+            setAutoProg(null);
+            clearInterval(poll);
+            notifyDone("自动发现失败", r.error);
+            reject(new Error(r.error));
+            return;
+          }
+          if (r.running) {
+            notStartedCount = 0; // reset — backend is alive
+            // Track heartbeat to detect a truly stuck backend
+            const beat = r.updated_at ?? 0;
+            if (beat !== lastBeat) { lastBeat = beat; lastBeatSeenAt = Date.now(); }
+            else if (Date.now() - lastBeatSeenAt > STALL_LIMIT_MS) {
+              const msg = "自动发现卡住了（后端长时间无进展），已中止，请重试";
+              setRecoStatus("✗ " + msg);
+              setAutoProg(null);
+              clearInterval(poll);
+              notifyDone("自动发现中止", msg);
+              reject(new Error("自动发现卡住"));
+              return;
+            }
+            const emojis = ["①", "②", "③", "④", "⑤"];
+            const emoji = emojis[r.step - 1] || "●";
+            const pct = r.total > 0 ? ` (${r.current}/${r.total})` : "";
+            setAutoProg({ step: r.step, stepName: r.step_name, detail: r.detail, current: r.current, total: r.total });
+            setRecoStatus(`${emoji} ${r.step_name}${pct} ${r.detail}`);
+          } else if (!r.running && r.step === 0 && !r.result) {
+            // Not started yet — backend thread hasn't begun; keep polling
+            notStartedCount++;
+            if (notStartedCount >= NOT_STARTED_LIMIT) {
+              const msg = "后端未响应，请检查服务是否运行";
+              setRecoStatus("✗ " + msg);
+              setAutoProg(null);
+              clearInterval(poll);
+              notifyDone("自动发现失败", msg);
+              reject(new Error("后端未响应"));
+            }
+            return;
+          } else {
+            // Process finished
+            clearInterval(poll);
+            let msg: string;
+            let ok = true;
+            if (r.result) {
+              const added_topics = r.result.added_topics ?? 0;
+              const added_sources = r.result.added_sources ?? 0;
+              const total = r.result.total ?? added_sources;
+              if (added_sources === 0) {
+                // Finished but found nothing — surface WHY (backend detail carries
+                // the reason, e.g. "Agent 未返回候选来源").
+                ok = false;
+                msg = r.detail || `新增 ${added_topics} 个主题，但未发现来源`;
+                setRecoStatus(`⚠ ${msg}`);
+              } else {
+                msg = `新增 ${added_topics} 个主题，${added_sources}/${total} 个来源`;
+                setRecoStatus(`✓ 完成：${msg}`);
+              }
+            } else if (r.step_name === "完成") {
+              msg = r.detail;
+              setRecoStatus(`✓ ${r.detail}`);
+            } else {
+              msg = r.detail || "完成";
+              setRecoStatus(`✓ ${msg}`);
+            }
+            setAutoProg(null);
+            notifyDone(ok ? "自动发现完成" : "自动发现完成（未发现来源）", msg);
+            resolve();
+          }
+        } catch {
+          // Progress endpoint not ready yet, keep polling
+          notStartedCount++;
+          if (notStartedCount >= NOT_STARTED_LIMIT) {
+            setRecoStatus("✗ 后端未响应，请检查服务是否运行");
+            setAutoProg(null);
+            clearInterval(poll);
+            reject(new Error("后端未响应"));
+          }
+        }
+      }, 600);
+    });
+  }
+
+  // Resume polling an already-running backend run (e.g. after page refresh).
+  async function resumeAutoPoll() {
+    try { await pollAutoDiscover(); }
+    catch (e: any) { setRecoStatus("✗ " + (e?.message || "流程出错")); setAutoProg(null); }
+    finally {
+      try { localStorage.setItem("sources-autoBusy", "false"); } catch { /* ignore */ }
+      setAutoBusy(false);
+      setAutoProg(null);
+      refetch();
+    }
+  }
+
   async function autoDiscoverAll() {
     if (!themes.trim()) { setRecoStatus("请先输入主题"); return; }
+    requestNotifyPermission();
     // Write synchronously to localStorage BEFORE any await — useLocalState's useEffect
     // fires after render which may not survive a fast page refresh
     try { localStorage.setItem("sources-autoBusy", "true"); } catch { /* ignore */ }
@@ -129,90 +276,7 @@ export default function Sources() {
       formData.append("themes", themes);
       // Use raw fetch to avoid blocking on response — poll progress instead
       fetch("/sources/auto-discover", { method: "POST", body: formData }).catch(() => {});
-
-      // Poll progress endpoint every 600ms
-      await new Promise<void>((resolve, reject) => {
-        let notStartedCount = 0;
-        const NOT_STARTED_LIMIT = 10; // ~6s — if backend hasn't started by then, abort
-        // Stall watchdog: every step is wall-clock bounded server-side, so if the
-        // backend heartbeat (updated_at) doesn't advance for this long, treat it
-        // as a hang and recover instead of spinning forever.
-        const STALL_LIMIT_MS = 7 * 60 * 1000;
-        let lastBeat = 0;
-        let lastBeatSeenAt = Date.now();
-        const poll = setInterval(async () => {
-          try {
-            const r = await getJson<{
-              running: boolean; step: number; total_steps: number;
-              step_name: string; detail: string;
-              current: number; total: number;
-              result: { added_topics: number; added_sources: number; total: number } | null;
-              error: string | null;
-              updated_at?: number;
-            }>("/sources/auto-discover/progress");
-
-            if (r.error && !r.running) {
-              setRecoStatus("✗ " + r.error);
-              setAutoProg(null);
-              clearInterval(poll);
-              reject(new Error(r.error));
-              return;
-            }
-            if (r.running) {
-              notStartedCount = 0; // reset — backend is alive
-              // Track heartbeat to detect a truly stuck backend
-              const beat = r.updated_at ?? 0;
-              if (beat !== lastBeat) { lastBeat = beat; lastBeatSeenAt = Date.now(); }
-              else if (Date.now() - lastBeatSeenAt > STALL_LIMIT_MS) {
-                setRecoStatus("✗ 自动发现卡住了（后端长时间无进展），已中止，请重试");
-                setAutoProg(null);
-                clearInterval(poll);
-                reject(new Error("自动发现卡住"));
-                return;
-              }
-              const emojis = ["①", "②", "③", "④", "⑤"];
-              const emoji = emojis[r.step - 1] || "●";
-              const pct = r.total > 0 ? ` (${r.current}/${r.total})` : "";
-              setAutoProg({ step: r.step, stepName: r.step_name, detail: r.detail, current: r.current, total: r.total });
-              setRecoStatus(`${emoji} ${r.step_name}${pct} ${r.detail}`);
-            } else if (!r.running && r.step === 0 && !r.result) {
-              // Not started yet — backend thread hasn't begun; keep polling
-              notStartedCount++;
-              if (notStartedCount >= NOT_STARTED_LIMIT) {
-                setRecoStatus("✗ 后端未响应，请检查服务是否运行");
-                setAutoProg(null);
-                clearInterval(poll);
-                reject(new Error("后端未响应"));
-              }
-              return;
-            } else {
-              // Process finished
-              clearInterval(poll);
-              if (r.result) {
-                const added_topics = r.result.added_topics ?? 0;
-                const added_sources = r.result.added_sources ?? 0;
-                const total = r.result.total ?? added_sources;
-                setRecoStatus(`✓ 完成：新增 ${added_topics} 个主题，${added_sources}/${total} 个来源`);
-              } else if (r.step_name === "完成") {
-                setRecoStatus(`✓ ${r.detail}`);
-              } else {
-                setRecoStatus(`✓ 完成`);
-              }
-              setAutoProg(null);
-              resolve();
-            }
-          } catch {
-            // Progress endpoint not ready yet, keep polling
-            notStartedCount++;
-            if (notStartedCount >= NOT_STARTED_LIMIT) {
-              setRecoStatus("✗ 后端未响应，请检查服务是否运行");
-              setAutoProg(null);
-              clearInterval(poll);
-              reject(new Error("后端未响应"));
-            }
-          }
-        }, 600);
-      });
+      await pollAutoDiscover();
     } catch (e: any) {
       setRecoStatus("✗ " + (e?.message || "流程出错"));
       setAutoProg(null);
