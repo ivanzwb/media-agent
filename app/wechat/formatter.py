@@ -289,6 +289,54 @@ _BOX_PALETTES = {
     "note":    ("#f7f7f9", "#909399", "#555555"),
 }
 
+# ── decorative components (dividers / titles / image card) ───────────────
+# Fixed-color, theme-independent styles so the frontend live preview
+# (frontend/src/lib/mdPreview.tsx) can reproduce them BYTE-IDENTICALLY for
+# strict WYSIWYG. Keep each string in lock-step with its mdPreview.tsx twin.
+_DIVIDER_DASHED_STYLE = "border:none;border-top:1px dashed #c8c8c8;height:0;margin:22px 0;"
+_DIVIDER_GRADIENT_STYLE = (
+    "border:none;height:3px;margin:22px 0;border-radius:2px;"
+    "background:linear-gradient(to right,rgba(64,158,255,0),#409eff,rgba(64,158,255,0));")
+_BLOCKTITLE_STYLE = (
+    "background:#2f6fb3;color:#ffffff;padding:8px 16px;border-radius:6px;"
+    "text-align:center;font-weight:bold;font-size:17px;margin:16px 0;")
+_DUALLINE_STYLE = (
+    "border-top:2px solid #333333;border-bottom:2px solid #333333;padding:8px 0;"
+    "text-align:center;font-weight:bold;font-size:18px;color:#222222;margin:18px 0;")
+_TITLENUM_WRAP_STYLE = "margin:18px 0 10px;"
+_TITLENUM_BADGE_STYLE = (
+    "display:inline-block;min-width:26px;height:26px;line-height:26px;text-align:center;"
+    "background:#2f6fb3;color:#ffffff;border-radius:13px;font-weight:bold;font-size:15px;"
+    "margin-right:10px;padding:0 6px;")
+_TITLENUM_TEXT_STYLE = "font-size:18px;font-weight:bold;color:#222222;vertical-align:middle;"
+_IMGCARD_FRAME_STYLE = (
+    "border:1px solid #e6e8eb;border-radius:10px;overflow:hidden;margin:16px 0;"
+    "box-shadow:0 2px 12px rgba(0,0,0,0.08);background:#ffffff;")
+_IMGCARD_IMG_STYLE = "display:block;width:100%;margin:0;border-radius:0;"
+_IMGCARD_CAP_STYLE = "margin:0;padding:8px 12px;font-size:13px;color:#888888;text-align:center;"
+
+
+def _render_imgcard(inner_lines: list[str], st: dict) -> str:
+    """Framed image card: rounded/shadowed border wrapping an image + caption."""
+    img_html = ""
+    caption_parts: list[str] = []
+    for ln in inner_lines:
+        s = ln.strip()
+        if not s:
+            continue
+        m = _IMG_RE.search(s)
+        if m and not img_html:
+            alt = _html.escape(m.group("alt"))
+            url = _html.escape(m.group("url"), quote=True)
+            img_html = f'<img src="{url}" alt="{alt}" style="{_IMGCARD_IMG_STYLE}"/>'
+        else:
+            caption_parts.append(s)
+    cap_html = ""
+    if caption_parts:
+        cap_html = (f'<p style="{_IMGCARD_CAP_STYLE}">'
+                    f'{_inline(" ".join(caption_parts), st)}</p>')
+    return f'<section style="{_IMGCARD_FRAME_STYLE}">{img_html}{cap_html}</section>'
+
 
 def _render_container(ctype: str, inner_lines: list[str], st: dict,
                       params: dict) -> str:
@@ -326,6 +374,28 @@ def _render_container(ctype: str, inner_lines: list[str], st: dict,
         pills = [f'<span style="{pill}">{_html.escape(ln.strip())}</span>'
                  for ln in inner_lines if ln.strip()]
         return f'<div style="margin:12px 0;">{"".join(pills)}</div>'
+    # ── decorative dividers (no body) ──
+    if ctype == "dashed":
+        return f'<div style="{_DIVIDER_DASHED_STYLE}"></div>'
+    if ctype == "gradient":
+        return f'<div style="{_DIVIDER_GRADIENT_STYLE}"></div>'
+    # ── decorative section titles ──
+    if ctype in ("blocktitle", "dualline"):
+        text = _inline(" ".join(l.strip() for l in inner_lines if l.strip()), st)
+        style = _BLOCKTITLE_STYLE if ctype == "blocktitle" else _DUALLINE_STYLE
+        return f'<section style="{style}">{text}</section>'
+    if ctype == "titlenum":
+        raw = next((l.strip() for l in inner_lines if l.strip()), "")
+        num, sep, title = raw.partition("|")
+        if not sep:
+            num, title = "1", raw
+        badge = _html.escape(num.strip()) or "1"
+        return (f'<section style="{_TITLENUM_WRAP_STYLE}">'
+                f'<span style="{_TITLENUM_BADGE_STYLE}">{badge}</span>'
+                f'<span style="{_TITLENUM_TEXT_STYLE}">'
+                f'{_inline(title.strip(), st)}</span></section>')
+    if ctype == "imgcard":
+        return _render_imgcard(inner_lines, st)
     # box-style cards
     if ctype == "highlight":
         box = (f"background:#fafafa;border-left:4px solid {accent};"
@@ -339,6 +409,88 @@ def _render_container(ctype: str, inner_lines: list[str], st: dict,
                "padding:12px 16px;margin:16px 0;border-radius:0 6px 6px 0;")
     inner = _render_blocks(inner_lines, st, params)
     return f'<section style="{box}">{inner}</section>'
+
+
+# ── multi-column layout (::::columns / :::col) ───────────────────────────
+# 秀米-style side-by-side columns that survive WeChat's sanitizer (WeChat keeps
+# flex on <section>). FOUR colons open the outer container so ordinary 3-colon
+# directives (:::tip …) nest cleanly inside a column without marker ambiguity.
+#
+#   ::::columns          equal-width columns (count = number of :::col blocks)
+#   ::::columns 1:2      custom flex ratios per column (left:right → flex:1/flex:2)
+#   ::::columns cols=3   explicit equal-width count (ratios all 1)
+#   :::col … :::         one column body (may hold markdown / nested :::directives)
+#   ::::                 closes the columns container
+_COLUMNS_OPEN_RE = re.compile(r'^::::\s*columns\b\s*(.*)$')
+_COLUMNS_CLOSE_RE = re.compile(r'^::::\s*$')
+_COL_OPEN_RE = re.compile(r'^:::\s*col\b\s*(.*)$')
+# Shared column styling (kept byte-identical with frontend mdPreview.tsx).
+_COLUMNS_ROW_STYLE = "display:flex;gap:12px;margin:16px 0;align-items:flex-start;"
+
+
+def _parse_col_ratios(param: str) -> list[int]:
+    """Parse a ``::::columns`` param into per-column flex weights.
+
+    '1:2' -> [1, 2];  'cols=3' -> [1, 1, 1];  '' / junk -> [] (equal default).
+    """
+    param = (param or "").strip()
+    if not param:
+        return []
+    m = re.fullmatch(r'cols\s*=\s*(\d+)', param)
+    if m:
+        return [1] * max(1, int(m.group(1)))
+    if re.fullmatch(r'\d+(\s*:\s*\d+)*', param):
+        return [max(1, int(x)) for x in re.split(r'\s*:\s*', param)]
+    return []
+
+
+def _split_col_blocks(lines: list[str]) -> list[list[str]]:
+    """Split columns-container inner lines into per-column line lists using the
+    ``:::col … :::`` markers (3-colon depth-tracked so nested :::tip etc. close
+    correctly and don't leak into the next column)."""
+    cols: list[list[str]] = []
+    i, n = 0, len(lines)
+    while i < n:
+        if not _COL_OPEN_RE.match(lines[i].strip()):
+            i += 1
+            continue
+        i += 1
+        body: list[str] = []
+        depth = 1
+        while i < n:
+            s = lines[i].strip()
+            if _CONTAINER_CLOSE_RE.match(s):
+                depth -= 1
+                if depth == 0:
+                    i += 1
+                    break
+                body.append(lines[i])
+                i += 1
+                continue
+            nested = _CONTAINER_OPEN_RE.match(s)
+            if nested and nested.group(1):
+                depth += 1
+            body.append(lines[i])
+            i += 1
+        cols.append(body)
+    return cols
+
+
+def _render_columns(param: str, inner_lines: list[str], st: dict,
+                    params: dict) -> str:
+    """Render a ``::::columns`` container to a WeChat-safe flex row of sections.
+    Each column body is rendered recursively (full markdown + nested directives)."""
+    col_blocks = _split_col_blocks(inner_lines)
+    if not col_blocks:
+        return ""
+    ratios = _parse_col_ratios(param)
+    cells: list[str] = []
+    for idx, body in enumerate(col_blocks):
+        flex = ratios[idx] if idx < len(ratios) else 1
+        inner = _render_blocks(body, st, params)
+        cells.append(
+            f'<section style="flex:{flex};min-width:0;">{inner}</section>')
+    return f'<section style="{_COLUMNS_ROW_STYLE}">{"".join(cells)}</section>'
 
 
 def _render_blocks(lines: list[str], st: dict, params: dict,
@@ -373,6 +525,31 @@ def _render_blocks(lines: list[str], st: dict, params: dict,
         if not stripped:
             flush_para()
             flush_list()
+            continue
+
+        # ── multi-column container (::::columns … ::::) ──
+        colo = _COLUMNS_OPEN_RE.match(stripped)
+        if colo:
+            flush_para()
+            flush_list()
+            param = colo.group(1).strip()
+            col_inner: list[str] = []
+            depth = 1
+            while i < len(lines):
+                s = lines[i].strip()
+                if _COLUMNS_CLOSE_RE.match(s):
+                    depth -= 1
+                    if depth == 0:
+                        i += 1
+                        break
+                    col_inner.append(lines[i])
+                    i += 1
+                    continue
+                if _COLUMNS_OPEN_RE.match(s):
+                    depth += 1
+                col_inner.append(lines[i])
+                i += 1
+            out.append(_render_columns(param, col_inner, st, params))
             continue
 
         # ── directive container (:::type ... :::) ──

@@ -42,3 +42,15 @@ body:has(.ma-draft-edit) .ma-content {
   background: #1e1e1e; color: #cfcfcf;
 }
 .disabled-row { opacity: 0.5; }
+
+/* 秀米-style component gallery thumbnails */
+.ma-comp-card:hover {
+  border-color: #1677ff !important;
+  box-shadow: 0 2px 10px rgba(22,119,255,.18);
+}
+.ma-comp-card:active { transform: translateY(1px); }
+/* Neutralize the md-preview's default block margins so tiny thumbnails don't
+   start with a big top gap and read as empty. */
+.ma-comp-thumb .wmde-markdown > *:first-child { margin-top: 0 !important; }
+.ma-comp-thumb .wmde-markdown { font-size: 13px; }
+.ma-comp-thumb .wmde-markdown img { max-height: 60px; }

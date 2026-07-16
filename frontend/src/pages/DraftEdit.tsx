@@ -6,6 +6,7 @@ import {
 import {
   RobotOutlined, HighlightOutlined, FontColorsOutlined,
   AlignCenterOutlined, BulbOutlined, CloudDownloadOutlined, CloseOutlined,
+  ColumnWidthOutlined,
 } from "@ant-design/icons";
 import MDEditor, { commands, type ICommand } from "@uiw/react-md-editor";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
@@ -384,6 +385,9 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
       execute: (s, api) => api.replaceSelection(`\n:::center\n${s.selectedText || "居中文字"}\n:::\n\n`) },
     { name: "tip", keyCommand: "tip", buttonProps: { title: "提示卡片" }, icon: <BulbOutlined />,
       execute: (s, api) => api.replaceSelection(`\n:::tip\n💡 ${s.selectedText || "提示内容"}\n:::\n\n`) },
+    { name: "columns", keyCommand: "columns", buttonProps: { title: "双栏（左右并排）" }, icon: <ColumnWidthOutlined />,
+      execute: (s, api) => api.replaceSelection(
+        `\n::::columns\n:::col\n${s.selectedText || "左栏内容"}\n:::\n:::col\n右栏内容\n:::\n::::\n\n`) },
   ];
   const templateGroup: ICommand = commands.group(
     (tplData?.templates || []).map((t) => ({
@@ -507,6 +511,51 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   );
 }
 
+// A small, non-interactive WYSIWYG thumbnail of a component's markdown. Reuses
+// the SAME remark plugin + component overrides as the editor's live preview
+// (mdPreview.tsx) so the thumbnail renders exactly like the published output.
+// CSS-scaled down so a full snippet reads as a compact card preview.
+function ComponentThumb({ markdown }: { markdown: string }) {
+  const SCALE = 0.72;
+  return (
+    <div className="ma-comp-thumb" data-color-mode="light"
+      style={{ height: 96, overflow: "hidden", pointerEvents: "none",
+        background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
+      <div style={{ transform: `scale(${SCALE})`, transformOrigin: "top left",
+        width: `${100 / SCALE}%`, padding: "6px 10px", boxSizing: "border-box" }}>
+        <MDEditor.Markdown source={markdown} remarkPlugins={[remarkAppDirectives]}
+          components={previewComponents}
+          style={{ background: "transparent", fontSize: 13, lineHeight: 1.5 }} />
+      </div>
+    </div>
+  );
+}
+
+// One clickable gallery card: rendered thumbnail + name; click → insert.
+function ComponentCard({ c, onPick }: { c: any; onPick: (c: any) => void }) {
+  return (
+    <div className="ma-comp-card" role="button" title={`插入：${c.name}`}
+      data-testid="comp-card" data-name={c.name} data-category={c.category}
+      onClick={() => onPick(c)}
+      style={{ border: "1px solid #eaeaea", borderRadius: 8, overflow: "hidden",
+        cursor: "pointer", background: "#fff", transition: "box-shadow .15s, border-color .15s" }}>
+      <ComponentThumb markdown={c.markdown} />
+      <div style={{ padding: "5px 8px", fontSize: 12, fontWeight: 500, color: "#333",
+        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.name}</div>
+    </div>
+  );
+}
+
+// Group components by category following the backend's display order, with any
+// unknown categories appended (stable) at the end.
+function groupByCategory(comps: any[], order: string[]) {
+  const groups: Record<string, any[]> = {};
+  for (const c of comps) (groups[c.category] ||= []).push(c);
+  const known = order.filter((cat) => groups[cat]?.length);
+  const extra = Object.keys(groups).filter((cat) => !order.includes(cat));
+  return [...known, ...extra].map((cat) => ({ cat, items: groups[cat] }));
+}
+
 function ComponentDrawer({ open, onClose, onInsert, getSelection }: { open: boolean; onClose: () => void; onInsert: (t: string) => void; getSelection: () => string; }) {
   const qc = useQueryClient();
   const { message } = AntApp.useApp();
@@ -524,7 +573,13 @@ function ComponentDrawer({ open, onClose, onInsert, getSelection }: { open: bool
   const filtered = (comps?.components || []).filter((c) =>
     (!cat || c.category === cat) &&
     (!q || (c.name + " " + (c.tags || []).join(" ") + " " + c.category).toLowerCase().includes(q.toLowerCase())));
+  const groups = groupByCategory(filtered, comps?.categories || []);
   const customs = (comps?.components || []).filter((c) => !c.is_builtin);
+
+  function pick(c: any) {
+    onInsert(c.markdown);
+    message.success(`已插入：${c.name}`);
+  }
 
   async function saveCustom() {
     const fd = new FormData();
@@ -543,28 +598,31 @@ function ComponentDrawer({ open, onClose, onInsert, getSelection }: { open: bool
   }
 
   return (
-    <Drawer open={open} onClose={onClose} title="组件面板" width={400} zIndex={100000}>
+    <Drawer open={open} onClose={onClose} title="组件面板" width={560} zIndex={100000}
+      className="ma-component-drawer">
       <Tabs items={[
         { key: "c", label: "组件库", children: (
-          <>
+          <div data-testid="component-gallery">
             <Input.Search placeholder="搜索组件…" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 8 }} />
-            <Space wrap style={{ marginBottom: 8 }}>
+            <Space wrap style={{ marginBottom: 12 }}>
               <Tag.CheckableTag checked={!cat} onChange={() => setCat("")}>全部</Tag.CheckableTag>
               {(comps?.categories || []).map((c) => (
-                <Tag.CheckableTag key={c} checked={cat === c} onChange={() => setCat(c)}>{c}</Tag.CheckableTag>
+                <Tag.CheckableTag key={c} checked={cat === c} onChange={() => setCat(cat === c ? "" : c)}>{c}</Tag.CheckableTag>
               ))}
             </Space>
-            <Space direction="vertical" style={{ width: "100%" }}>
-              {filtered.map((c) => (
-                <Card key={c.id} size="small" styles={{ body: { padding: 8 } }}>
-                  <Space style={{ justifyContent: "space-between", width: "100%" }}>
-                    <span><b>{c.name}</b> <Tag>{c.category}</Tag></span>
-                    <Button size="small" type="primary" onClick={() => onInsert(c.markdown)}>插入</Button>
-                  </Space>
-                </Card>
-              ))}
-            </Space>
-          </>
+            {groups.length === 0 && <Text type="secondary">没有匹配的组件。</Text>}
+            {groups.map(({ cat: gcat, items }) => (
+              <div key={gcat} data-testid="comp-group" data-category={gcat} style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0 8px" }}>
+                  <Text strong style={{ fontSize: 13 }}>{gcat}</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>{items.length}</Text>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  {items.map((c) => <ComponentCard key={c.id} c={c} onPick={pick} />)}
+                </div>
+              </div>
+            ))}
+          </div>
         ) },
         { key: "m", label: "素材库", children: (
           <Space wrap>
