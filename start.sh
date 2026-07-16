@@ -50,17 +50,13 @@ PY=$(command -v python3 || command -v python)
 pip install -q -r requirements.txt 2>/dev/null
 echo "[OK] Python dependencies"
 
-# ── 4. Build React SPA ──
-if [ -f frontend/dist/index.html ]; then
-    echo "[SKIP] Frontend already built — delete frontend/dist/ to rebuild"
-else
-    echo "[..] Building frontend..."
-    cd frontend
-    npm install --silent
-    npm run build
-    cd ..
-    echo "[OK] Frontend built"
-fi
+# ── 4. Build React SPA (always rebuild) ──
+echo "[..] Building frontend..."
+cd frontend
+npm install --silent
+npm run build
+cd ..
+echo "[OK] Frontend built"
 
 # ── 5. Init data dir ──
 if [ ! -d data ]; then

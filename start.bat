@@ -38,17 +38,13 @@ call .venv\Scripts\activate.bat
 pip install -q -r requirements.txt 2>nul
 echo [OK] Python dependencies
 
-:: ── 4. Build React SPA ──
-if exist frontend\dist\index.html (
-    echo [SKIP] Frontend already built — delete frontend\dist\ to rebuild
-) else (
-    echo [..] Building frontend...
-    cd frontend
-    call npm install --silent
-    call npm run build
-    cd ..
-    echo [OK] Frontend built
-)
+:: ── 4. Build React SPA (always rebuild) ──
+echo [..] Building frontend...
+cd frontend
+call npm install --silent
+call npm run build
+cd ..
+echo [OK] Frontend built
 
 :: ── 5. Init data dir ──
 if not exist data (
