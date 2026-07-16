@@ -129,6 +129,27 @@ def test_card_directive_matches_preview_style():
     assert "卡片内容" in html
 
 
+def test_steps_auto_numbered():
+    html = render_styled_html(":::steps\n第一步\n第二步\n第三步\n:::")
+    assert "border-radius:13px" in html            # circular number badges
+    assert ">1</span>" in html and ">2</span>" in html and ">3</span>" in html
+    assert "第一步" in html and "第三步" in html
+    assert "display:flex;align-items:flex-start" in html
+
+
+def test_numlist_alias_of_steps():
+    html = render_styled_html(":::numlist\n甲\n乙\n:::")
+    assert ">1</span>" in html and ">2</span>" in html
+    assert "甲" in html and "乙" in html
+
+
+def test_box_and_border_wrappers():
+    box = render_styled_html(":::box\n背景内容\n:::")
+    assert "background:#f5f7fa" in box and "border-radius:8px" in box and "背景内容" in box
+    border = render_styled_html(":::border\n边框内容\n:::")
+    assert "border:1px solid #d9d9d9" in border and "边框内容" in border
+
+
 def test_toutiao_theme_and_listing():
     html = render_styled_html("## T\n\n正文", platform="toutiao")
     assert "<section style=" in html and "#f04142" in html  # toutiao red

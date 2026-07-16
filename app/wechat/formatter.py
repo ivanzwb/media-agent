@@ -314,6 +314,29 @@ _IMGCARD_FRAME_STYLE = (
     "box-shadow:0 2px 12px rgba(0,0,0,0.08);background:#ffffff;")
 _IMGCARD_IMG_STYLE = "display:block;width:100%;margin:0;border-radius:0;"
 _IMGCARD_CAP_STYLE = "margin:0;padding:8px 12px;font-size:13px;color:#888888;text-align:center;"
+# wrapper blocks
+_BOX_BLOCK_STYLE = "background:#f5f7fa;padding:14px 16px;margin:16px 0;border-radius:8px;color:#333333;"
+_BORDER_BLOCK_STYLE = "border:1px solid #d9d9d9;padding:14px 16px;margin:16px 0;border-radius:8px;color:#333333;"
+# numbered steps / list
+_STEPS_WRAP_STYLE = "margin:16px 0;"
+_STEPS_ITEM_STYLE = "display:flex;align-items:flex-start;margin:12px 0;"
+_STEPS_BADGE_STYLE = ("flex:0 0 auto;width:26px;height:26px;line-height:26px;text-align:center;"
+                      "background:#2f6fb3;color:#ffffff;border-radius:13px;font-weight:bold;"
+                      "font-size:14px;margin-right:12px;")
+_STEPS_BODY_STYLE = "flex:1;min-width:0;color:#333333;font-size:15px;line-height:1.7;"
+
+
+def _render_steps(inner_lines: list[str], st: dict) -> str:
+    """Auto-numbered steps / list: each non-empty line becomes a badge+body row."""
+    items = [l.strip() for l in inner_lines if l.strip()]
+    rows = [
+        (f'<section style="{_STEPS_ITEM_STYLE}">'
+         f'<span style="{_STEPS_BADGE_STYLE}">{idx}</span>'
+         f'<section style="{_STEPS_BODY_STYLE}">{_inline(item, st)}</section>'
+         f'</section>')
+        for idx, item in enumerate(items, 1)
+    ]
+    return f'<section style="{_STEPS_WRAP_STYLE}">{"".join(rows)}</section>'
 
 
 def _render_imgcard(inner_lines: list[str], st: dict) -> str:
@@ -396,6 +419,14 @@ def _render_container(ctype: str, inner_lines: list[str], st: dict,
                 f'{_inline(title.strip(), st)}</span></section>')
     if ctype == "imgcard":
         return _render_imgcard(inner_lines, st)
+    # ── numbered steps / list ──
+    if ctype in ("steps", "numlist"):
+        return _render_steps(inner_lines, st)
+    # ── wrapper blocks (background / border container) ──
+    if ctype in ("box", "border"):
+        inner = _render_blocks(inner_lines, st, params)
+        style = _BOX_BLOCK_STYLE if ctype == "box" else _BORDER_BLOCK_STYLE
+        return f'<section style="{style}">{inner}</section>'
     # box-style cards
     if ctype == "highlight":
         box = (f"background:#fafafa;border-left:4px solid {accent};"

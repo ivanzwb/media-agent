@@ -30,7 +30,8 @@ function _nodeText(n: any): string {
 const _INLINE_IMG_STYLE = "max-width:100%;display:block;margin:14px auto;border-radius:6px;";
 
 function _inlineNodes(text: string): any[] {
-  const RE = /\{color:(#[0-9a-fA-F]{3,8}|[a-zA-Z][\w-]*)\}([\s\S]*?)\{\/color\}|==([^=]+?)==|!\[([^\]]*)\]\(([^)\s]+)\)/g;
+  // Order matters: image (![..](..)) before link ([..](..)); bold (**) before italic (*).
+  const RE = /\{color:(#[0-9a-fA-F]{3,8}|[a-zA-Z][\w-]*)\}([\s\S]*?)\{\/color\}|==([^=]+?)==|!\[([^\]]*)\]\(([^)\s]+)\)|\*\*([^*]+?)\*\*|\*([^*]+?)\*|\[([^\]]+?)\]\(([^)\s]+)\)/g;
   const nodes: any[] = [];
   let last = 0;
   let m: RegExpExecArray | null;
@@ -43,11 +44,21 @@ function _inlineNodes(text: string): any[] {
     } else if (m[3] !== undefined) {
       nodes.push({ type: "textDirective", data: { hName: "mark" },
         children: [{ type: "text", value: m[3] }] });
-    } else {
+    } else if (m[4] !== undefined || m[5] !== undefined) {
       nodes.push({ type: "textDirective",
         data: { hName: "img",
           hProperties: { src: m[5], alt: m[4] || "", style: _INLINE_IMG_STYLE } },
         children: [] });
+    } else if (m[6] !== undefined) {
+      nodes.push({ type: "textDirective", data: { hName: "strong" },
+        children: [{ type: "text", value: m[6] }] });
+    } else if (m[7] !== undefined) {
+      nodes.push({ type: "textDirective", data: { hName: "em" },
+        children: [{ type: "text", value: m[7] }] });
+    } else {
+      nodes.push({ type: "textDirective",
+        data: { hName: "a", hProperties: { href: m[9] } },
+        children: [{ type: "text", value: m[8] }] });
     }
     last = RE.lastIndex;
   }
@@ -79,6 +90,13 @@ const _IMGCARD_IMG_STYLE = "display:block;width:100%;margin:0;border-radius:0;";
 const _IMGCARD_CAP_STYLE = "margin:0;padding:8px 12px;font-size:13px;color:#888888;text-align:center;";
 // Matches formatter.py :::card box style exactly.
 const _CARD_STYLE = "background:#ffffff;border:1px solid #e6e8eb;color:#333;padding:14px 16px;margin:16px 0;border-radius:8px;";
+// wrapper blocks + numbered steps — byte-identical with formatter.py.
+const _BOX_BLOCK_STYLE = "background:#f5f7fa;padding:14px 16px;margin:16px 0;border-radius:8px;color:#333333;";
+const _BORDER_BLOCK_STYLE = "border:1px solid #d9d9d9;padding:14px 16px;margin:16px 0;border-radius:8px;color:#333333;";
+const _STEPS_WRAP_STYLE = "margin:16px 0;";
+const _STEPS_ITEM_STYLE = "display:flex;align-items:flex-start;margin:12px 0;";
+const _STEPS_BADGE_STYLE = "flex:0 0 auto;width:26px;height:26px;line-height:26px;text-align:center;background:#2f6fb3;color:#ffffff;border-radius:13px;font-weight:bold;font-size:14px;margin-right:12px;";
+const _STEPS_BODY_STYLE = "flex:1;min-width:0;color:#333333;font-size:15px;line-height:1.7;";
 const _IMG_LINE_RE = /!\[([^\]]*)\]\(([^)\s]+)\)/;
 
 // Framed image card: image (if any) + optional caption, matching formatter's
@@ -143,12 +161,31 @@ function _directiveNode(type: string, inner: string): any {
   }
   if (t === "imgcard") return _imgcardNode(rawLines);
 
+  // ── numbered steps / list (auto-numbered badge + body per line) ──
+  if (t === "steps" || t === "numlist") {
+    return { type: "containerDirective",
+      data: { hName: "section", hProperties: { style: _STEPS_WRAP_STYLE } },
+      children: rawLines.map((item, idx) => ({
+        type: "containerDirective",
+        data: { hName: "section", hProperties: { style: _STEPS_ITEM_STYLE } },
+        children: [
+          { type: "textDirective", data: { hName: "span", hProperties: { style: _STEPS_BADGE_STYLE } },
+            children: [{ type: "text", value: String(idx + 1) }] },
+          { type: "containerDirective", data: { hName: "section", hProperties: { style: _STEPS_BODY_STYLE } },
+            children: _inlineNodes(item) },
+        ],
+      })) };
+  }
+
   // ── generic containers with inline (soft-break) content ──
   const kids: any[] = [];
   rawLines.forEach((line, i) => {
     if (i > 0) kids.push({ type: "break" });
     kids.push(..._inlineNodes(line));
   });
+  if (t === "box" || t === "border")
+    return { type: "containerDirective",
+      data: { hName: "section", hProperties: { style: t === "box" ? _BOX_BLOCK_STYLE : _BORDER_BLOCK_STYLE } }, children: kids };
   if (t === "center")
     return { type: "containerDirective",
       data: { hName: "div", hProperties: { style: "text-align:center" } }, children: kids };
