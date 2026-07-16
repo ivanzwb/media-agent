@@ -72,6 +72,18 @@ class EditorMaterial:
                 "markdown": self.markdown}
 
 
+# A self-contained SVG placeholder so image components actually render in the
+# WYSIWYG preview (and gallery thumbnails) before the user swaps in a real URL.
+EXAMPLE_IMG = (
+    "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20"
+    "width='640'%20height='360'%3E%3Crect%20width='640'%20height='360'%20"
+    "fill='%23eef3fb'/%3E%3Crect%20x='0.5'%20y='0.5'%20width='639'%20"
+    "height='359'%20fill='none'%20stroke='%23b9d4f2'/%3E%3Ctext%20x='320'%20"
+    "y='196'%20font-family='sans-serif'%20font-size='34'%20fill='%232f6fb3'%20"
+    "text-anchor='middle'%3E%E7%A4%BA%E4%BE%8B%E5%9B%BE%E7%89%87%20640x360"
+    "%3C/text%3E%3C/svg%3E"
+)
+
 # ── Builtin components (≥30) ─────────────────────────────────────────────
 # (id, name, category, markdown, tags)
 _C = [
@@ -117,20 +129,20 @@ _C = [
      ":::danger\n🔥 **重点**\n{重点内容}\n:::\n\n", ["卡片", "重点"]),
     ("card-highlight", "高亮方框", "卡片",
      ":::highlight\n{要强调的整段内容}\n:::\n\n", ["卡片", "高亮"]),
-    # 图文 (5)
-    ("image", "单图", "图文", "![{图片说明}]({图片URL})\n\n", ["图片"]),
+    # 图文 (5) — image slots use a rendered example placeholder (WYSIWYG)
+    ("image", "单图", "图文", "![{图片说明}](" + EXAMPLE_IMG + ")\n\n", ["图片"]),
     ("image-caption", "图片+说明", "图文",
-     "![]({图片URL})\n:::center\n_{图注文字}_\n:::\n\n", ["图片", "图注"]),
+     "![](" + EXAMPLE_IMG + ")\n:::center\n_{图注文字}_\n:::\n\n", ["图片", "图注"]),
     ("image-text", "左图右文", "图文",
-     "![]({图片URL})\n\n{配图段落文字}\n\n", ["图文"]),
+     "![](" + EXAMPLE_IMG + ")\n\n{配图段落文字}\n\n", ["图文"]),
     ("gallery-2", "两图并排", "图文",
-     "| ![]({图1URL}) | ![]({图2URL}) |\n|---|---|\n\n", ["图文", "并排"]),
+     "| ![](" + EXAMPLE_IMG + ") | ![](" + EXAMPLE_IMG + ") |\n|---|---|\n\n", ["图文", "并排"]),
     ("cover-title", "封面图+标题", "图文",
-     "![]({封面URL})\n\n## {文章标题}\n\n", ["图文", "封面"]),
+     "![](" + EXAMPLE_IMG + ")\n\n## {文章标题}\n\n", ["图文", "封面"]),
     ("image-card", "图片卡片", "图文",
-     ":::imgcard\n![]({图片URL})\n{图注文字}\n:::\n\n", ["图文", "卡片", "图注", "边框"]),
+     ":::imgcard\n![](" + EXAMPLE_IMG + ")\n{图注文字}\n:::\n\n", ["图文", "卡片", "图注", "边框"]),
     ("image-card-plain", "圆角边框图", "图文",
-     ":::imgcard\n![]({图片URL})\n:::\n\n", ["图文", "边框", "圆角"]),
+     ":::imgcard\n![](" + EXAMPLE_IMG + ")\n:::\n\n", ["图文", "边框", "圆角"]),
     # 布局 (多栏 — 秀米式并排；:::col 内可放普通 markdown / :::directive) (3)
     ("cols-2", "双栏", "布局",
      "::::columns\n:::col\n{左栏内容}\n:::\n:::col\n{右栏内容}\n:::\n::::\n\n",
@@ -139,7 +151,7 @@ _C = [
      "::::columns\n:::col\n{第一栏}\n:::\n:::col\n{第二栏}\n:::\n"
      ":::col\n{第三栏}\n:::\n::::\n\n", ["布局", "三栏", "并排"]),
     ("cols-image-text", "图文并排", "布局",
-     "::::columns 1:2\n:::col\n![]({图片URL})\n:::\n:::col\n{右侧文字段落}\n:::\n::::\n\n",
+     "::::columns 1:2\n:::col\n![](" + EXAMPLE_IMG + ")\n:::\n:::col\n{右侧文字段落}\n:::\n::::\n\n",
      ["布局", "图文", "并排"]),
     # 引用框 (3)
     ("quote-simple", "普通引用", "引用框", "> {引用文字}\n\n", ["引用"]),

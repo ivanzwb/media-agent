@@ -226,12 +226,27 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   // insert text at the markdown textarea cursor
   function insertAtCursor(text: string) {
     const ta = editorRef.current?.querySelector<HTMLTextAreaElement>(".w-md-editor-text-input");
-    if (!ta) { setBody(body + text); return; }
-    const s = ta.selectionStart ?? body.length;
-    const e = ta.selectionEnd ?? body.length;
-    const next = body.slice(0, s) + text + body.slice(e);
+    const s = ta?.selectionStart ?? body.length;
+    const e = ta?.selectionEnd ?? body.length;
+    const before = body.slice(0, s);
+    const after = body.slice(e);
+
+    // Block-level snippets (directives, headings, tables, images, quotes,
+    // dividers, columns) MUST start at the beginning of a line — otherwise
+    // "foo:::tip" won't be parsed as a directive. Wrap with blank lines so the
+    // snippet is always its own block regardless of where the cursor sits.
+    const isBlock = /^\s*(:{3,}|#{1,6}\s|>|!\[|\||-{3,}|\d+\.\s|[-*]\s)/.test(text);
+    let ins = text;
+    if (isBlock) {
+      ins = ins.replace(/^\s+/, "").replace(/\s+$/, ""); // normalize own margins
+      const lead = before.length === 0 ? "" : before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+      const trail = after.length === 0 ? "\n" : after.startsWith("\n") ? "\n" : "\n\n";
+      ins = lead + ins + trail;
+    }
+    const next = before + ins + after;
     setBody(next);
-    setTimeout(() => { ta.focus(); ta.selectionStart = ta.selectionEnd = s + text.length; }, 0);
+    const caret = before.length + ins.length;
+    setTimeout(() => { ta?.focus(); if (ta) { ta.selectionStart = ta.selectionEnd = caret; } }, 0);
   }
   function wrapSelection(before: string, after: string, placeholder: string) {
     const ta = editorRef.current?.querySelector<HTMLTextAreaElement>(".w-md-editor-text-input");
