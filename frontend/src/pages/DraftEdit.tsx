@@ -693,6 +693,7 @@ function ComponentDrawer({ open, onClose, onInsert, getSelection }: { open: bool
     queryFn: () => getJson<{ materials: any[] }>("/api/editor/materials"),
   });
   const [q, setQ] = useState("");
+  const [mq, setMq] = useState("");
   const [cat, setCat] = useState("");
   const [cc, setCc] = useState({ id: "", name: "", category: "", markdown: "" });
   const filtered = (comps?.components || []).filter((c) =>
@@ -750,13 +751,29 @@ function ComponentDrawer({ open, onClose, onInsert, getSelection }: { open: bool
           </div>
         ) },
         { key: "m", label: "素材库", children: (
-          <Space wrap>
-            {(mats?.materials || []).map((m) => (
-              <Tooltip key={m.id} title={m.name}>
-                <Button onClick={() => onInsert(m.markdown + " ")} style={{ fontSize: 18 }}>{m.markdown}</Button>
-              </Tooltip>
+          <div>
+            <Input.Search placeholder="搜索素材…" value={mq} onChange={(e) => setMq(e.target.value)} style={{ marginBottom: 12 }} />
+            {groupByCategory(
+              (mats?.materials || []).filter((m: any) =>
+                !mq || (m.name + " " + m.category + " " + m.markdown).toLowerCase().includes(mq.toLowerCase())),
+              [],
+            ).map(({ cat: gcat, items }) => (
+              <div key={gcat} style={{ marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0 8px" }}>
+                  <Text strong style={{ fontSize: 13 }}>{gcat}</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>{items.length}</Text>
+                </div>
+                <Space wrap>
+                  {items.map((m: any) => (
+                    <Tooltip key={m.id} title={m.name}>
+                      <Button onClick={() => onInsert(m.markdown + " ")}
+                        style={{ fontSize: 18, minWidth: 40 }}>{m.markdown}</Button>
+                    </Tooltip>
+                  ))}
+                </Space>
+              </div>
             ))}
-          </Space>
+          </div>
         ) },
         { key: "custom", label: "自定义", children: (
           <Space direction="vertical" style={{ width: "100%" }}>

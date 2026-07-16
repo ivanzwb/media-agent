@@ -118,15 +118,15 @@ _C = [
      "\n:::gradient\n:::\n\n", ["分割线", "渐变", "装饰"]),
     # 卡片 (6)
     ("card-tip", "温馨提示卡片", "卡片",
-     ":::tip\n**温馨提示**\n{提示内容}\n:::\n\n", ["卡片", "提示"]),
+     ":::tip\n💡 **温馨提示**\n{提示内容}\n:::\n\n", ["卡片", "提示"]),
     ("card-info", "信息卡片", "卡片",
-     ":::info\n**说明**\n{信息内容}\n:::\n\n", ["卡片", "信息"]),
+     ":::info\nℹ️ **说明**\n{信息内容}\n:::\n\n", ["卡片", "信息"]),
     ("card-warning", "警告卡片", "卡片",
-     ":::warning\n**注意**\n{警告内容}\n:::\n\n", ["卡片", "警告"]),
+     ":::warning\n⚠️ **注意**\n{警告内容}\n:::\n\n", ["卡片", "警告"]),
     ("card-success", "成功卡片", "卡片",
-     ":::success\n**要点**\n{要点内容}\n:::\n\n", ["卡片", "成功"]),
+     ":::success\n✅ **要点**\n{要点内容}\n:::\n\n", ["卡片", "成功"]),
     ("card-danger", "重点卡片", "卡片",
-     ":::danger\n**重点**\n{重点内容}\n:::\n\n", ["卡片", "重点"]),
+     ":::danger\n🔥 **重点**\n{重点内容}\n:::\n\n", ["卡片", "重点"]),
     ("card-highlight", "高亮方框", "卡片",
      ":::highlight\n{要强调的整段内容}\n:::\n\n", ["卡片", "高亮"]),
     # 图文 (5) — image slots use a rendered example placeholder (WYSIWYG)
@@ -163,7 +163,7 @@ _C = [
      ":::card\n{color:#4a90d9}❝{/color} {引用文字}\n{color:#999999}—— {出处/作者}{/color}\n:::\n\n",
      ["引用", "卡片"]),
     ("quote-emphasis-bg", "强调色块卡片", "引用框",
-     ":::info\n==重点== {重点强调内容}\n:::\n\n", ["引用", "强调", "色块"]),
+     ":::info\n📌 ==重点== {重点强调内容}\n:::\n\n", ["引用", "强调", "色块"]),
     ("quote-emphasis-border", "左边框强调", "引用框",
      ":::highlight\n{color:#07C160}▍{/color} {重点内容}\n:::\n\n", ["引用", "强调", "边框"]),
     # 按钮 (3)
@@ -172,8 +172,7 @@ _C = [
     ("btn-cta", "行动号召按钮", "按钮",
      ":::button\n立即体验|{链接URL}\n:::\n\n", ["按钮", "CTA"]),
     ("btn-follow", "关注引导", "按钮",
-     ":::center\n{color:#07C160}▼{/color} 点击下方名片关注我们 {color:#07C160}▼{/color}\n:::\n\n",
-     ["按钮", "关注"]),
+     ":::center\n👇 点击下方名片关注我们 👇\n:::\n\n", ["按钮", "关注"]),
     # 列表 (2)
     ("list-bullet", "要点列表", "列表",
      "- {要点一}\n- {要点二}\n- {要点三}\n\n", ["列表"]),
@@ -224,77 +223,6 @@ _C = [
      ":::box color=#fff2e8\n{自定义背景内容}\n:::\n\n", ["卡片", "背景", "自定义颜色"]),
     ("callout-custom-color", "自定义强调框", "卡片",
      ":::tip color=#e74c3c\n{自定义颜色强调内容}\n:::\n\n", ["卡片", "强调", "自定义颜色"]),
-    # ── 秀米-style enrichment (no emoji; composed from existing directives) ──
-    # 标题
-    ("title-bar", "竖线标题", "标题",
-     "{color:#2f6fb3}▎{/color} **{标题文字}**\n\n", ["标题", "竖线"]),
-    ("title-en-sub", "中英标题", "标题",
-     ":::center\n**{主标题}**\n:::\n:::center\n{color:#c0c0c0}{ENGLISH SUBTITLE}{/color}\n:::\n\n",
-     ["标题", "副标题", "英文"]),
-    ("title-boxed", "线框标题", "标题",
-     ":::border\n:::center\n**{标题文字}**\n:::\n:::\n\n", ["标题", "线框"]),
-    ("title-arrow", "箭头标题", "标题",
-     "{color:#2f6fb3}▶{/color} **{标题文字}**\n\n", ["标题", "箭头"]),
-    # 分割线
-    ("divider-diamond", "菱形分割", "分割线",
-     "\n:::center\n{color:#c0c0c0}◆ ◇ ◆ ◇ ◆{/color}\n:::\n\n", ["分割线", "菱形"]),
-    ("divider-square", "方块分割", "分割线",
-     "\n:::center\n{color:#c0c0c0}■ □ ■ □ ■{/color}\n:::\n\n", ["分割线", "方块"]),
-    ("divider-bracket", "书名号分割", "分割线",
-     "\n:::center\n{color:#c0c0c0}《 ※ 》{/color}\n:::\n\n", ["分割线", "装饰"]),
-    ("divider-flower", "花饰分割", "分割线",
-     "\n:::center\n{color:#c0a060}❖ ❖ ❖{/color}\n:::\n\n", ["分割线", "花饰", "装饰"]),
-    # 卡片
-    ("card-data", "数据卡片", "卡片",
-     ":::box\n:::center\n{color:#2f6fb3}**{数字}**{/color}\n:::\n:::center\n{color:#888888}{指标说明}{/color}\n:::\n:::\n\n",
-     ["卡片", "数据", "数字"]),
-    ("card-lead", "小标题卡片", "卡片",
-     ":::box\n**{小标题}**\n\n{正文内容}\n:::\n\n", ["卡片", "小标题"]),
-    ("card-outline-title", "标题边框卡", "卡片",
-     ":::border\n**{小标题}**\n\n{正文内容}\n:::\n\n", ["卡片", "边框", "小标题"]),
-    # 引用框
-    ("quote-center-big", "居中大引言", "引用框",
-     ":::center\n{color:#cccccc}❝{/color}\n:::\n:::center\n**{引言内容}**\n:::\n\n",
-     ["引用", "居中", "大字"]),
-    ("quote-side", "侧边引用", "引用框",
-     ":::highlight\n{引用内容}\n\n{color:#999999}—— {出处}{/color}\n:::\n\n", ["引用", "侧边"]),
-    # 图文
-    ("gallery-3", "三图并排", "图文",
-     "| ![](" + EXAMPLE_IMG + ") | ![](" + EXAMPLE_IMG + ") | ![](" + EXAMPLE_IMG + ") |\n|---|---|---|\n\n",
-     ["图文", "并排", "三图"]),
-    ("image-title-desc", "图片+标题+描述", "图文",
-     ":::imgcard\n![](" + EXAMPLE_IMG + ")\n**{图片标题}**\n{图片描述}\n:::\n\n",
-     ["图文", "卡片", "标题"]),
-    # 布局
-    ("cols-compare", "左右对比", "布局",
-     "::::columns\n:::col\n:::success\n**{正方观点}**\n{说明}\n:::\n:::\n"
-     ":::col\n:::danger\n**{反方观点}**\n{说明}\n:::\n:::\n::::\n\n",
-     ["布局", "对比", "并排"]),
-    ("cols-4", "四栏", "布局",
-     "::::columns\n:::col\n{第一栏}\n:::\n:::col\n{第二栏}\n:::\n"
-     ":::col\n{第三栏}\n:::\n:::col\n{第四栏}\n:::\n::::\n\n", ["布局", "四栏", "并排"]),
-    ("cols-feature", "特性三栏", "布局",
-     "::::columns\n:::col\n:::box\n:::center\n**{特性一}**\n:::\n{说明}\n:::\n:::\n"
-     ":::col\n:::box\n:::center\n**{特性二}**\n:::\n{说明}\n:::\n:::\n"
-     ":::col\n:::box\n:::center\n**{特性三}**\n:::\n{说明}\n:::\n:::\n::::\n\n",
-     ["布局", "特性", "卡片"]),
-    # 列表
-    ("list-check", "清单列表", "列表",
-     "- {color:#07C160}✓{/color} {条目一}\n- {color:#07C160}✓{/color} {条目二}\n"
-     "- {color:#07C160}✓{/color} {条目三}\n\n", ["列表", "清单", "对勾"]),
-    ("feature-blocks", "要点色块", "列表",
-     ":::box\n**{要点一}** — {说明}\n:::\n:::box\n**{要点二}** — {说明}\n:::\n\n",
-     ["列表", "要点", "色块"]),
-    # 标签
-    ("tags-cate", "分类标签", "标签",
-     ":::tags\n分类一\n分类二\n分类三\n分类四\n:::\n\n", ["标签", "分类"]),
-    # 页脚
-    ("footer-copyright", "版权页脚", "页脚",
-     "\n:::gradient\n:::\n:::footer\n© {年份} {公众号名} · 版权所有\n:::\n\n",
-     ["页脚", "版权"]),
-    ("footer-cta", "引导页脚", "页脚",
-     "\n:::dashed\n:::\n:::center\n**{引导语}**\n:::\n:::button\n关注我们|{链接URL}\n:::\n\n",
-     ["页脚", "引导", "关注"]),
 ]
 
 
@@ -308,7 +236,7 @@ _T: list[tuple[str, str, str, str]] = [
     ("product-launch", "产品发布", "blue",
      "## 一、{产品名}正式发布\n\n:::center\n_{一句话卖点}_\n:::\n\n"
      "![]({封面图URL})\n\n{开头钩子段落}\n\n"
-     "## 二、核心亮点\n\n:::success\n**三大突破**\n- {亮点一}\n- {亮点二}\n- {亮点三}\n:::\n\n"
+     "## 二、核心亮点\n\n:::success\n✅ **三大突破**\n- {亮点一}\n- {亮点二}\n- {亮点三}\n:::\n\n"
      "## 三、技术细节\n\n{技术说明段落}\n\n"
      "## 四、适用场景\n\n{场景描述}\n\n"
      ":::button\n立即体验|{链接URL}\n:::\n\n"
@@ -316,47 +244,47 @@ _T: list[tuple[str, str, str, str]] = [
     ("deep-tech", "科技深度报道", "default",
      "## 一、{开篇场景/问题}\n\n{钩子段落}\n\n"
      "## 二、背景展开\n\n{背景说明}\n\n"
-     ":::tip\n**划重点**\n{关键概念解释}\n:::\n\n"
+     ":::tip\n💡 **划重点**\n{关键概念解释}\n:::\n\n"
      "## 三、深入分析\n\n{分析段落}\n\n"
      "## 四、数据支撑\n\n| 指标 | 数值 |\n|---|---|\n| {指标} | {数值} |\n\n"
      "## 写在最后\n\n{总结与展望}\n\n"
      "\n---\n:::footer\n本文来源：{来源}\n:::\n"),
     ("festival", "节日祝福", "warm",
-     ":::center\n**{节日名}快乐**\n:::\n\n"
+     ":::center\n**🎉 {节日名}快乐 🎉**\n:::\n\n"
      "![]({节日配图URL})\n\n{祝福开场白}\n\n"
      ":::highlight\n{核心祝福语}\n:::\n\n"
      "{正文段落}\n\n"
      ":::center\n〜〜〜〜〜〜〜〜〜〜\n:::\n\n"
      ":::footer\n{公众号名} 全体成员敬上\n:::\n"),
     ("event", "活动预告", "warm",
-     "## {活动名称}\n\n![]({活动海报URL})\n\n"
-     ":::info\n**活动信息**\n- 时间：{时间}\n- 地点：{地点}\n- 报名：{报名方式}\n:::\n\n"
+     "## 🎪 {活动名称}\n\n![]({活动海报URL})\n\n"
+     ":::info\nℹ️ **活动信息**\n- 🕐 时间：{时间}\n- 📍 地点：{地点}\n- 🎟️ 报名：{报名方式}\n:::\n\n"
      "## 活动亮点\n\n- {亮点一}\n- {亮点二}\n- {亮点三}\n\n"
      "{活动详情段落}\n\n"
      ":::button\n立即报名|{报名链接}\n:::\n"),
     ("recruit", "招聘启事", "blue",
-     "## {公司名} 招聘\n\n{公司简介}\n\n"
-     "## 岗位：{岗位名称}\n\n:::info\n**岗位职责**\n- {职责一}\n- {职责二}\n:::\n\n"
-     ":::success\n**任职要求**\n- {要求一}\n- {要求二}\n:::\n\n"
+     "## 💼 {公司名} 招聘\n\n{公司简介}\n\n"
+     "## 岗位：{岗位名称}\n\n:::info\nℹ️ **岗位职责**\n- {职责一}\n- {职责二}\n:::\n\n"
+     ":::success\n✅ **任职要求**\n- {要求一}\n- {要求二}\n:::\n\n"
      "## 我们提供\n\n- {福利一}\n- {福利二}\n\n"
      ":::button\n投递简历|{投递方式}\n:::\n\n"
      ":::footer\n期待你的加入！\n:::\n"),
     ("tutorial", "教程指南", "default",
-     "## {教程标题}\n\n:::tip\n本文将带你 {目标}\n:::\n\n"
+     "## {教程标题}\n\n:::tip\n💡 本文将带你 {目标}\n:::\n\n"
      "## 准备工作\n\n- {前置条件一}\n- {前置条件二}\n\n"
      "## 步骤一：{步骤标题}\n\n{步骤说明}\n\n"
      "## 步骤二：{步骤标题}\n\n{步骤说明}\n\n"
      "## 步骤三：{步骤标题}\n\n{步骤说明}\n\n"
-     ":::success\n**完成！**\n{结果说明}\n:::\n"),
+     ":::success\n✅ **完成！**\n{结果说明}\n:::\n"),
     ("review", "产品评测", "default",
      "## {产品名}评测：{一句话结论}\n\n![]({产品图URL})\n\n{开场段落}\n\n"
      "## 外观与设计\n\n{外观评价}\n\n"
      "## 使用体验\n\n{体验评价}\n\n"
-     "## 优缺点\n\n:::success\n**优点**\n- {优点一}\n- {优点二}\n:::\n\n"
-     ":::danger\n**不足**\n- {缺点一}\n:::\n\n"
+     "## 优缺点\n\n:::success\n✅ **优点**\n- {优点一}\n- {优点二}\n:::\n\n"
+     ":::danger\n🔥 **不足**\n- {缺点一}\n:::\n\n"
      "## 购买建议\n\n{购买建议}\n"),
     ("news", "新闻快讯", "default",
-     "## {新闻标题}\n\n:::info\n{导语一句话}\n:::\n\n"
+     "## {新闻标题}\n\n:::info\nℹ️ {导语一句话}\n:::\n\n"
      "{正文第一段}\n\n{正文第二段}\n\n"
      "> {关键人物引语}\n\n{背景补充}\n\n"
      "\n---\n:::footer\n来源：{来源} · {日期}\n:::\n"),
@@ -376,9 +304,9 @@ _T: list[tuple[str, str, str, str]] = [
      ":::footer\n本文由 {公众号名} 原创\n:::\n"),
     ("weekly", "周报/月报", "blue",
      "## {期号} {团队名}周报\n\n:::highlight\n本周关键词：{关键词}\n:::\n\n"
-     "## 本周进展\n\n- {进展一}\n- {进展二}\n\n"
-     "## 下周计划\n\n1. {计划一}\n2. {计划二}\n\n"
-     "## 其他\n\n{其他事项}\n\n"
+     "## 📈 本周进展\n\n- {进展一}\n- {进展二}\n\n"
+     "## 🎯 下周计划\n\n1. {计划一}\n2. {计划二}\n\n"
+     "## 💬 其他\n\n{其他事项}\n\n"
      ":::footer\n{团队名} · {日期}\n:::\n"),
 ]
 
@@ -388,35 +316,73 @@ def builtin_templates() -> list[EditorTemplate]:
                            is_builtin=True) for t in _T]
 
 
-# ── Materials (non-emoji symbols / decorative snippets) ──────────────────
+# ── Materials (icons / decorative snippets) ──────────────────────────────
+# 秀米-style material palette — insertable inline glyphs / decorative lines.
+# Strictly NO emoji: only typographic & geometric Unicode marks that render as
+# plain text glyphs (so they stay black in WeChat, never colored emoji).
 _M: list[tuple[str, str, str, str]] = [
-    # 符号 (typographic / geometric marks — not emoji)
+    # 符号 — points / bullets
     ("mark-bar", "竖线", "符号", "▎"),
+    ("mark-bar-thin", "细竖线", "符号", "▏"),
     ("mark-dot", "实心圆", "符号", "●"),
     ("mark-dot-o", "空心圆", "符号", "○"),
+    ("mark-dot-ring", "圆环", "符号", "◉"),
+    ("mark-bullet", "小圆点", "符号", "•"),
     ("mark-diamond", "实心菱形", "符号", "◆"),
     ("mark-diamond-o", "空心菱形", "符号", "◇"),
+    ("mark-diamond-d", "宝石菱形", "符号", "◈"),
     ("mark-square", "实心方块", "符号", "■"),
     ("mark-square-o", "空心方块", "符号", "□"),
-    ("mark-triangle", "右三角", "符号", "▶"),
-    ("mark-triangle-d", "下三角", "符号", "▼"),
+    ("mark-tri-up", "上三角", "符号", "▲"),
+    ("mark-tri-down", "下三角", "符号", "▼"),
+    ("mark-tri-right", "右三角", "符号", "▶"),
+    ("mark-tri-left", "左三角", "符号", "◀"),
     ("mark-star", "实心星", "符号", "★"),
     ("mark-star-o", "空心星", "符号", "☆"),
+    ("mark-star4", "四角星", "符号", "✦"),
     ("mark-flower", "六角花", "符号", "❖"),
+    ("mark-ref", "参考星", "符号", "※"),
     ("mark-check", "对勾", "符号", "✓"),
     ("mark-cross", "叉号", "符号", "✕"),
-    ("mark-arrow", "右箭头", "符号", "➤"),
-    ("mark-quote-l", "左引号", "符号", "❝"),
-    ("mark-quote-r", "右引号", "符号", "❞"),
-    # 分隔 (decorative dividers)
-    ("deco-dots", "圆点分隔", "装饰", "· · · · · · · · · ·"),
-    ("deco-wave", "波浪分隔", "装饰", "〜〜〜〜〜〜〜〜〜〜"),
-    ("deco-stars", "三星分隔", "装饰", "✦ ✦ ✦"),
-    ("deco-diamond", "菱形分隔", "装饰", "◆ ◇ ◆ ◇ ◆"),
-    ("deco-square", "方块分隔", "装饰", "■ □ ■ □ ■"),
-    ("deco-line", "细线分隔", "装饰", "———————————"),
-    ("deco-bracket", "书名号分隔", "装饰", "《 ※ 》"),
-    ("deco-flower", "花饰分隔", "装饰", "❖ ❖ ❖"),
+    # 圆圈数字 — numbered badges
+    ("num-1", "①", "圆圈数字", "①"),
+    ("num-2", "②", "圆圈数字", "②"),
+    ("num-3", "③", "圆圈数字", "③"),
+    ("num-4", "④", "圆圈数字", "④"),
+    ("num-5", "⑤", "圆圈数字", "⑤"),
+    ("num-6", "⑥", "圆圈数字", "⑥"),
+    ("num-7", "⑦", "圆圈数字", "⑦"),
+    ("num-8", "⑧", "圆圈数字", "⑧"),
+    ("num-9", "⑨", "圆圈数字", "⑨"),
+    ("num-10", "⑩", "圆圈数字", "⑩"),
+    # 箭头 — arrows
+    ("arr-r", "右箭头", "箭头", "→"),
+    ("arr-l", "左箭头", "箭头", "←"),
+    ("arr-up", "上箭头", "箭头", "↑"),
+    ("arr-down", "下箭头", "箭头", "↓"),
+    ("arr-dbl-r", "双线右箭头", "箭头", "⇒"),
+    ("arr-tri", "三角箭头", "箭头", "➤"),
+    ("arr-thick", "粗右箭头", "箭头", "➔"),
+    # 括号 / 引号 — brackets & quotes
+    ("br-lenticular", "方头括号", "括号引号", "【】"),
+    ("br-tortoise", "六角括号", "括号引号", "〖〗"),
+    ("br-corner", "直角引号", "括号引号", "「」"),
+    ("br-corner-d", "双直角引号", "括号引号", "『』"),
+    ("br-title", "书名号", "括号引号", "《》"),
+    ("q-curly-l", "花体左引号", "括号引号", "❝"),
+    ("q-curly-r", "花体右引号", "括号引号", "❞"),
+    ("q-double", "中文双引号", "括号引号", "“”"),
+    # 分隔线 — decorative dividers
+    ("deco-dots", "圆点分隔", "分隔线", "· · · · · · · · · ·"),
+    ("deco-wave", "波浪分隔", "分隔线", "〜〜〜〜〜〜〜〜〜〜"),
+    ("deco-stars", "三星分隔", "分隔线", "✦ ✦ ✦"),
+    ("deco-flower", "花饰分隔", "分隔线", "❖ ❖ ❖"),
+    ("deco-diamond", "菱形分隔", "分隔线", "◆ ◇ ◆ ◇ ◆"),
+    ("deco-square", "方块分隔", "分隔线", "■ □ ■ □ ■"),
+    ("deco-mix", "点星分隔", "分隔线", "· ✦ · ✦ · ✦ ·"),
+    ("deco-dashline", "点划分隔", "分隔线", "— · — · — · —"),
+    ("deco-line", "细实线", "分隔线", "———————————"),
+    ("deco-bracket", "书名号分隔", "分隔线", "《 ※ 》"),
 ]
 
 
