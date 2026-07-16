@@ -51,10 +51,17 @@ pip install -q -r requirements.txt 2>/dev/null
 echo "[OK] Python dependencies"
 
 # ── 4. Build React SPA (always rebuild) ──
+# On Windows Git Bash the bundled `npm` bash shim prints a harmless
+# "line 14: [: =: unary operator expected" (its `uname` test); use npm.cmd
+# there to bypass the shim entirely.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) NPM="npm.cmd" ;;
+  *)                    NPM="npm" ;;
+esac
 echo "[..] Building frontend..."
 cd frontend
-npm install --silent
-npm run build
+"$NPM" install --silent
+"$NPM" run build
 cd ..
 echo "[OK] Frontend built"
 
