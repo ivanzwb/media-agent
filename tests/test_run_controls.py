@@ -21,12 +21,15 @@ def art(title, days_old=None, url=None):
                    fetched_at=datetime.now(timezone.utc))
 
 
-def test_filter_by_age_drops_old_keeps_recent_and_none():
+def test_filter_by_age_drops_old_and_undated_when_max_age_set():
+    # New recency semantics: when max_age_days is set, undated articles are
+    # dropped alongside too-old ones (they carry no publish date, so they
+    # cannot be proven recent — this is what filters out crawler junk).
     items = [art("recent", days_old=1), art("old", days_old=40),
              art("undated", days_old=None)]
     out = filter_by_age(items, max_age_days=7)
     titles = {a.title for a in out}
-    assert titles == {"recent", "undated"}
+    assert titles == {"recent"}
 
 
 def test_filter_by_age_none_returns_all():

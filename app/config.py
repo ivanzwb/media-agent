@@ -59,6 +59,7 @@ class Config:
     rewrite_style: str | None = None     # default rewrite style id (see app.pipeline.styles)
     download_images: bool = True          # download article images to local
     download_videos: bool = True          # download article videos to local
+    relevance_filter: bool = True         # LLM gate: keep only news/industry/research articles
     cli_tool: str | None = None          # "auto" | "opencode" | "codex" | "copilot" | "none"
     rewrite_priority: str = "agent"      # "agent" | "llm" — which backend wins when both are set
     cli_timeout: int = 500               # CLI agent timeout in seconds
@@ -131,6 +132,7 @@ class Config:
             rewrite_style=os.environ.get("MEDIA_AGENT_REWRITE_STYLE"),
             download_images=os.environ.get("MEDIA_AGENT_DOWNLOAD_IMAGES", "1") not in ("0", "false", "no"),
             download_videos=os.environ.get("MEDIA_AGENT_DOWNLOAD_VIDEOS", "1") not in ("0", "false", "no"),
+            relevance_filter=os.environ.get("MEDIA_AGENT_RELEVANCE_FILTER", "1") not in ("0", "false", "no"),
             cli_tool=os.environ.get("MEDIA_AGENT_CLI_TOOL", "none"),
             rewrite_priority=os.environ.get("MEDIA_AGENT_REWRITE_PRIORITY", "agent"),
             cli_timeout=_int_env("MEDIA_AGENT_CLI_TIMEOUT") or 500,
@@ -205,6 +207,9 @@ class Config:
         dv = store.get_setting("download_videos")
         if dv is not None:
             self.download_videos = dv.strip() not in ("0", "false", "no", "")
+        rf = store.get_setting("relevance_filter")
+        if rf is not None:
+            self.relevance_filter = rf.strip() not in ("0", "false", "no", "")
 
     def ensure_dirs(self) -> None:
         for d in (self.archive_dir, self.drafts_dir, self.images_dir,

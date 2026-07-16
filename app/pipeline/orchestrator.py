@@ -19,6 +19,7 @@ from app.store import Store
 from app.pipeline.classifier import classify
 from app.pipeline.images import attach_cover, inject_image_prompt
 from app.pipeline.localize import localize_article
+from app.pipeline.relevance import filter_relevant
 from app.pipeline.rewriter import rewrite
 from app.pipeline.sanitizer import load_words, sanitize_draft
 from app.pipeline.score import compute_draft_score
@@ -95,13 +96,36 @@ def collect_sources(feeds: FeedsConfig,
 
 
 def filter_by_age(articles: list[Article], max_age_days: int | None,
-                  now: datetime | None = None) -> list[Article]:
+                  now: datetime | None = None, progress=None) -> list[Article]:
+    """Enforce recency using *max_age_days*.
+
+    When *max_age_days* is set (truthy), keep ONLY articles that HAVE a
+    ``published_at`` AND fall within the window — undated articles and
+    older-than-cutoff articles are BOTH dropped. This is deliberate: the vast
+    majority of scraped junk (homepages, /about, marketing pages) carries no
+    publish date, so keeping undated items defeats the recency requirement.
+
+    When *max_age_days* is falsy/None, no filtering happens (all kept).
+    """
     if not max_age_days:
         return articles
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(days=max_age_days)
-    return [a for a in articles
-            if a.published_at is None or a.published_at >= cutoff]
+    kept: list[Article] = []
+    dropped_no_date = 0
+    dropped_too_old = 0
+    for a in articles:
+        if a.published_at is None:
+            dropped_no_date += 1
+        elif a.published_at < cutoff:
+            dropped_too_old += 1
+        else:
+            kept.append(a)
+    if (dropped_no_date or dropped_too_old) and progress:
+        progress(f"  时效过滤：丢弃无日期 {dropped_no_date} 篇、"
+                 f"超过 {max_age_days} 天 {dropped_too_old} 篇，"
+                 f"保留 {len(kept)} 篇")
+    return kept
 
 
 def _apply_promotion_footer(draft: Draft, config) -> None:
@@ -141,6 +165,7 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
                  max_per_source: int | None = None,
                  download_images: bool = True,
                  download_videos: bool = True,
+                 relevance_filter: bool = False,
                  progress=None,
                  rewrite_gate=None,
                  style=None) -> dict:
@@ -156,8 +181,13 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
                                    workers=store.config.workers,
                                    proxy=store.config.fetch_proxy)
         emit(f"抓取完成，共 {len(articles)} 篇，去重中…", stats)
-        articles = filter_by_age(articles, max_age_days)
+        articles = filter_by_age(articles, max_age_days,
+                                 progress=lambda m: emit(m, stats))
         articles = dedup(articles)
+        if relevance_filter:
+            emit(f"去重后 {len(articles)} 篇，AI 相关性过滤中…", stats)
+            articles = filter_relevant(articles, provider, enabled=True,
+                                       progress=lambda m: emit(m, stats))
         stats["fetched"] = len(articles)
         emit(f"去重后 {len(articles)} 篇，开始归档分类…", stats)
 

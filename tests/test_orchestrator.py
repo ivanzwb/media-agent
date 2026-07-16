@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import ANY, patch
 
 import httpx
@@ -10,7 +10,39 @@ from app.store import Store
 from app.models import Article
 from app.feeds import FeedsConfig, Topic, SourceConfig
 from app.llm.providers.mock import MockProvider
-from app.pipeline.orchestrator import run_pipeline
+from app.pipeline.orchestrator import run_pipeline, filter_by_age
+
+
+def _article(published_at):
+    return Article(title="t", content_md="body", url=f"https://x.com/{id(published_at)}",
+                   source_name="X", source_type="rss", published_at=published_at,
+                   images=[], raw_summary=None,
+                   fetched_at=datetime.now(timezone.utc))
+
+
+def test_filter_by_age_drops_undated_when_max_age_set():
+    now = datetime.now(timezone.utc)
+    recent = _article(now - timedelta(days=1))
+    old = _article(now - timedelta(days=40))
+    undated = _article(None)
+    kept = filter_by_age([recent, old, undated], 7, now=now)
+    assert kept == [recent]
+
+
+def test_filter_by_age_keeps_undated_when_max_age_none():
+    now = datetime.now(timezone.utc)
+    recent = _article(now - timedelta(days=1))
+    undated = _article(None)
+    kept = filter_by_age([recent, undated], None, now=now)
+    assert kept == [recent, undated]
+
+
+def test_filter_by_age_drops_old_keeps_recent():
+    now = datetime.now(timezone.utc)
+    recent = _article(now - timedelta(days=2))
+    old = _article(now - timedelta(days=10))
+    kept = filter_by_age([recent, old], 7, now=now)
+    assert kept == [recent]
 
 
 def build(tmp_path):

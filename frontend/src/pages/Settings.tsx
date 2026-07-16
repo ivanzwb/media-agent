@@ -37,7 +37,7 @@ export default function Settings() {
       const v = await form.getFieldsValue();
       const keyFields = ["llm_api_key", "image_api_key", "tts_api_key", "wechat_appsecret"];
       const payload: Record<string, any> = {};
-      const boolFields = ["schedule_enabled", "download_images", "download_videos"];
+      const boolFields = ["schedule_enabled", "download_images", "download_videos", "relevance_filter"];
       for (const [k, val] of Object.entries(v)) {
         if (keyFields.includes(k)) { if (val) payload[k] = val; continue; }
         if (boolFields.includes(k)) { payload[k] = val ? "1" : "0"; continue; }
@@ -70,6 +70,7 @@ export default function Settings() {
         wechat_appid: data.wechat_appid, wechat_author: data.wechat_author,
         rewrite_style: data.rewrite_style,
         download_images: data.download_images, download_videos: data.download_videos,
+        relevance_filter: data.relevance_filter,
         schedule_cron: data.schedule_cron, schedule_enabled: data.schedule_enabled,
         llm_api_key: "", image_api_key: "", tts_api_key: "", wechat_appsecret: "",
       }}>
@@ -159,6 +160,10 @@ export default function Settings() {
                 <Card title="采集" size="small" style={{ marginBottom: 16 }}>
                   <Form.Item name="max_age_days" label="最大天数（留空不限）"><Input /></Form.Item>
                   <Form.Item name="max_per_source" label="每来源最多抓取（留空不限）"><Input /></Form.Item>
+                  <Form.Item name="relevance_filter" label="AI 相关性过滤（只保留新闻/行业动态/研究文章）" valuePropName="checked"
+                    tooltip="抓取后用大模型判断每条内容是否为真正的新闻/行业动态/研究文章，丢弃公司主页、关于我们、产品/营销落地页、招聘、导航/列表页等非文章内容（MEDIA_AGENT_RELEVANCE_FILTER）">
+                    <Switch />
+                  </Form.Item>
                   <Form.Item name="download_workers" label={`并发下载数（默认 ${data.default_workers}）`}><Input /></Form.Item>
                   <Form.Item name="download_images" label="本地化图片" valuePropName="checked"
                     tooltip="归档时把文章图片下载到本地，避免防盗链失效；关闭则保留远程 URL（MEDIA_AGENT_DOWNLOAD_IMAGES）">

@@ -293,6 +293,7 @@ def create_app(config: Config | None = None,
             max_per_source=run_config.max_per_source,
             download_images=run_config.download_images,
             download_videos=run_config.download_videos,
+            relevance_filter=run_config.relevance_filter,
             progress=progress,
             rewrite_gate=_rewrite_gate, style=style)
 
@@ -3050,6 +3051,7 @@ def create_app(config: Config | None = None,
             "rewrite_priority": _get("rewrite_priority") or config.rewrite_priority,
             "download_images": (store.get_setting("download_images") or "1") not in ("0", "false", "no", ""),
             "download_videos": (store.get_setting("download_videos") or "1") not in ("0", "false", "no", ""),
+            "relevance_filter": (store.get_setting("relevance_filter") or "1") not in ("0", "false", "no", ""),
             "wechat_appid": _get("wechat_appid") or (config.wechat_appid or ""),
             "wechat_author": _get("wechat_author") or (config.wechat_author or ""),
             "schedule_cron": store.get_setting("schedule_cron", ""),
@@ -3091,6 +3093,7 @@ def create_app(config: Config | None = None,
                        wechat_author: str = Form(""),
                        download_images: str = Form("0"),
                        download_videos: str = Form("0"),
+                       relevance_filter: str = Form("0"),
                         cli_tool: str = Form(""),
                         rewrite_priority: str = Form(""),
                         rewrite_style: str = Form(""),
@@ -3185,6 +3188,8 @@ def create_app(config: Config | None = None,
                           "1" if download_images in ("1", "on", "true") else "0")
         store.set_setting("download_videos",
                           "1" if download_videos in ("1", "on", "true") else "0")
+        store.set_setting("relevance_filter",
+                          "1" if relevance_filter in ("1", "on", "true") else "0")
 
         # Default rewrite style: validate against the registry; empty or the
         # builtin default clears the setting (falls back to deep-tech).
