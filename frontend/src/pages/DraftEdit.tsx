@@ -163,6 +163,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   const colorRef = useRef("#e67514");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
+  const [tplOpen, setTplOpen] = useState(false);
   const [rewriting, setRewriting] = useLocalState<boolean>(`draftedit-rewriting-${data.id}`, false);
   const [rewriteStyle, setRewriteStyle] = useState("");
   const [platform, setPlatform] = useState("");
@@ -471,13 +472,31 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
       execute: (s, api) => api.replaceSelection(
         `\n::::columns\n:::col\n${s.selectedText || "左栏内容"}\n:::\n:::col\n右栏内容\n:::\n::::\n\n`) },
   ];
-  const templateGroup: ICommand = commands.group(
-    (tplData?.templates || []).map((t) => ({
-      name: t.id, keyCommand: t.id, buttonProps: { title: t.name }, icon: label(t.name),
-      execute: (_s: any, api: any) => api.replaceSelection(`\n${t.markdown}\n`),
-    })),
-    { name: "template", groupName: "template", buttonProps: { title: "套用模板" }, icon: label("套用模板 ▾") },
-  );
+  // Apply a template to the article: put the existing body into the template's
+  // main content slot (so 点击模板 = 把文章内容套用上模板), preserving the
+  // template's title/structure/footer for the user to fill. Undoable via commit.
+  function applyTemplate(t: any) {
+    const tpl = String(t.markdown || "");
+    const content = body.trim();
+    let next: string;
+    if (!content) {
+      next = tpl;
+    } else {
+      // first "body-like" placeholder → the article content goes there
+      const slot = /\{[^}]*(?:正文|段落|内容|钩子|开场|导语|简介|说明|背景|详情)[^}]*\}/;
+      next = slot.test(tpl) ? tpl.replace(slot, content) : (tpl.trimEnd() + "\n\n" + content + "\n");
+    }
+    commit(next);
+    setTplOpen(false);
+    refocusEditor();
+    message.success(`已套用模板：${t.name}`);
+  }
+  const templateCommand: ICommand = {
+    name: "template", keyCommand: "template",
+    buttonProps: { title: "套用模板（可视化预览，点击把正文套入模板）" },
+    icon: label("套用模板 ▾"),
+    execute: () => setTplOpen(true),
+  };
   const panelCommand: ICommand = {
     name: "panel", keyCommand: "panel", buttonProps: { title: "组件面板" }, icon: label("组件面板 ▸"),
     execute: () => setDrawerOpen(true),
@@ -537,7 +556,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   };
   const editorCommands: ICommand[] = [
     ...commands.getCommands(), commands.divider,
-    ...styleCommands, styleParamCommand, commands.divider, localizeCommand, commands.divider, templateGroup, panelCommand,
+    ...styleCommands, styleParamCommand, commands.divider, localizeCommand, commands.divider, templateCommand, panelCommand,
   ];
 
   return (
@@ -616,6 +635,8 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
         </Col>
       </Row>
 
+      <TemplateGallery open={tplOpen} onClose={() => setTplOpen(false)}
+        templates={tplData?.templates || []} hasContent={!!body.trim()} onApply={applyTemplate} />
       <ComponentDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onInsert={insertAtCursor} getSelection={getSelection} />
       <AgentModal open={agentOpen} draftId={data.id} onClose={() => setAgentOpen(false)}
         onApplied={(md) => { commit(md); setAgentOpen(false); }} />
@@ -653,6 +674,45 @@ function ComponentThumb({ markdown }: { markdown: string }) {
           style={{ background: "transparent", fontSize: 13, lineHeight: 1.5 }} />
       </div>
     </div>
+  );
+}
+
+// WYSIWYG template picker: renders each full-article template as a scaled-down
+// preview card so the user sees the 模板样子 before applying. Clicking a card
+// applies the template to the article (fills content into it).
+function TemplateGallery({ open, onClose, templates, hasContent, onApply }: {
+  open: boolean; onClose: () => void; templates: any[]; hasContent: boolean;
+  onApply: (t: any) => void;
+}) {
+  return (
+    <Modal open={open} onCancel={onClose} footer={null} width={760} zIndex={100001}
+      title="套用模板" styles={{ body: { maxHeight: "72vh", overflow: "auto" } }}>
+      <Text type="secondary" style={{ fontSize: 12 }}>
+        {hasContent
+          ? "点击模板：把当前正文套入所选模板（保留模板标题/结构，可 Ctrl+Z 撤销）。"
+          : "点击模板：以该模板作为正文起稿（可 Ctrl+Z 撤销）。"}
+      </Text>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
+        {templates.map((t) => (
+          <div key={t.id} className="ma-comp-card" role="button" title={`套用：${t.name}`}
+            onClick={() => onApply(t)}
+            style={{ border: "1px solid #eaeaea", borderRadius: 8, overflow: "hidden",
+              cursor: "pointer", background: "#fff" }}>
+            <div className="ma-comp-thumb" data-color-mode="light"
+              style={{ height: 220, overflow: "hidden", pointerEvents: "none",
+                background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
+              <div style={{ transform: "scale(0.6)", transformOrigin: "top left",
+                width: `${100 / 0.6}%`, padding: "8px 12px", boxSizing: "border-box" }}>
+                <MDEditor.Markdown source={t.markdown} remarkPlugins={[remarkAppDirectives]}
+                  components={previewComponents}
+                  style={{ background: "transparent", fontSize: 13, lineHeight: 1.5 }} />
+              </div>
+            </div>
+            <div style={{ padding: "6px 10px", fontSize: 13, fontWeight: 600, color: "#333" }}>{t.name}</div>
+          </div>
+        ))}
+      </div>
+    </Modal>
   );
 }
 
