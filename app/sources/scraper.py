@@ -7,12 +7,18 @@ from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
 import httpx
+from trafilatura.settings import use_config
+from trafilatura.spider import focused_crawler
 
 from app.models import Article
 from app.sources import feed_discovery
 from app.sources.extractor import extract_from_html
 
 logger = logging.getLogger(__name__)
+
+# How many pages focused_crawler fetches per iterative call (small batches let
+# us re-check the overall time budget between calls).
+_CRAWL_BATCH = 5
 
 _UA_STR = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
            "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -182,6 +188,28 @@ def _is_non_article(absolute: str) -> bool:
     return False
 
 
+def _accept_link(absolute: str, base_host: str,
+                 include_pattern: str | None,
+                 exclude_pattern: str | None) -> bool:
+    """Shared accept gate for a candidate article URL.
+
+    A URL is accepted when it is same-host, matches the (optional) include
+    substring, does NOT match the (optional) exclude substring, and is not
+    rejected by the ``_is_non_article`` URL heuristic.  Used by both the
+    1-level ``discover_links`` scraper and the deep ``crawl_site_links``
+    crawler so both apply identical (unloosened) filters.
+    """
+    if urlparse(absolute).netloc != base_host:
+        return False
+    if include_pattern and include_pattern not in absolute:
+        return False
+    if exclude_pattern and exclude_pattern in absolute:
+        return False
+    if _is_non_article(absolute):
+        return False
+    return True
+
+
 def discover_links(html: str, base_url: str,
                    include_pattern: str | None = None,
                    exclude_pattern: str | None = None) -> list[str]:
@@ -195,20 +223,109 @@ def discover_links(html: str, base_url: str,
                                         "tel:", "data:")):
             continue
         absolute = urljoin(base_url, href)
-        if urlparse(absolute).netloc != base_host:
-            continue
-        if include_pattern and include_pattern not in absolute:
-            continue
-        if exclude_pattern and exclude_pattern in absolute:
-            continue
-        if _is_non_article(absolute):
-            logger.debug("discover_links: skip non-article url %s", absolute)
+        if not _accept_link(absolute, base_host, include_pattern,
+                            exclude_pattern):
+            logger.debug("discover_links: skip url %s", absolute)
             continue
         # Normalize: strip trailing slash so /path/ and /path are identical
         absolute = absolute.rstrip("/")
         if absolute not in seen:
             seen.add(absolute)
             out.append(absolute)
+    return out
+
+
+def crawl_site_links(base_url: str, *,
+                     include_pattern: str | None = None,
+                     exclude_pattern: str | None = None,
+                     max_pages: int = 3, delay: float = 1.0,
+                     timeout: float = 20.0,
+                     proxy: str | None = None) -> list[str]:
+    """Deep-crawl an entire site starting from ``base_url`` and return a
+    deduped, normalized list of probable article URLs (multi-level).
+
+    Uses trafilatura's ``focused_crawler`` (breadth-first, same-host, static
+    fetch) iteratively — feeding ``todo``/``known_links`` back into each call
+    — until the crawl frontier is empty, the page-fetch budget is spent, or an
+    overall time budget elapses.  The accumulated ``known_links`` are then
+    filtered down to article candidates with the SAME gates as
+    ``discover_links`` (``include_pattern``/``exclude_pattern`` +
+    ``_is_non_article``); the filters are NOT loosened here.
+
+    Budgets are derived from ``max_pages`` (which historically meant the number
+    of pagination pages to follow, and now caps how many pages the crawler
+    FETCHES for link discovery):
+
+      * page budget   = ``max(max_pages * 10, 30)`` pages fetched
+      * known-URL cap = ``max(page_budget * 50, 2000)`` on-site URLs
+      * time budget   = ``page_budget * (delay + 3)`` s, clamped to [45, 240]
+
+    Politeness: ``delay`` is passed to the crawler as ``SLEEP_TIME`` (honoured
+    between fetches, unless robots.txt specifies a larger crawl-delay).
+
+    PROXY LIMITATION: trafilatura's downloader only honours a proxy via the
+    ``http_proxy`` environment variable (SOCKS proxy manager), read once at
+    import time — it cannot use our per-request ``proxy`` argument.  We
+    therefore do NOT apply ``proxy`` to the crawl phase (only log it).  If a
+    site is reachable solely through the proxy, the crawler simply finds
+    nothing and ``scrape_list`` falls back to the proxy-aware 1-level /
+    RSS / sitemap discovery paths.  Per-article extraction (``scrape_single``
+    → ``_fetch_html``) still uses ``proxy`` normally.
+    """
+    if proxy:
+        logger.debug("crawl_site_links: proxy %s is not applied to the "
+                     "focused crawler (trafilatura limitation); per-article "
+                     "extraction and fallbacks still use it.", proxy)
+
+    crawl_start = base_url.rstrip("/") or base_url
+    base_host = urlparse(crawl_start).netloc
+    source_norm = crawl_start
+
+    max_pages = max(1, max_pages)
+    page_budget = max(max_pages * 10, 30)
+    known_cap = max(page_budget * 50, 2000)
+    time_budget = min(max(page_budget * (max(delay, 0.0) + 3.0), 45.0), 240.0)
+
+    cfg = use_config()
+    cfg.set("DEFAULT", "SLEEP_TIME", str(max(delay, 0.0)))
+    cfg.set("DEFAULT", "DOWNLOAD_TIMEOUT", str(max(1, int(timeout))))
+    cfg.set("DEFAULT", "USER_AGENTS", _UA_STR)
+
+    todo: list[str] | None = None
+    known: list[str] | None = None
+    seen_pages = 0
+    deadline = time.monotonic() + time_budget
+
+    try:
+        while seen_pages < page_budget and time.monotonic() < deadline:
+            batch = min(_CRAWL_BATCH, page_budget - seen_pages)
+            todo, known = focused_crawler(
+                crawl_start, max_seen_urls=batch, max_known_urls=known_cap,
+                todo=todo, known_links=known, config=cfg)
+            seen_pages += batch
+            if not todo:
+                break  # frontier exhausted — whole site crawled
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("crawl_site_links: focused_crawler failed for %s: %s",
+                       crawl_start, exc)
+
+    known = known or []
+    out: list[str] = []
+    seen_urls: set[str] = set()
+    for link in known:
+        if not link:
+            continue
+        if not _accept_link(link, base_host, include_pattern, exclude_pattern):
+            continue
+        norm = link.rstrip("/")
+        if norm == source_norm or norm in seen_urls:
+            continue
+        seen_urls.add(norm)
+        out.append(norm)
+
+    logger.info("crawl_site_links: %s → %d known, %d article candidates "
+                "(fetched ~%d pages)", crawl_start, len(known), len(out),
+                seen_pages)
     return out
 
 
@@ -512,14 +629,22 @@ def scrape_single(url: str, source_name: str, timeout: float = 20.0,
     )
 
 
-def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
-                exclude_pattern: str | None = None,
-                max_articles: int = 10, delay: float = 1.0,
-                max_pages: int = 3, render_js: bool = True,
-                timeout: float = 20.0,
-                proxy: str | None = None) -> list[Article]:
-    # Discover article links across the list page and (optionally) its
-    # paginated siblings, then scrape each discovered article.
+def _discover_one_level(url: str, include_pattern: str | None,
+                        exclude_pattern: str | None, max_pages: int,
+                        render_js: bool, timeout: float,
+                        proxy: str | None) -> tuple[list[str], str]:
+    """1-level article discovery: fetch the list page (+ its ``?page=N`` /
+    ``/page/N`` paginated siblings, up to ``max_pages``) via ``_fetch_html``
+    and scrape same-host article links from each.
+
+    This is the pre-deep-crawl behaviour, retained as an SPA fallback: the
+    deep crawler (``focused_crawler``) is static-fetch only, so a JS-rendered
+    list page can yield nothing there but still resolve here because
+    ``_fetch_html(render_js=True)`` renders it with Playwright.
+
+    Returns ``(article_links, seed_html)`` where ``seed_html`` is the raw HTML
+    of the landing page (used by the RSS/sitemap fallback for feed autodiscovery).
+    """
     article_links: list[str] = []
     seen_links: set[str] = set()
     visited_pages: set[str] = set()
@@ -557,17 +682,66 @@ def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
             for nxt in _pagination_links(html, page_url):
                 if nxt not in visited_pages and nxt not in queue:
                     queue.append(nxt)
+    return article_links, seed_html
 
-    # Fallback discovery: HTML link scraping found nothing (e.g. JS-rendered
-    # list page that even rendering missed) — try RSS/Atom + sitemap.
+
+def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
+                exclude_pattern: str | None = None,
+                max_articles: int = 10, delay: float = 1.0,
+                max_pages: int = 3, render_js: bool = True,
+                timeout: float = 20.0,
+                proxy: str | None = None) -> list[Article]:
+    """Deep-crawl the site at *url* to discover article pages across multiple
+    levels, then extract each candidate into an :class:`Article`.
+
+    Discovery order (first non-empty result wins):
+      ① Deep crawl — ``crawl_site_links`` drives trafilatura's
+         ``focused_crawler`` breadth-first over the whole host (multi-level),
+         bounded by budgets derived from ``max_pages``.
+      ② SPA fallback — ``_discover_one_level`` (Playwright-rendered landing
+         page + pagination), for JS-only sites the static crawler can't read.
+      ③ Feed/sitemap fallback — ``_discover_via_feeds_and_sitemap``.
+
+    Each candidate is then fetched via ``scrape_single`` (which keeps the
+    Playwright JS-render fallback + ``_is_article_content`` quality gate),
+    capped at ``max_articles`` and separated by ``delay`` seconds.
+    """
+    source_normalized = url.rstrip("/")
+    seed_html = ""
+
+    # ① Deep, multi-level crawl of the whole site.
+    try:
+        article_links = crawl_site_links(
+            url, include_pattern=include_pattern,
+            exclude_pattern=exclude_pattern, max_pages=max_pages,
+            delay=delay, timeout=timeout, proxy=proxy)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("scrape_list: deep crawl failed for %s: %s", url, exc)
+        article_links = []
+
+    # ② SPA fallback: static crawler found nothing (JS-rendered list page).
+    if not article_links:
+        article_links, seed_html = _discover_one_level(
+            url, include_pattern, exclude_pattern, max_pages, render_js,
+            timeout, proxy)
+
+    # ③ RSS/Atom + sitemap fallback: link discovery found nothing at all.
     if not article_links:
         for link in _discover_via_feeds_and_sitemap(
                 url, seed_html, include_pattern, exclude_pattern,
                 timeout=timeout, proxy=proxy):
-            if link in seen_links or link.rstrip("/") == source_normalized:
-                continue
-            seen_links.add(link)
             article_links.append(link)
+
+    # Dedupe (normalized) while preserving discovery order.
+    deduped: list[str] = []
+    seen_links: set[str] = set()
+    for link in article_links:
+        norm = link.rstrip("/")
+        if norm == source_normalized or norm in seen_links:
+            continue
+        seen_links.add(norm)
+        deduped.append(link)
+    article_links = deduped
 
     articles: list[Article] = []
     for link in article_links[:max_articles]:

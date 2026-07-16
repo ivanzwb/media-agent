@@ -149,15 +149,7 @@ def test_pagination_links_detected():
     assert all("some-article" not in p for p in pages)
 
 
-def test_scrape_list_follows_pagination(monkeypatch):
-    pages = {
-        "https://x.com/research": (
-            "<a href='/research/a'>a</a><a href='/research?page=2'>next</a>"),
-        "https://x.com/research?page=2": "<a href='/research/b'>b</a>",
-    }
-    monkeypatch.setattr("app.sources.scraper._fetch_html",
-                        lambda url, **k: pages.get(url, ""))
-
+def _fake_single_factory():
     from app.models import Article
     from datetime import datetime, timezone
 
@@ -166,7 +158,89 @@ def test_scrape_list_follows_pagination(monkeypatch):
                        source_name=source_name, source_type="scrape",
                        published_at=None, images=[], raw_summary=None,
                        fetched_at=datetime.now(timezone.utc))
-    monkeypatch.setattr("app.sources.scraper.scrape_single", fake_single)
+    return fake_single
+
+
+def test_crawl_site_links_deep_multilevel(monkeypatch):
+    """crawl_site_links keeps article URLs found anywhere in the crawl and
+    drops non-article URLs, using the same filters as discover_links."""
+    from app.sources.scraper import crawl_site_links
+
+    known = [
+        "https://x.com/",                       # homepage — dropped (bare)
+        "https://x.com/news",                   # index — dropped (terminal)
+        "https://x.com/news/gpt-5-mystery",     # article — kept
+        "https://x.com/blog/ai/deep-post",      # deep article — kept (level 3)
+        "https://x.com/about",                  # soft denylist — dropped
+        "https://x.com/legal/terms-of-use",     # hard denylist — dropped
+        "https://x.com/files/report.pdf",       # asset — dropped
+        "https://other.com/x/y-story",          # off-host — dropped
+    ]
+
+    def fake_crawler(homepage, **k):
+        # Simulate: frontier exhausted, all URLs discovered across levels.
+        return [], known
+    monkeypatch.setattr("app.sources.scraper.focused_crawler", fake_crawler)
+
+    links = crawl_site_links("https://x.com/news", max_pages=3, delay=0)
+    # Deep articles found at any crawl level are kept; the same _is_non_article
+    # gate as discover_links drops indexes / denylisted / off-host / assets.
+    assert set(links) == {
+        "https://x.com/news/gpt-5-mystery",
+        "https://x.com/blog/ai/deep-post",
+    }
+    for junk in ("https://x.com", "https://x.com/news", "https://x.com/about",
+                 "https://x.com/legal/terms-of-use",
+                 "https://x.com/files/report.pdf",
+                 "https://other.com/x/y-story"):
+        assert junk not in links, junk
+
+
+def test_crawl_site_links_respects_include_exclude(monkeypatch):
+    from app.sources.scraper import crawl_site_links
+    known = [
+        "https://x.com/news/keep-this-one",
+        "https://x.com/news/skip-this-one",
+        "https://x.com/press/keep-that-one",
+    ]
+    monkeypatch.setattr("app.sources.scraper.focused_crawler",
+                        lambda homepage, **k: ([], known))
+
+    links = crawl_site_links("https://x.com/news", include_pattern="/news/",
+                             exclude_pattern="skip", max_pages=1, delay=0)
+    assert links == ["https://x.com/news/keep-this-one"]
+
+
+def test_scrape_list_uses_deep_crawl(monkeypatch):
+    """scrape_list extracts every URL the deep crawler discovers, honouring
+    max_articles."""
+    discovered = ["https://x.com/news/a", "https://x.com/news/b",
+                  "https://x.com/blog/team/c"]
+    monkeypatch.setattr("app.sources.scraper.crawl_site_links",
+                        lambda base_url, **k: list(discovered))
+    monkeypatch.setattr("app.sources.scraper.scrape_single",
+                        _fake_single_factory())
+
+    arts = scrape_list("https://x.com", "X", max_articles=2, delay=0)
+    urls = [a.url for a in arts]
+    assert urls == discovered[:2]  # capped at max_articles, order preserved
+
+
+def test_scrape_list_spa_fallback_pagination(monkeypatch):
+    """When the deep crawler finds nothing (JS-only list page), scrape_list
+    falls back to the 1-level Playwright discover path incl. pagination."""
+    pages = {
+        "https://x.com/research": (
+            "<a href='/research/a'>a</a><a href='/research?page=2'>next</a>"),
+        "https://x.com/research?page=2": "<a href='/research/b'>b</a>",
+    }
+    # Deep crawler returns nothing → exercise the SPA fallback.
+    monkeypatch.setattr("app.sources.scraper.focused_crawler",
+                        lambda homepage, **k: ([], []))
+    monkeypatch.setattr("app.sources.scraper._fetch_html",
+                        lambda url, **k: pages.get(url, ""))
+    monkeypatch.setattr("app.sources.scraper.scrape_single",
+                        _fake_single_factory())
 
     arts = scrape_list("https://x.com/research", "HAI",
                        max_pages=2, delay=0)
@@ -176,7 +250,7 @@ def test_scrape_list_follows_pagination(monkeypatch):
 
 
 def test_scrape_list_falls_back_to_sitemap(monkeypatch):
-    # List page has NO article links (e.g. JS-rendered) -> fallback to sitemap.
+    # Deep crawl + list page have NO article links -> fallback to sitemap.
     pages = {
         "https://e.com/blog": "<html><body><nav>no article links</nav></body></html>",
         "https://e.com/robots.txt": "Sitemap: https://e.com/sitemap.xml\n",
@@ -186,18 +260,12 @@ def test_scrape_list_falls_back_to_sitemap(monkeypatch):
             "<url><loc>https://e.com/posts/b</loc></url>"
             "</urlset>"),
     }
+    monkeypatch.setattr("app.sources.scraper.focused_crawler",
+                        lambda homepage, **k: ([], []))
     monkeypatch.setattr("app.sources.scraper._fetch_html",
                         lambda url, **k: pages.get(url, ""))
-
-    from app.models import Article
-    from datetime import datetime, timezone
-
-    def fake_single(link, source_name, **k):
-        return Article(title=link, content_md="x", url=link,
-                       source_name=source_name, source_type="scrape",
-                       published_at=None, images=[], raw_summary=None,
-                       fetched_at=datetime.now(timezone.utc))
-    monkeypatch.setattr("app.sources.scraper.scrape_single", fake_single)
+    monkeypatch.setattr("app.sources.scraper.scrape_single",
+                        _fake_single_factory())
 
     arts = scrape_list("https://e.com/blog", "E", max_pages=1, delay=0)
     urls = {a.url for a in arts}
