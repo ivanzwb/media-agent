@@ -4,7 +4,7 @@ import {
   Tag, Typography, Form, InputNumber, Divider, Tooltip,
 } from "antd";
 import { ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, getJson, postForm } from "../api/client";
 import { useLocalState } from "../api/hooks";
 
@@ -47,6 +47,16 @@ export default function Sources() {
   const [groups, setGroups] = useLocalState<{ name: string; keywords: { kw: string; on: boolean }[] }[]>("sources-groups", []);
   const [autoBusy, setAutoBusy] = useLocalState<boolean>("sources-autoBusy", false);
   const [autoProg, setAutoProg] = useLocalState<{ step: number; stepName: string; detail: string; current: number; total: number } | null>("sources-autoProg", null);
+  // A single tracked poll loop. Without this, a stray/ghost interval (e.g. from
+  // a remount or a second start) could fire the completion notification while
+  // leaving the visible progress bar/status stale.
+  const pollHandleRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollingRef = useRef(false);
+  function stopAutoPoll() {
+    if (pollHandleRef.current) { clearInterval(pollHandleRef.current); pollHandleRef.current = null; }
+    pollingRef.current = false;
+  }
+  useEffect(() => () => stopAutoPoll(), []);
 
   // topic discover state: topicName -> {candidates, selected}
   const [discover, setDiscover] = useState<Record<string, { cands: Candidate[]; sel: Set<string>; status: string }>>({});
@@ -146,6 +156,8 @@ export default function Sources() {
   // Fires a desktop notification on every terminal outcome so the user is told
   // even when this tab is in the background.
   function pollAutoDiscover(): Promise<void> {
+    stopAutoPoll();              // guarantee only ONE loop is ever active
+    pollingRef.current = true;
     return new Promise<void>((resolve, reject) => {
       let notStartedCount = 0;
       const NOT_STARTED_LIMIT = 10; // ~6s — if backend hasn't started by then, abort
@@ -155,7 +167,8 @@ export default function Sources() {
       const STALL_LIMIT_MS = 7 * 60 * 1000;
       let lastBeat = 0;
       let lastBeatSeenAt = Date.now();
-      const poll = setInterval(async () => {
+      const finish = (fn: () => void) => { stopAutoPoll(); fn(); };
+      pollHandleRef.current = setInterval(async () => {
         try {
           const r = await getJson<{
             running: boolean; step: number; total_steps: number;
@@ -167,11 +180,10 @@ export default function Sources() {
           }>("/sources/auto-discover/progress");
 
           if (r.error && !r.running) {
-            setRecoStatus("✗ " + r.error);
             setAutoProg(null);
-            clearInterval(poll);
+            setRecoStatus("✗ " + r.error);
             notifyDone("自动发现失败", r.error);
-            reject(new Error(r.error));
+            finish(() => reject(new Error(r.error!)));
             return;
           }
           if (r.running) {
@@ -181,11 +193,10 @@ export default function Sources() {
             if (beat !== lastBeat) { lastBeat = beat; lastBeatSeenAt = Date.now(); }
             else if (Date.now() - lastBeatSeenAt > STALL_LIMIT_MS) {
               const msg = "自动发现卡住了（后端长时间无进展），已中止，请重试";
-              setRecoStatus("✗ " + msg);
               setAutoProg(null);
-              clearInterval(poll);
+              setRecoStatus("✗ " + msg);
               notifyDone("自动发现中止", msg);
-              reject(new Error("自动发现卡住"));
+              finish(() => reject(new Error("自动发现卡住")));
               return;
             }
             const emojis = ["①", "②", "③", "④", "⑤"];
@@ -198,16 +209,15 @@ export default function Sources() {
             notStartedCount++;
             if (notStartedCount >= NOT_STARTED_LIMIT) {
               const msg = "后端未响应，请检查服务是否运行";
-              setRecoStatus("✗ " + msg);
               setAutoProg(null);
-              clearInterval(poll);
+              setRecoStatus("✗ " + msg);
               notifyDone("自动发现失败", msg);
-              reject(new Error("后端未响应"));
+              finish(() => reject(new Error("后端未响应")));
             }
             return;
           } else {
-            // Process finished
-            clearInterval(poll);
+            // Process finished (terminal): always clear the progress bar first.
+            setAutoProg(null);
             let msg: string;
             let ok = true;
             if (r.result) {
@@ -231,18 +241,16 @@ export default function Sources() {
               msg = r.detail || "完成";
               setRecoStatus(`✓ ${msg}`);
             }
-            setAutoProg(null);
             notifyDone(ok ? "自动发现完成" : "自动发现完成（未发现来源）", msg);
-            resolve();
+            finish(resolve);
           }
         } catch {
           // Progress endpoint not ready yet, keep polling
           notStartedCount++;
           if (notStartedCount >= NOT_STARTED_LIMIT) {
-            setRecoStatus("✗ 后端未响应，请检查服务是否运行");
             setAutoProg(null);
-            clearInterval(poll);
-            reject(new Error("后端未响应"));
+            setRecoStatus("✗ 后端未响应，请检查服务是否运行");
+            finish(() => reject(new Error("后端未响应")));
           }
         }
       }, 600);
@@ -251,6 +259,7 @@ export default function Sources() {
 
   // Resume polling an already-running backend run (e.g. after page refresh).
   async function resumeAutoPoll() {
+    if (pollingRef.current) return;   // a poll loop is already active
     try { await pollAutoDiscover(); }
     catch (e: any) { setRecoStatus("✗ " + (e?.message || "流程出错")); setAutoProg(null); }
     finally {
