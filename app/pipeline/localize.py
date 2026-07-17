@@ -182,11 +182,18 @@ def _download_set(urls, dest: Path, folder: str, fn, workers: int,
 def localize_article(article: Article, config: Config, progress=None,
                      download_images: bool = True,
                      download_videos: bool = True,
-                     max_images: int = 20) -> Article:
+                     max_images: int = 20,
+                     relativize: bool = True) -> Article:
     """Download an article's images and videos into data/media/<hash>/ and
     rewrite article.images / article.videos to local web paths
-    (/media/<hash>/<file>). Downloads run concurrently (config.workers).
-    Remote URLs that fail are kept as-is (fallback)."""
+    (/media/<hash>/<file>), AND replace those URLs inside article.content_md so
+    the body references the downloaded files (images AND videos). Downloads run
+    concurrently (config.workers). Remote URLs that fail are kept as-is.
+
+    When *relativize* is True the body uses file-relative paths
+    (``../../media/...``), suitable for archive markdown opened outside the app.
+    When False it keeps absolute ``/media/...`` paths, which the web app serves
+    directly (used by the in-app draft editor so localized media renders)."""
     emit = progress or _noop
     folder = article.fingerprint()[:16]
     dest = config.media_dir / folder
@@ -194,8 +201,9 @@ def localize_article(article: Article, config: Config, progress=None,
     workers = config.workers
 
     imgs = (article.images or [])[:max_images]
-    emit(f"图片 {len(imgs)} 张，视频 {len(article.videos or [])} 个"
-         f"（并发 {workers}）")
+    orig_videos = list(article.videos or [])
+    emit(f"图片 {len(imgs)} 张，视频 {len(orig_videos)} 个（并发 {workers}）")
+
     if download_images:
         article.images = _download_set(imgs, dest, folder, _download_image,
                                         workers, emit,
@@ -203,25 +211,33 @@ def localize_article(article: Article, config: Config, progress=None,
     else:
         emit("  图片本地化已禁用，跳过")
 
-    # Replace remote image URLs in the article body with local paths so
-    # the body's <img> tags and the images front-matter don't duplicate.
-    mapping: dict[str, str] = {}
+    if download_videos and orig_videos:
+        # yt-dlp spawns subprocesses — cap video concurrency lower.
+        vworkers = max(1, min(workers, 2))
+        article.videos = _download_set(orig_videos, dest, folder,
+                                       _download_video, vworkers, emit,
+                                       source_url=article.url)
+    elif not download_videos and orig_videos:
+        emit("  视频本地化已禁用，跳过")
+
+    # Rewrite remote image/video URLs in the body with their local paths so the
+    # body's <img>/<iframe>/links (and the front-matter) reference local files.
     if article.content_md:
+        mapping: dict[str, str] = {}
         for old, new in zip(imgs, article.images):
             if new != old and _is_local(new):
                 mapping[old] = new
+        for old, new in zip(orig_videos, article.videos):
+            if new != old and _is_local(new):
+                mapping[old] = new
+        replaced = 0
         for old, new in mapping.items():
-            rel_new = _relativize_media(new) if _is_local(new) else new
-            article.content_md = article.content_md.replace(old, rel_new)
-
-    if download_videos and article.videos:
-        # yt-dlp spawns subprocesses — cap video concurrency lower.
-        vworkers = max(1, min(workers, 2))
-        article.videos = _download_set(article.videos, dest, folder,
-                                       _download_video, vworkers, emit,
-                                       source_url=article.url)
-    elif not download_videos and article.videos:
-        emit("  视频本地化已禁用，跳过")
+            target = _relativize_media(new) if relativize else new
+            if old and old in article.content_md:
+                article.content_md = article.content_md.replace(old, target)
+                replaced += 1
+        if replaced:
+            emit(f"正文链接已更新 {replaced} 处")
 
     return article
 

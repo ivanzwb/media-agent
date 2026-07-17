@@ -2403,7 +2403,7 @@ def create_app(config: Config | None = None,
                 return {"started": False, "running": True,
                         "message": "该草稿已有本地化任务在进行"}
             st.update(running=True, logs=[], error=None, done=False,
-                      result=None)
+                      result=None, body_md=None)
 
         def worker():
             try:
@@ -2425,10 +2425,13 @@ def create_app(config: Config | None = None,
                     fetched_at=datetime.now(timezone.utc),
                     videos=list(vids),
                 )
+                # relativize=False → keep absolute /media/... paths so the
+                # in-app editor/preview renders the localized media directly.
                 localize_article(art, config,
                                  progress=lambda m: _loc_log(draft_id, m),
                                  download_images=images,
-                                 download_videos=videos)
+                                 download_videos=videos,
+                                 relativize=False)
                 n_img = sum(1 for u in art.images if u.startswith("/media/"))
                 n_vid = sum(1 for u in art.videos if u.startswith("/media/"))
                 # Persist the rewritten body (local paths) back to the draft,
@@ -2442,6 +2445,7 @@ def create_app(config: Config | None = None,
                          f"完成：本地图片 {n_img} 张，本地视频 {n_vid} 个")
                 with loc_locks[draft_id]:
                     st["result"] = {"images": n_img, "videos": n_vid}
+                    st["body_md"] = art.content_md
                     st["done"] = True
             except Exception as e:  # noqa: BLE001 - surface to UI
                 with loc_locks[draft_id]:
@@ -2457,7 +2461,7 @@ def create_app(config: Config | None = None,
     @app.get("/api/draft/{draft_id}/localize-status")
     def api_draft_localize_status(draft_id: int):
         base = {"running": False, "logs": [], "error": None, "done": False,
-                "result": None}
+                "result": None, "body_md": None}
         st = _loc_state(draft_id)
         with loc_locks[draft_id]:
             base["running"] = st["running"]
@@ -2465,6 +2469,7 @@ def create_app(config: Config | None = None,
             base["error"] = st["error"]
             base["done"] = st["done"]
             base["result"] = st["result"]
+            base["body_md"] = st.get("body_md")
         return base
 
     @app.get("/api/script/{draft_id}")

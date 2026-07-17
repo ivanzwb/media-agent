@@ -43,13 +43,15 @@ def test_localize_starts_and_reports_done(tmp_path, monkeypatch):
     draft = seed_draft_with_media(store)
 
     def fake_localize_article(art, config, progress=None,
-                              download_images=True, download_videos=True):
+                              download_images=True, download_videos=True,
+                              relativize=True, **_kw):
         # Simulate the real machinery: emit progress + rewrite to local paths.
         if progress:
             progress("图片 1 张，视频 0 个")
             progress("  下载 #1 完成")
-        art.content_md = art.content_md.replace(
-            "https://x.com/pic.png", "../../media/abc/pic.png")
+        # Draft endpoint requests absolute /media/ paths (relativize=False).
+        new_url = "../../media/abc/pic.png" if relativize else "/media/abc/pic.png"
+        art.content_md = art.content_md.replace("https://x.com/pic.png", new_url)
         art.images = ["/media/abc/pic.png"]
         return art
 
@@ -74,10 +76,12 @@ def test_localize_starts_and_reports_done(tmp_path, monkeypatch):
     # Progress lines streamed to the log box.
     assert any("下载 #1" in line for line in status["logs"])
 
-    # Body persisted with local path.
+    # Body persisted with absolute local path (draft uses relativize=False),
+    # and returned in status so the editor can refresh.
     reloaded = store.read_draft_body(draft.id)
-    assert "../../media/abc/pic.png" in reloaded["body_md"]
+    assert "/media/abc/pic.png" in reloaded["body_md"]
     assert "https://x.com/pic.png" not in reloaded["body_md"]
+    assert status["body_md"] == reloaded["body_md"]
 
 
 def test_localize_status_defaults_when_never_run(tmp_path):
@@ -85,4 +89,4 @@ def test_localize_status_defaults_when_never_run(tmp_path):
     draft = seed_draft_with_media(store)
     s = client.get(f"/api/draft/{draft.id}/localize-status").json()
     assert s == {"running": False, "logs": [], "error": None,
-                 "done": False, "result": None}
+                 "done": False, "result": None, "body_md": None}

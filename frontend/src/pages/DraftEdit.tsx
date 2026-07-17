@@ -340,14 +340,19 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     if (locPollRef.current) clearInterval(locPollRef.current);
     const poll = setInterval(async () => {
       try {
-        const s = await getJson<{ running: boolean; error: string | null; logs: string[] }>(
+        const s = await getJson<{ running: boolean; error: string | null; logs: string[]; body_md?: string | null }>(
           `/api/draft/${data.id}/localize-status`);
         if (s.logs) setLocLog(s.logs);
         if (!s.running) {
           clearInterval(poll); locPollRef.current = null; setLocalizing(false);
           if (s.error) message.error("本地化失败：" + s.error);
-          else if (notify) { message.success("媒体已本地化"); qc.invalidateQueries({ queryKey: ["draft", data.id] }); }
-          else qc.invalidateQueries({ queryKey: ["draft", data.id] });
+          else {
+            // Reflect the rewritten body (local image/video links) in the
+            // editor — otherwise it keeps showing the old remote URLs.
+            if (s.body_md && s.body_md !== body) commit(s.body_md);
+            if (notify) message.success("媒体已本地化");
+            qc.invalidateQueries({ queryKey: ["draft", data.id] });
+          }
         }
       } catch { /* ignore poll errors */ }
     }, 1200);
