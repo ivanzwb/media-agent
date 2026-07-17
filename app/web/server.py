@@ -954,20 +954,50 @@ def create_app(config: Config | None = None,
                     "2. 禁止输出任何修改说明、总结、备注、注释、思考过程、标记符号——你的全部输出将被直接写入文件，任何多余文字都会出现在最终发布内容中，会造成破坏，所以禁止。\n"
                     "3. 禁止在正文末尾添加分隔符（如 ---）、注释块、TODO 列表等。\n"
                     "4. 用户如果要求插入图片，用标准 Markdown 图片语法 `![描述](图片URL)`。\n"
-                    "5. 不要用代码块包裹输出。")),
+                    "5. 不要用代码块包裹输出。\n"
+                    "6. 如果你具备文件写入能力（Agent 模式），请把最终完整文件写入"
+                    "当前工作目录下的 `output-draft.md`（UTF-8 编码）；如果不能写文件，"
+                    "就直接把完整文件内容输出到 stdout。")),
                 Message(role="user", content=(
                     f"## 当前草稿文件\n```markdown\n{full_md}\n```\n\n"
                     f"## 用户指令\n{prompt}")),
             ]
-            result = provider.chat(messages)
+            # Remove any stale scratch file before the run so we never read an
+            # old result if the agent decides not to write this time.
+            out_path = config.data_dir / "output-draft.md"
+            try:
+                out_path.unlink()
+            except OSError:
+                pass
+
+            stdout_result = provider.chat(messages)
 
             # Check if cancelled during execution
             task = _agent_tasks.get(draft_id)
             if task and task["status"] == "cancelled":
+                try:
+                    out_path.unlink()
+                except OSError:
+                    pass
                 return
 
+            # Agentic CLIs (opencode/claude) write the full document to a file
+            # and print only a summary to stdout; completion-style tools print
+            # the whole document. Prefer the file, fall back to stdout.
+            file_result = ""
+            try:
+                if out_path.exists():
+                    file_result = out_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                file_result = ""
+            try:
+                out_path.unlink()
+            except OSError:
+                pass
+
             # Post-process
-            result = _clean_agent_output(result, original_body=original_body)
+            result = _clean_agent_output(file_result or stdout_result,
+                                         original_body=original_body)
             import frontmatter as _fm
             _parsed = _fm.loads(result)
 
@@ -1075,10 +1105,16 @@ def create_app(config: Config | None = None,
                 {"ok": False, "error": f"Agent '{active_tool}' 未安装或不在 PATH 中"},
                 status_code=400)
 
-        # 4. start background execution
+        # 4. start background execution — run the agent INSIDE the data dir so
+        # any scratch files it writes (e.g. output-draft.md) land there, not in
+        # the project root.
+        try:
+            config.data_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         provider = cli_provider.CLIProvider(
             active_tool, timeout=config.cli_timeout,
-            cwd=config.data_dir.parent,
+            cwd=config.data_dir,
         )
         _original_body = body.get("body_md", "") if body else ""
 
