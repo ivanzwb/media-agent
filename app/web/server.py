@@ -3001,6 +3001,39 @@ def create_app(config: Config | None = None,
                 continue
         return {"ok": False, "error": "未搜到可下载的封面图片"}
 
+    def _localize_before_publish(draft_id: int, meta: dict, run_config,
+                                 store) -> dict:
+        """Download the draft's remote images/videos locally and rewrite the
+        body to /media/ paths, persisting the result, then return fresh meta.
+        Best-effort: on any failure the original meta is returned so the push
+        can still proceed."""
+        content = meta.get("body_md", "") or ""
+        if not content:
+            return meta
+        try:
+            art = Article(
+                title=meta.get("title_cn") or "", content_md=content,
+                url=meta.get("source_url", "") or "",
+                source_name=meta.get("source_name", "") or "",
+                source_type="scrape", published_at=None,
+                images=list(content_images(content)), raw_summary=None,
+                fetched_at=datetime.now(timezone.utc),
+                videos=list(content_videos(content)))
+            localize_article(art, run_config,
+                             progress=lambda m: logger.info("[publish-localize] %s", m),
+                             download_images=True, download_videos=True,
+                             relativize=False)
+            if art.content_md and art.content_md != content:
+                store.update_draft_body(
+                    draft_id,
+                    title_candidates=meta.get("title_candidates", []) or [],
+                    body_md=art.content_md, status=None,
+                    title_cn=meta.get("title_cn"))
+                return store.read_draft_body(draft_id) or meta
+        except Exception as exc:  # noqa: BLE001 - never block publish
+            logger.warning("[publish-localize] failed (continuing): %s", exc)
+        return meta
+
     @app.post("/drafts/{draft_id}/publish/wechat")
     def draft_publish_wechat(draft_id: int, mode: str = Form("draft"),
                              kind: str = Form("article"),
@@ -3031,6 +3064,13 @@ def create_app(config: Config | None = None,
             if kind == "video":
                 result = upload_video(client, run_config, draft_id, meta)
             else:
+                # Localize media FIRST: download remote images/videos with the
+                # robust multi-strategy downloader and rewrite the draft body to
+                # local /media/ paths, then push. This makes the WeChat upload
+                # reliable (protected/Cloudflare images that publish's plain GET
+                # would miss) and keeps the draft's links updated. Idempotent for
+                # media that is already local; failures don't block the push.
+                meta = _localize_before_publish(draft_id, meta, run_config, store)
                 result = publish_article(client, run_config, meta, mode=mode,
                                          theme=theme)
         except WeChatError as exc:

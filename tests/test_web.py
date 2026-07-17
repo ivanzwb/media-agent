@@ -98,7 +98,7 @@ def test_publish_wechat_article_happy_path(tmp_path, monkeypatch):
     monkeypatch.setattr("app.wechat.get_wechat_client",
                         lambda cfg: FakeClient())
     monkeypatch.setattr("app.wechat.publish.publish_article",
-                        lambda cli, cfg, meta, mode="draft": {
+                        lambda cli, cfg, meta, mode="draft", **kw: {
                             "ok": True, "draft_media_id": "DRAFT1",
                             "title": "原标题", "mode": mode})
     r = client.post(f"/drafts/{draft.id}/publish/wechat",
