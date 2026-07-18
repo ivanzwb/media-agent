@@ -197,6 +197,8 @@ def _clean_agent_output(text: str, original_body: str | None = None) -> str:
 
 def create_app(config: Config | None = None,
                feeds_path: str | Path = "feeds.yaml") -> FastAPI:
+    from app.log_setup import quiet_noisy_loggers
+    quiet_noisy_loggers()  # silence trafilatura/courlan/urllib3 crawl noise
     config = config or Config.load()
     config.ensure_dirs()
     feeds_path = Path(feeds_path)

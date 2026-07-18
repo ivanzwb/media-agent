@@ -754,7 +754,9 @@ def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
                 logger.debug("scrape_list: %s yielded no article "
                              "(filtered or empty content)", link)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("scrape_list: failed to scrape %s: %s", link, exc)
+            # Per-page failures (403/404/timeout/DNS) are expected while deep
+            # crawling a whole site — keep them at debug so they don't flood.
+            logger.debug("scrape_list: failed to scrape %s: %s", link, exc)
             continue
         time.sleep(delay)
     return articles

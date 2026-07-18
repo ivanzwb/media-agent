@@ -40,6 +40,8 @@ def run(feeds: str = typer.Option("feeds.yaml", help="Path to feeds.yaml"),
         with_images: bool = typer.Option(False, "--with-images",
                                          help="Generate cover images")):
     """Run one full pipeline pass."""
+    from app.log_setup import quiet_noisy_loggers
+    quiet_noisy_loggers()
     cfg = Config.load()
     store = _store()
     feeds_cfg = load_feeds(Path(feeds))
