@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
@@ -685,6 +686,34 @@ def _discover_one_level(url: str, include_pattern: str | None,
     return article_links, seed_html
 
 
+def _classify_skip(exc: BaseException) -> str:
+    """Bucket a per-page scrape failure into a short, human reason so the crawl
+    can report *why* pages were skipped instead of dumping one line each."""
+    msg = str(exc).lower()
+    if "403" in msg or "forbidden" in msg:
+        return "403禁止访问"
+    if "404" in msg or "not found" in msg:
+        return "404不存在"
+    if "429" in msg or "too many requests" in msg:
+        return "429限流"
+    if any(k in msg for k in ("getaddrinfo", "nameresolution", "failed to resolve",
+                              "name or service not known")):
+        return "DNS解析失败"
+    if "too many redirects" in msg or "redirect" in msg:
+        return "重定向过多"
+    if "timed out" in msg or "timeout" in msg:
+        return "超时"
+    if any(k in msg for k in ("forcibly closed", "connection reset", "10054",
+                              "closed connection", "incompleteread",
+                              "connection broken", "connection aborted")):
+        return "连接中断"
+    if "ssl" in msg or "certificate" in msg:
+        return "SSL/证书错误"
+    if re.search(r"\b5\d\d\b", msg) or "server error" in msg:
+        return "服务器错误(5xx)"
+    return "其他错误"
+
+
 def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
                 exclude_pattern: str | None = None,
                 max_articles: int = 10, delay: float = 1.0,
@@ -743,20 +772,33 @@ def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
         deduped.append(link)
     article_links = deduped
 
+    candidates = article_links[:max_articles]
     articles: list[Article] = []
-    for link in article_links[:max_articles]:
+    skips: Counter[str] = Counter()
+    for link in candidates:
         try:
             art = scrape_single(link, source_name, render_js=render_js,
                                 timeout=timeout, proxy=proxy)
             if art:
                 articles.append(art)
             else:
-                logger.debug("scrape_list: %s yielded no article "
-                             "(filtered or empty content)", link)
+                skips["非文章或正文为空"] += 1
+                logger.debug("scrape_list: skip %s (非文章或正文为空)", link)
         except Exception as exc:  # noqa: BLE001
-            # Per-page failures (403/404/timeout/DNS) are expected while deep
-            # crawling a whole site — keep them at debug so they don't flood.
-            logger.debug("scrape_list: failed to scrape %s: %s", link, exc)
+            reason = _classify_skip(exc)
+            skips[reason] += 1
+            logger.debug("scrape_list: skip %s (%s): %s", link, reason, exc)
             continue
         time.sleep(delay)
+
+    # One aggregated line per source: how many we got, and WHY the rest were
+    # skipped (grouped by reason) — instead of one noisy line per page.
+    if skips:
+        breakdown = "，".join(f"{r}×{n}" for r, n in skips.most_common())
+        logger.info("scrape_list: %s — 抓取 %d 篇 / 候选 %d，跳过 %d（%s）",
+                    url, len(articles), len(candidates),
+                    sum(skips.values()), breakdown)
+    else:
+        logger.info("scrape_list: %s — 抓取 %d 篇 / 候选 %d，无跳过",
+                    url, len(articles), len(candidates))
     return articles

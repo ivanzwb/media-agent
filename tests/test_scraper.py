@@ -1,6 +1,16 @@
 from app.sources.scraper import (
     discover_links, scrape_single, scrape_list,
-    _is_non_article, _hrefs, _pagination_links)
+    _is_non_article, _hrefs, _pagination_links, _classify_skip)
+
+
+def test_classify_skip_buckets():
+    assert _classify_skip(Exception("Client error '403 Forbidden'")) == "403禁止访问"
+    assert _classify_skip(Exception("404 Not Found")) == "404不存在"
+    assert _classify_skip(Exception("Failed to resolve 'x' getaddrinfo failed")) == "DNS解析失败"
+    assert _classify_skip(Exception("The read operation timed out")) == "超时"
+    assert _classify_skip(Exception("too many redirects")) == "重定向过多"
+    assert _classify_skip(Exception("connection forcibly closed 10054")) == "连接中断"
+    assert _classify_skip(Exception("something odd")) == "其他错误"
 
 LIST_HTML = """
 <html><body>
