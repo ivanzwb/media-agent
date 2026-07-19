@@ -62,7 +62,7 @@ export default function Settings() {
         image_provider: data.image_provider, image_api_base: data.image_api_base, image_model: data.image_model,
         cli_tool: data.cli_tool,
         rewrite_priority: data.rewrite_priority,
-        tts_provider: data.tts_provider, tts_api_base: data.tts_api_base, tts_model: data.tts_model, tts_voice: data.tts_voice,
+        tts_provider: data.tts_provider || "kitten", tts_api_base: data.tts_api_base, tts_model: data.tts_model, tts_voice: data.tts_voice,
         max_age_days: data.max_age_days, max_per_source: data.max_per_source, download_workers: data.download_workers,
         video_fit: data.video_fit, video_brand_name: data.video_brand_name,
         fetch_proxy: data.fetch_proxy,
@@ -120,7 +120,16 @@ export default function Settings() {
           {
             key: "voice", label: "语音", forceRender: true, children: (
               <Card title="TTS 与声音库" size="small">
-                <Form.Item name="tts_provider" label="Provider"><Input placeholder="kitten / cosyvoice / fishaudio …" /></Form.Item>
+                <Form.Item name="tts_provider" label="Provider">
+                  <Select options={[
+                    { value: "kitten", label: "Kitten（本地 edge-tts，默认，云端语音）" },
+                    { value: "cosyvoice", label: "CosyVoice（本地 GPU 声音复刻）" },
+                    { value: "fishaudio", label: "Fish Audio（云端 API）" },
+                    { value: "openai_compatible", label: "OpenAI 兼容（云端 API）" },
+                    { value: "kitten_http", label: "Kitten HTTP 服务" },
+                    { value: "mock", label: "Mock（测试）" },
+                  ]} />
+                </Form.Item>
                 <Form.Item name="tts_api_base" label="API Base"><Input /></Form.Item>
                 <Form.Item name="tts_model" label="模型"><Input /></Form.Item>
                 <Form.Item name="tts_voice" label="音色">
