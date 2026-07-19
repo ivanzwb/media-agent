@@ -63,6 +63,7 @@ export default function Settings() {
         cli_tool: data.cli_tool,
         rewrite_priority: data.rewrite_priority,
         tts_provider: data.tts_provider || "kitten", tts_api_base: data.tts_api_base, tts_model: data.tts_model, tts_voice: data.tts_voice,
+        tts_rate: data.tts_rate, tts_pitch: data.tts_pitch, tts_instruct: data.tts_instruct,
         max_age_days: data.max_age_days, max_per_source: data.max_per_source, download_workers: data.download_workers,
         video_fit: data.video_fit, video_brand_name: data.video_brand_name,
         fetch_proxy: data.fetch_proxy,
@@ -134,6 +135,18 @@ export default function Settings() {
                 <Form.Item name="tts_model" label="模型"><Input /></Form.Item>
                 <Form.Item name="tts_voice" label="音色">
                   <Select allowClear showSearch options={(data.voices || []).map((v) => ({ value: v.id, label: v.name || v.id }))} />
+                </Form.Item>
+                <Space wrap>
+                  <Form.Item name="tts_rate" label="语速（Kitten）" tooltip="edge-tts 语速，如 +10% / -10%">
+                    <Input placeholder="+0%" style={{ width: 140 }} />
+                  </Form.Item>
+                  <Form.Item name="tts_pitch" label="音调（Kitten）" tooltip="edge-tts 音调，调高更活泼，如 +15Hz / -10Hz">
+                    <Input placeholder="+0Hz" style={{ width: 140 }} />
+                  </Form.Item>
+                </Space>
+                <Form.Item name="tts_instruct" label="语气 / 情感（CosyVoice）"
+                  tooltip="仅 CosyVoice：用自然语言描述语气/情感，如「用亲切自然的语气」「热情激昂地讲解」">
+                  <Input placeholder="例如：用亲切自然的语气讲解（仅 CosyVoice 生效）" />
                 </Form.Item>
                 <Form.Item name="tts_api_key" label={<>API Key {data.tts_api_key.set && <Tag color="green">已设置 {data.tts_api_key.masked}</Tag>}</>}>
                   <Input.Password placeholder={data.tts_api_key.set ? "留空则保持不变" : "输入 API Key"} />

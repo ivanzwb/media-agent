@@ -128,9 +128,13 @@ class CosyVoiceTTS:
     """
 
     def __init__(self, speaker_wav: str | None = None,
-                 model: str | None = None):
+                 model: str | None = None, instruct: str | None = None):
         self.speaker_wav = speaker_wav
         self.model_name = model or _DEFAULT_MODEL
+        # Optional natural-language style/emotion instruction (语气/情感),
+        # e.g. "用亲切自然的语气" / "热情激昂地讲解". When set, CosyVoice2's
+        # instruct mode is used for expressive prosody.
+        self.instruct = (instruct or "").strip()
         self._model_dir: str | None = None  # resolved local path
         self._prompt_text: str | None = None  # whisper transcription, lazy init
 
@@ -362,12 +366,29 @@ class CosyVoiceTTS:
                         self._prompt_text = ""
 
         with _INFERENCE_LOCK:
-            for result in model.inference_zero_shot(
-                tts_text=text,
-                prompt_text=self._prompt_text,
-                prompt_wav=prompt_wav,
-                stream=False,
-            ):
+            results = None
+            # Expressive instruct mode (语气/情感) when an instruction is set.
+            # Falls back to plain zero-shot cloning if this build of CosyVoice
+            # doesn't support instruct2 (so it never breaks synthesis).
+            if self.instruct:
+                try:
+                    results = model.inference_instruct2(
+                        tts_text=text,
+                        instruct_text=self.instruct,
+                        prompt_wav=prompt_wav,
+                        stream=False,
+                    )
+                except (AttributeError, TypeError) as e:
+                    logger.warning("CosyVoice instruct 模式不可用，回退到普通克隆：%s", e)
+                    results = None
+            if results is None:
+                results = model.inference_zero_shot(
+                    tts_text=text,
+                    prompt_text=self._prompt_text,
+                    prompt_wav=prompt_wav,
+                    stream=False,
+                )
+            for result in results:
                 audio = result["tts_speech"]  # shape: [1, samples]
                 sf.write(str(path), audio.squeeze(0).numpy(), model.sample_rate)
 

@@ -1473,7 +1473,7 @@ def create_app(config: Config | None = None,
         if provider == "cosyvoice":
             sp = voice_sample_path(config, voice)
             return get_tts_provider("cosyvoice", voice=str(sp) if sp else None,
-                                    model=rc.tts_model)
+                                    model=rc.tts_model, instruct=rc.tts_instruct)
         if provider == "fishaudio":
             sp = voice_sample_path(config, voice)
             return get_tts_provider(
@@ -1483,7 +1483,8 @@ def create_app(config: Config | None = None,
                 model=rc.tts_model)
         return get_tts_provider(
             provider, base_url=rc.tts_api_base,
-            api_key=rc.tts_api_key, model=rc.tts_model, voice=voice)
+            api_key=rc.tts_api_key, model=rc.tts_model, voice=voice,
+            rate=rc.tts_rate, pitch=rc.tts_pitch)
 
     @app.post("/sources/topics/suggest")
     def topics_suggest(themes: str = Form(...)):
@@ -3278,6 +3279,9 @@ def create_app(config: Config | None = None,
             "tts_api_base": _get("tts_api_base") or (config.tts_api_base or ""),
             "tts_model": _get("tts_model") or (config.tts_model or ""),
             "tts_voice": _get("tts_voice") or (config.tts_voice or ""),
+            "tts_rate": _get("tts_rate") or (config.tts_rate or ""),
+            "tts_pitch": _get("tts_pitch") or (config.tts_pitch or ""),
+            "tts_instruct": _get("tts_instruct") or (config.tts_instruct or ""),
             "voices": list_voices(config),
             "data_dir": str(config.data_dir),
             "max_age_days": _get("max_age_days") or (str(config.max_age_days) if config.max_age_days else ""),
@@ -3323,6 +3327,9 @@ def create_app(config: Config | None = None,
                       tts_api_base: str = Form(""),
                       tts_model: str = Form(""),
                       tts_voice: str = Form(""),
+                      tts_rate: str = Form(""),
+                      tts_pitch: str = Form(""),
+                      tts_instruct: str = Form(""),
                       max_age_days: str = Form(""),
                       max_per_source: str = Form(""),
                       download_workers: str = Form(""),
@@ -3357,6 +3364,9 @@ def create_app(config: Config | None = None,
             "tts_api_base": tts_api_base.strip(),
             "tts_model": tts_model.strip(),
             "tts_voice": tts_voice.strip(),
+            "tts_rate": tts_rate.strip(),
+            "tts_pitch": tts_pitch.strip(),
+            "tts_instruct": tts_instruct.strip(),
             "video_fit": video_fit.strip(),
             "video_brand_name": video_brand_name.strip(),
             "sensitive_level": sensitive_level.strip(),

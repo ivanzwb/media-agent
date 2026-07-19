@@ -15,11 +15,13 @@ class TTSProvider(Protocol):
 
 def get_tts_provider(name: str | None, base_url: str | None = None,
                      api_key: str | None = None, model: str | None = None,
-                     voice: str | None = None) -> "TTSProvider":
+                     voice: str | None = None, rate: str | None = None,
+                     pitch: str | None = None,
+                     instruct: str | None = None) -> "TTSProvider":
     # Default: in-process Kitten (edge-tts) — no external service needed.
     if name in (None, "", "kitten", "local"):
         from app.tts.providers.local_kitten import LocalKittenTTS
-        return LocalKittenTTS(voice=voice)
+        return LocalKittenTTS(voice=voice, rate=rate, pitch=pitch)
     if name == "mock":
         from app.tts.providers.mock import MockTTSProvider
         return MockTTSProvider()
@@ -38,5 +40,5 @@ def get_tts_provider(name: str | None, base_url: str | None = None,
         # voice = speaker reference wav path (resolved by caller);
         # model = CosyVoice2 model name/path (HuggingFace ID or local dir).
         from app.tts.providers.cosyvoice import CosyVoiceTTS
-        return CosyVoiceTTS(speaker_wav=voice, model=model)
+        return CosyVoiceTTS(speaker_wav=voice, model=model, instruct=instruct)
     raise ValueError(f"Unknown TTS provider: {name}")

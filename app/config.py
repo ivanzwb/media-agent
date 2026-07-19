@@ -45,6 +45,9 @@ class Config:
     tts_api_key: str | None = None
     tts_model: str | None = None
     tts_voice: str | None = None
+    tts_rate: str | None = None    # edge-tts 语速, e.g. "+0%" / "-10%" / "+20%"
+    tts_pitch: str | None = None   # edge-tts 音调, e.g. "+0Hz" / "+15Hz" / "-10Hz"
+    tts_instruct: str | None = None  # CosyVoice 语气/情感指令, e.g. "用亲切自然的语气"
     max_age_days: int | None = None
     max_per_source: int | None = None
     download_workers: int | None = None
@@ -118,6 +121,9 @@ class Config:
             tts_api_key=os.environ.get("MEDIA_AGENT_TTS_API_KEY"),
             tts_model=os.environ.get("MEDIA_AGENT_TTS_MODEL"),
             tts_voice=os.environ.get("MEDIA_AGENT_TTS_VOICE"),
+            tts_rate=os.environ.get("MEDIA_AGENT_TTS_RATE"),
+            tts_pitch=os.environ.get("MEDIA_AGENT_TTS_PITCH"),
+            tts_instruct=os.environ.get("MEDIA_AGENT_TTS_INSTRUCT"),
             max_age_days=_int_env("MEDIA_AGENT_MAX_AGE_DAYS"),
             max_per_source=_int_env("MEDIA_AGENT_MAX_PER_SOURCE"),
             download_workers=_int_env("MEDIA_AGENT_DOWNLOAD_WORKERS"),
@@ -157,6 +163,9 @@ class Config:
             "tts_api_base": "tts_api_base",
             "tts_api_key": "tts_api_key",
             "tts_model": "tts_model",
+            "tts_rate": "tts_rate",
+            "tts_pitch": "tts_pitch",
+            "tts_instruct": "tts_instruct",
             "tts_voice": "tts_voice",
             "video_fit": "video_fit",
             "video_brand_name": "video_brand_name",
