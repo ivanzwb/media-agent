@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "media-agent"
-version = "0.2.17"
+version = "0.2.18"
 description = "本地自媒体内容流水线：抓取 → 去重归档 → 主题分类 → LLM 改写 → 讲解视频 → 多平台同步"
 readme = "README.md"
 requires-python = ">=3.10"
