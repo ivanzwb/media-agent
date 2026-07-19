@@ -343,7 +343,16 @@ def _render_with_playwright(url: str, timeout: float) -> str | None:
         return None
 
     def _do_launch(p, **kwargs):
-        browser = p.chromium.launch(headless=True, **kwargs)
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+                "--disable-setuid-sandbox",
+            ],
+            **kwargs,
+        )
         page = browser.new_page(user_agent=_UA_STR)
         response = page.goto(url, wait_until="load",
                              timeout=int(timeout * 1000))
