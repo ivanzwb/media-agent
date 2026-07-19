@@ -23,6 +23,26 @@ def sample_article(url="https://x.com/a"):
                    topic="AI")
 
 
+def test_list_drafts_pagination_and_count(tmp_path):
+    store = make_store(tmp_path)
+    art = store.save_article(sample_article())
+    for i in range(5):
+        store.save_draft(Draft(
+            article_id=art.id, title_candidates=[f"标题{i}"],
+            body_md=f"# body {i}", topic="AI",
+            source_url=art.url, source_name=art.source_name))
+    assert store.count_drafts() == 5
+    page1 = store.list_drafts(limit=2, offset=0)
+    page2 = store.list_drafts(limit=2, offset=2)
+    assert len(page1) == 2 and len(page2) == 2
+    # pages don't overlap and preserve ordering
+    ids1 = {d["id"] for d in page1}
+    ids2 = {d["id"] for d in page2}
+    assert ids1.isdisjoint(ids2)
+    # no limit → all
+    assert len(store.list_drafts()) == 5
+
+
 def test_save_article_writes_md_and_row(tmp_path):
     store = make_store(tmp_path)
     saved = store.save_article(sample_article())

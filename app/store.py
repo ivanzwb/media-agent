@@ -451,19 +451,31 @@ class Store:
             "ORDER BY topic").fetchall()
         return [r["topic"] for r in rows]
 
-    def list_drafts(self, status: str | None = None):
+    def list_drafts(self, status: str | None = None,
+                    limit: int | None = None, offset: int = 0):
         sql = (
             "SELECT drafts.*, articles.published_at AS article_published_at, "
             "articles.title AS article_title, articles.url AS article_url "
             "FROM drafts "
             "LEFT JOIN articles ON articles.id = drafts.article_id"
         )
+        params: list = []
         if status:
             sql += " WHERE drafts.status=?"
-            sql += " ORDER BY drafts.updated_at DESC"
-            return self.conn.execute(sql, (status,)).fetchall()
+            params.append(status)
         sql += " ORDER BY drafts.updated_at DESC"
-        return self.conn.execute(sql).fetchall()
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([int(limit), int(offset)])
+        return self.conn.execute(sql, params).fetchall()
+
+    def count_drafts(self, status: str | None = None) -> int:
+        if status:
+            row = self.conn.execute(
+                "SELECT COUNT(*) FROM drafts WHERE status=?", (status,)).fetchone()
+        else:
+            row = self.conn.execute("SELECT COUNT(*) FROM drafts").fetchone()
+        return int(row[0]) if row else 0
 
     def get_draft(self, draft_id: int):
         return self.conn.execute(

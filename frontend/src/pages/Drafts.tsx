@@ -1,6 +1,6 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { App as AntApp, Table, Tag, Button, Space, Typography } from "antd";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, getJson } from "../api/client";
 
@@ -24,10 +24,20 @@ export default function Drafts() {
   const qc = useQueryClient();
   const { message, modal } = AntApp.useApp();
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
-  const { data } = useQuery({
-    queryKey: ["drafts", status],
-    queryFn: () => getJson<{ drafts: Draft[]; statuses: string[] }>(
-      "/api/drafts", status ? { status } : undefined),
+  const [page, setPage] = useState(1);
+  const pageSize = 30;
+  // Reset to page 1 when the status filter changes.
+  useEffect(() => { setPage(1); }, [status]);
+  // Lazy loading: only the current page is fetched (and read from disk on the
+  // backend), so the 草稿 page opens fast even with a very long list.
+  const { data, isFetching } = useQuery({
+    queryKey: ["drafts", status, page],
+    queryFn: () => getJson<{ drafts: Draft[]; total: number; statuses: string[] }>(
+      "/api/drafts", {
+        ...(status ? { status } : {}),
+        limit: pageSize, offset: (page - 1) * pageSize,
+      }),
+    placeholderData: keepPreviousData,
   });
   const statuses = data?.statuses || [];
 
@@ -71,10 +81,17 @@ export default function Drafts() {
         )}
       </Space>
       <Table rowKey="id" size="small" dataSource={data?.drafts || []}
-        pagination={{ pageSize: 30, hideOnSinglePage: true }}
+        loading={isFetching}
+        pagination={{
+          current: page, pageSize, total: data?.total || 0,
+          showSizeChanger: false, hideOnSinglePage: true,
+          showTotal: (t) => `共 ${t} 篇`,
+          onChange: (p) => setPage(p),
+        }}
         locale={{ emptyText: "暂无草稿。" }}
         rowSelection={{
           selectedRowKeys: selectedIds,
+          preserveSelectedRowKeys: true,
           onChange: (keys) => setSelectedIds(keys as number[]),
         }}
         columns={[

@@ -867,11 +867,17 @@ def create_app(config: Config | None = None,
         return _serve_spa()
 
     @app.get("/api/drafts")
-    def api_drafts(status: str | None = None):
+    def api_drafts(status: str | None = None, limit: int = 30, offset: int = 0):
         from datetime import datetime, timezone, timedelta
         CST = timezone(timedelta(hours=8))
         store = get_store()
-        drafts = store.list_drafts(status=status)
+        # Server-side pagination: only the requested page is read from disk
+        # (each untitled draft costs a file read for its display title), so the
+        # 草稿 page loads fast even with a very long list.
+        limit = max(1, min(int(limit), 200))
+        offset = max(0, int(offset))
+        total = store.count_drafts(status=status)
+        drafts = store.list_drafts(status=status, limit=limit, offset=offset)
         out = []
         for d in drafts:
             item = dict(d)
@@ -901,7 +907,7 @@ def create_app(config: Config | None = None,
                 "article_published_at": item.get("article_published_at"),
                 "updated_at": item.get("updated_at"),
             })
-        return {"drafts": out,
+        return {"drafts": out, "total": total,
                 "statuses": ["drafted", "reviewing", "approved", "published"]}
 
     @app.get("/api/draft/{draft_id}")
