@@ -27,7 +27,9 @@
 - **脚本 + 配音**：从草稿自动生成口播分镜脚本（LLM）→ 逐段 TTS 配音；分镜可在草稿页**编辑**（旁白/画面/重选背景素材、增删/排序），并**只对改动的分镜重配**。
 - **合成**：ffmpeg 合成「图片轮播 / 原视频片段 + 中文字幕 + 配音」的 mp4；中文字幕用 PIL 生成画面帧/叠层（规避 ffmpeg 中文字体问题）；画面适配可选 `fit`（完整+黑边）/`crop`/`blur`。同一视频被连续分镜引用时**续播**、放完**冻结最后一帧**。
 - **TTS**：默认内置 `kitten`（中文走 edge-tts，免 key）；可选 **本地声音复刻 `cosyvoice`**（CosyVoice2-0.5B，上传干声本地克隆音色，最佳中文 TTS 自然度，需 Python < 3.13 + NVIDIA GPU）；也支持 Fish Audio 云端克隆、OpenAI 兼容 / 外部 Kitten 服务。
-- 合成需本地 **ffmpeg**；原视频/HLS 下载需 **yt-dlp**。
+- **更像人的语气**：edge-tts 可调 **语速 / 音调**（`tts_rate` / `tts_pitch`）；CosyVoice 可给 **语气/情感指令**（`tts_instruct`，如「用亲切自然的语气」）。多分镜配音**并行**合成，速度更快。
+- **数字人主播（可选）**：在讲解视频中叠加一个口播主播——**画中画（角落）**或**全屏主播**，可按分镜切换。口型同步用本地 **SadTalker**（需 GPU，单独安装）驱动，用每段配音生成说话头像；未配置 SadTalker 时自动回退为**静态头像**叠加（仍显示主播，只是没有口型）。在「设置 → 视频 → 数字人主播」上传主播头像并开启。
+- 合成需本地 **ffmpeg**；原视频/HLS 下载需 **yt-dlp**；数字人口型同步需 **SadTalker**（可选）。
 
 ### 运行与平台
 - **运行控制**：按时间窗（`max_age_days`）与每源条数（`max_per_source`）限制抓取量。
@@ -100,6 +102,7 @@ macOS:    media-agent/media-agent serve
 | playwright 库 | ✅ 已内置 | 需额外下载 Chromium（脚本一键完成） |
 | ffmpeg | ❌ 需单独装 | 视频合成必需，[下载](https://ffmpeg.org)后加入 PATH |
 | CosyVoice | ✅ 嵌入式 Python 侧边部署 | 脚本自动部署嵌入式 Python + 安装 PyTorch + 下载模型，一键完成 |
+| SadTalker | ❌ 需单独装（可选） | 数字人主播口型同步用；克隆 [SadTalker](https://github.com/OpenTalker/SadTalker)、下模型、装依赖后，在「设置」填其目录。不装则用静态头像叠加 |
 
 ### 本地构建
 
@@ -157,10 +160,19 @@ sources:
 | `MEDIA_AGENT_TTS_API_KEY` | TTS API Key（内置/本地服务可留空） | 无 |
 | `MEDIA_AGENT_TTS_MODEL` | TTS 模型名（openai 兼容用） | `tts-1` |
 | `MEDIA_AGENT_TTS_VOICE` | 音色/风格：`female`/`child`/`male`… 或具体音色名 | `assistant` |
+| `MEDIA_AGENT_TTS_RATE` | edge-tts 语速，如 `+10%` / `-10%`（空=正常） | 无 |
+| `MEDIA_AGENT_TTS_PITCH` | edge-tts 音调，如 `+15Hz` / `-10Hz`（调高更活泼） | 无 |
+| `MEDIA_AGENT_TTS_INSTRUCT` | CosyVoice 语气/情感指令，如「用亲切自然的语气」（仅 `cosyvoice`） | 无 |
 | `MEDIA_AGENT_MAX_AGE_DAYS` | 只保留 N 天内的文章（空=不限） | 不限 |
 | `MEDIA_AGENT_MAX_PER_SOURCE` | 每个来源最多抓取条数（空=不限） | 不限 |
 | `MEDIA_AGENT_DOWNLOAD_WORKERS` | 来源抓取 / 图片视频下载的并发线程数（空=CPU 核数） | CPU 核数 |
 | `MEDIA_AGENT_VIDEO_FIT_MODE` | 讲解视频画面适配：`fit`（完整+黑边）\| `crop`（铺满裁剪）\| `blur`（完整+模糊背景） | `fit` |
+| `MEDIA_AGENT_AVATAR_ENABLED` | 讲解视频叠加数字人主播（`1` 开启） | `0` |
+| `MEDIA_AGENT_AVATAR_IMAGE` | 主播头像文件名（放在 `data/avatar/`；建议在「设置」页上传） | 无 |
+| `MEDIA_AGENT_AVATAR_POSITION` | 默认位置：`pip`（画中画/角落）\| `full`（全屏主播）；可按分镜覆盖 | `pip` |
+| `MEDIA_AGENT_AVATAR_PROVIDER` | `sadtalker`（本地口型同步，需 GPU）\| `still`（静态头像） | `sadtalker` |
+| `MEDIA_AGENT_SADTALKER_DIR` | 本地 SadTalker 代码目录（含 `inference.py`）；未配置则回退静态头像 | 无 |
+| `MEDIA_AGENT_SADTALKER_PYTHON` | 运行 SadTalker 的 Python 可执行文件（可选，留空用 `python`） | 无 |
 | `MEDIA_AGENT_SENSITIVE_LEVEL` | 敏感词过滤等级：`off` \| `basic` \| `standard` \| `strict` | `standard` |
 | `MEDIA_AGENT_SENSITIVE_WORDS` | 自定义敏感词（逗号/换行分隔，追加到内置词库） | 无 |
 
@@ -214,6 +226,7 @@ python -m app.cli run --feeds feeds.yaml --with-images
 - `data/media/<hash>/`：本地化的原文图片/视频。
 - `data/videos/draft-<id>/`：讲解视频产物（`script.json` 分镜脚本、逐段配音、`video.mp4`）。
 - `data/voices/`：声音复刻样本与注册表（`voices.json`）。
+- `data/avatar/`：数字人主播头像（口播叠加用）。
 - `data/images/`：生成的封面。
 - `data/media.db`：SQLite 元数据库（articles / drafts / runs / sources / settings）。
 
@@ -281,5 +294,5 @@ python -m pytest -v
 - 更多来源（X/Twitter 等社交平台）。
 - 多模型对比改写、A/B 标题。
 - 归档双格式（原始 HTML + Markdown）以便提取逻辑升级后回溯重提取（见 issue #9）。
-- 背景音乐 / 转场 / 数字人口播 / 竖屏 9:16 适配。
+- 背景音乐 / 转场 / 竖屏 9:16 适配。（数字人口播已支持，见「讲解视频」）
 ```
