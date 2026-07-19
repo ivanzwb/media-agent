@@ -10,7 +10,7 @@ from __future__ import annotations
 REWRITE_UNLIMITED = "rewrite_unlimited"   # free: FREE_REWRITE_PER_DAY/day
 VIDEO = "video"                            # 讲解视频生成
 PLATFORM_SYNC = "platform_sync"            # 平台适配/一键同步/发布
-VOICE_CLONE = "voice_clone"                # 声音复刻 TTS (cosyvoice/fishaudio)
+VOICE_CLONE = "voice_clone"                # 声音复刻 TTS (cosyvoice)
 SCHEDULE = "schedule"                      # 定时调度
 
 ALL_FEATURES = [REWRITE_UNLIMITED, VIDEO, PLATFORM_SYNC, VOICE_CLONE, SCHEDULE]

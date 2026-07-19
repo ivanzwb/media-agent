@@ -128,9 +128,7 @@ export default function Settings() {
                   <Select options={[
                     { value: "kitten", label: "Kitten（本地 edge-tts，默认，云端语音）" },
                     { value: "cosyvoice", label: "CosyVoice（本地 GPU 声音复刻）" },
-                    { value: "fishaudio", label: "Fish Audio（云端 API）" },
                     { value: "openai_compatible", label: "OpenAI 兼容（云端 API）" },
-                    { value: "kitten_http", label: "Kitten HTTP 服务" },
                     { value: "mock", label: "Mock（测试）" },
                   ]} />
                 </Form.Item>
@@ -140,22 +138,74 @@ export default function Settings() {
                   <Select allowClear showSearch options={(data.voices || []).map((v) => ({ value: v.id, label: v.name || v.id }))} />
                 </Form.Item>
                 <Space wrap>
-                  <Form.Item name="tts_rate" label="语速（Kitten）" tooltip="edge-tts 语速，如 +10% / -10%">
+                  <Form.Item name="tts_rate" label="语速" tooltip="语音语速，如 +10% / -10%">
                     <Input placeholder="+0%" style={{ width: 140 }} />
                   </Form.Item>
-                  <Form.Item name="tts_pitch" label="音调（Kitten）" tooltip="edge-tts 音调，调高更活泼，如 +15Hz / -10Hz">
+                  <Form.Item name="tts_pitch" label="音调" tooltip="语音音调，调高更活泼，如 +15Hz / -10Hz">
                     <Input placeholder="+0Hz" style={{ width: 140 }} />
                   </Form.Item>
                 </Space>
                 <Form.Item name="tts_instruct" label="语气 / 情感（CosyVoice）"
                   tooltip="仅 CosyVoice：用自然语言描述语气/情感，如「用亲切自然的语气」「热情激昂地讲解」">
-                  <Input placeholder="例如：用亲切自然的语气讲解（仅 CosyVoice 生效）" />
+                  <Input placeholder="例如：用亲切自然的语气讲解" />
                 </Form.Item>
                 <Form.Item name="tts_api_key" label={<>API Key {data.tts_api_key.set && <Tag color="green">已设置 {data.tts_api_key.masked}</Tag>}</>}>
                   <Input.Password placeholder={data.tts_api_key.set ? "留空则保持不变" : "输入 API Key"} />
                 </Form.Item>
                 <Divider />
                 <VoiceManager voices={data.voices || []} onChange={refetch} />
+                <Divider />
+                <Card title="视频设置" size="small" style={{ marginTop: 16 }}>
+                  <Form.Item name="video_fit" label="视频适配">
+                    <Select options={["fit", "crop", "blur"].map((v) => ({ value: v }))} />
+                  </Form.Item>
+                  <Form.Item name="video_brand_name" label="视频品牌名"><Input /></Form.Item>
+                </Card>
+              </Card>
+            ),
+          },
+          {
+            key: "avatar", label: "数字人主播", forceRender: true, children: (
+              <Card title="数字人主播" size="small">
+                <Form.Item name="avatar_enabled" label="启用数字人主播" valuePropName="checked"
+                  tooltip="在讲解视频中叠加一个数字人主播（口播）。需要主播头像；口型同步需本地 SadTalker + GPU，未配置时用静态头像。">
+                  <Switch />
+                </Form.Item>
+                <Form.Item label="主播头像">
+                  <Space align="start">
+                    <Upload showUploadList={false} accept="image/*" customRequest={async ({ file, onSuccess, onError }) => {
+                      try {
+                        const fd = new FormData(); fd.append("file", file as File);
+                        const r = await api.post<{ ok: boolean; avatar_image: string }>("/api/avatar/upload", fd);
+                        form.setFieldValue("avatar_image", r.data.avatar_image);
+                        message.success("头像已上传"); onSuccess?.({}); refetch();
+                      } catch { message.error("上传失败"); onError?.(new Error("upload")); }
+                    }}>
+                      <Button>上传头像</Button>
+                    </Upload>
+                    <Form.Item name="avatar_image" noStyle><Input style={{ width: 220 }} placeholder="头像文件名（自动填充）" /></Form.Item>
+                    {data.avatar_image && <img src={`/avatar/${data.avatar_image}`} alt="presenter" style={{ height: 64, borderRadius: 8, border: "1px solid #eee" }} />}
+                  </Space>
+                </Form.Item>
+                <Form.Item name="avatar_position" label="默认位置">
+                  <Select style={{ width: 200 }} options={[
+                    { value: "pip", label: "画中画（角落）" },
+                    { value: "full", label: "全屏主播" },
+                  ]} />
+                </Form.Item>
+                <Form.Item name="avatar_provider" label="生成方式">
+                  <Select style={{ width: 280 }} options={[
+                    { value: "sadtalker", label: "SadTalker 口型同步（本地 GPU）" },
+                    { value: "still", label: "静态头像（无口型）" },
+                  ]} />
+                </Form.Item>
+                <Form.Item name="sadtalker_dir" label="SadTalker 目录"
+                  tooltip="本地 SadTalker 代码目录（含 inference.py）；配置后启用口型同步，否则回退静态头像">
+                  <Input placeholder="如 C:\\Projects\\SadTalker" />
+                </Form.Item>
+                <Form.Item name="sadtalker_python" label="SadTalker Python（可选）">
+                  <Input placeholder="留空用 python" />
+                </Form.Item>
               </Card>
             ),
           },
@@ -198,50 +248,6 @@ export default function Settings() {
                   <Form.Item name="download_videos" label="本地化视频" valuePropName="checked"
                     tooltip="归档时把文章视频下载到本地（需 yt-dlp）；关闭则保留远程 URL（MEDIA_AGENT_DOWNLOAD_VIDEOS）">
                     <Switch />
-                  </Form.Item>
-                  <Form.Item name="video_fit" label="视频适配">
-                    <Select options={["fit", "crop", "blur"].map((v) => ({ value: v }))} />
-                  </Form.Item>
-                  <Form.Item name="video_brand_name" label="视频品牌名"><Input /></Form.Item>
-                  <Divider orientation="left" plain>数字人主播</Divider>
-                  <Form.Item name="avatar_enabled" label="启用数字人主播" valuePropName="checked"
-                    tooltip="在讲解视频中叠加一个数字人主播（口播）。需要主播头像；口型同步需本地 SadTalker + GPU，未配置时用静态头像。">
-                    <Switch />
-                  </Form.Item>
-                  <Form.Item label="主播头像">
-                    <Space align="start">
-                      <Upload showUploadList={false} accept="image/*" customRequest={async ({ file, onSuccess, onError }) => {
-                        try {
-                          const fd = new FormData(); fd.append("file", file as File);
-                          const r = await api.post<{ ok: boolean; avatar_image: string }>("/api/avatar/upload", fd);
-                          form.setFieldValue("avatar_image", r.data.avatar_image);
-                          message.success("头像已上传"); onSuccess?.({}); refetch();
-                        } catch { message.error("上传失败"); onError?.(new Error("upload")); }
-                      }}>
-                        <Button>上传头像</Button>
-                      </Upload>
-                      <Form.Item name="avatar_image" noStyle><Input style={{ width: 220 }} placeholder="头像文件名（自动填充）" /></Form.Item>
-                      {data.avatar_image && <img src={`/avatar/${data.avatar_image}`} alt="presenter" style={{ height: 64, borderRadius: 8, border: "1px solid #eee" }} />}
-                    </Space>
-                  </Form.Item>
-                  <Form.Item name="avatar_position" label="默认位置">
-                    <Select style={{ width: 200 }} options={[
-                      { value: "pip", label: "画中画（角落）" },
-                      { value: "full", label: "全屏主播" },
-                    ]} />
-                  </Form.Item>
-                  <Form.Item name="avatar_provider" label="生成方式">
-                    <Select style={{ width: 280 }} options={[
-                      { value: "sadtalker", label: "SadTalker 口型同步（本地 GPU）" },
-                      { value: "still", label: "静态头像（无口型）" },
-                    ]} />
-                  </Form.Item>
-                  <Form.Item name="sadtalker_dir" label="SadTalker 目录"
-                    tooltip="本地 SadTalker 代码目录（含 inference.py）；配置后启用口型同步，否则回退静态头像">
-                    <Input placeholder="如 C:\\Projects\\SadTalker" />
-                  </Form.Item>
-                  <Form.Item name="sadtalker_python" label="SadTalker Python（可选）">
-                    <Input placeholder="留空用 python" />
                   </Form.Item>
                   <Form.Item name="fetch_proxy" label="网络代理"
                     tooltip="RSS/网页抓取与媒体下载走此 HTTP/HTTPS 代理，可用于绕过 Cloudflare/WAF 或访问受限站点；留空则不使用（MEDIA_AGENT_FETCH_PROXY）">

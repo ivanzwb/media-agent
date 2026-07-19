@@ -1492,19 +1492,12 @@ def create_app(config: Config | None = None,
     def _build_tts(rc, tts_provider=None, tts_voice=None):
         provider = tts_provider if tts_provider is not None else rc.tts_provider
         voice = tts_voice if tts_voice is not None else rc.tts_voice
-        # cosyvoice / fishaudio (voice cloning providers): resolve the
-        # selected voice id to its reference sample and pass as speaker_wav.
+        # cosyvoice: resolve the selected voice id to its reference sample
+        # and pass as speaker_wav.
         if provider == "cosyvoice":
             sp = voice_sample_path(config, voice)
             return get_tts_provider("cosyvoice", voice=str(sp) if sp else None,
                                     model=rc.tts_model, instruct=rc.tts_instruct)
-        if provider == "fishaudio":
-            sp = voice_sample_path(config, voice)
-            return get_tts_provider(
-                "fishaudio",
-                api_key=rc.tts_api_key,
-                voice=str(sp) if sp else None,
-                model=rc.tts_model)
         return get_tts_provider(
             provider, base_url=rc.tts_api_base,
             api_key=rc.tts_api_key, model=rc.tts_model, voice=voice,
@@ -2763,10 +2756,8 @@ def create_app(config: Config | None = None,
                       for v in cloned]
         voices_map: dict[str, list[dict]] = {
             "kitten": list(_KITTEN_PROFILES),
-            "kitten_http": list(_KITTEN_PROFILES),
             "openai": list(_OPENAI_VOICES),
             "cosyvoice": cloned_fmt,
-            "fishaudio": cloned_fmt,
         }
         return {"voices": voices_map.get(provider, [])}
 

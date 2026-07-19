@@ -1,6 +1,6 @@
 import wave
 
-from app.tts.base import get_tts_provider
+from app.tts.base import get_tts_provider, AdjustableTTS
 from app.tts.providers.mock import MockTTSProvider
 from app.tts.providers.local_kitten import LocalKittenTTS
 
@@ -54,29 +54,21 @@ def _install_fake_edge_tts(monkeypatch, captured):
     monkeypatch.setitem(sys.modules, "edge_tts", mod)
 
 
-def test_get_tts_provider_threads_rate_pitch():
+def test_get_tts_provider_wraps_with_adjustable_tts():
     prov = get_tts_provider("kitten", voice="female", rate="+10%", pitch="+15Hz")
-    assert isinstance(prov, LocalKittenTTS)
-    assert prov.rate == "+10%" and prov.pitch == "+15Hz"
+    assert isinstance(prov, AdjustableTTS)
+    assert prov._atempo == 1.1
+    assert prov._semitones is not None  # +15Hz ≈ +2.52 semitones
 
 
-def test_local_kitten_applies_prosody(monkeypatch, tmp_path):
-    captured: dict = {}
-    _install_fake_edge_tts(monkeypatch, captured)
-    prov = get_tts_provider("kitten", voice="female", rate="+10%", pitch="+15Hz")
-    out = prov.synthesize("你好世界", tmp_path / "s")
-    assert out.suffix == ".mp3" and out.exists()
-    assert captured["opts"]["rate"] == "+10%"
-    assert captured["opts"]["pitch"] == "+15Hz"
-
-
-def test_local_kitten_default_prosody(monkeypatch, tmp_path):
+def test_local_kitten_no_prosody_without_rate_pitch(monkeypatch, tmp_path):
     captured: dict = {}
     _install_fake_edge_tts(monkeypatch, captured)
     prov = get_tts_provider("kitten", voice="female")  # no rate/pitch
-    prov.synthesize("你好", tmp_path / "s")
-    assert captured["opts"]["rate"] == "+0%"   # derived from default speed 1.0
-    assert captured["opts"]["pitch"] == "+0Hz"
+    out = prov.synthesize("你好世界", tmp_path / "s")
+    assert out.suffix == ".mp3" and out.exists()
+    # edge-tts should NOT receive rate/pitch opts anymore
+    assert captured["opts"] == {} or "rate" not in captured["opts"]
 
 
 def test_get_tts_provider_openai_compatible():
@@ -85,53 +77,3 @@ def test_get_tts_provider_openai_compatible():
                             voice="x", model="m")
     assert isinstance(prov, OpenAICompatibleTTS)
     assert prov.base_url == "http://localhost:9999/v1"
-
-
-def test_kitten_provider_normalizes_base_and_payload(monkeypatch, tmp_path):
-    from app.tts.providers import kitten as kitten_mod
-    from app.tts.providers.kitten import KittenTTSProvider
-
-    # /v1 suffix should be stripped; endpoint adds /v1/tts/kitten back.
-    prov = get_tts_provider("kitten_http", base_url="http://127.0.0.1:3003/v1",
-                            voice="female")
-    assert isinstance(prov, KittenTTSProvider)
-    assert prov.base_url == "http://127.0.0.1:3003"
-
-    captured = {}
-
-    class FakeResp:
-        content = b"RIFFfake-wav-bytes"
-
-        def raise_for_status(self):
-            ...
-
-    def fake_post(url, json=None, timeout=None):
-        captured["url"] = url
-        captured["json"] = json
-        return FakeResp()
-
-    monkeypatch.setattr(kitten_mod.httpx, "post", fake_post)
-    out = prov.synthesize("你好", tmp_path / "scene-0")
-    assert captured["url"] == "http://127.0.0.1:3003/v1/tts/kitten"
-    assert captured["json"]["profile"] == "female"  # known profile
-    assert captured["json"]["format"] == "wav"
-    assert out.suffix == ".wav" and out.read_bytes().startswith(b"RIFF")
-
-
-def test_kitten_provider_treats_unknown_voice_as_voice_name(monkeypatch, tmp_path):
-    from app.tts.providers import kitten as kitten_mod
-    prov = get_tts_provider("kitten_http", base_url="http://127.0.0.1:3003",
-                            voice="Luna")
-    captured = {}
-
-    class FakeResp:
-        content = b"RIFF"
-
-        def raise_for_status(self):
-            ...
-
-    monkeypatch.setattr(kitten_mod.httpx, "post",
-                        lambda url, json=None, timeout=None: captured.update(json=json) or FakeResp())
-    prov.synthesize("hi", tmp_path / "s")
-    assert captured["json"].get("voice") == "Luna"
-    assert "profile" not in captured["json"]

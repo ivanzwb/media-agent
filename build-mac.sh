@@ -14,7 +14,7 @@ cd ..
 
 # Install deps
 pip3 install -r requirements.txt
-pip3 install "click<8.2" pyinstaller fish-audio-sdk playwright
+pip3 install "click<8.2" pyinstaller playwright
 
 # Build
 pyinstaller --onedir \

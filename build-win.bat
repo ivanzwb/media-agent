@@ -31,7 +31,7 @@ echo Frontend built
 :: Install deps
 echo Installing dependencies...
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-pip install "click<8.2" pyinstaller fish-audio-sdk playwright -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install "click<8.2" pyinstaller playwright -i https://pypi.tuna.tsinghua.edu.cn/simple
 if %errorlevel% neq 0 (
     echo [ERROR] pip install failed
     pause & exit /b 1

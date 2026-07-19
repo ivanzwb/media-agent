@@ -26,7 +26,7 @@
 ### 讲解视频
 - **脚本 + 配音**：从草稿自动生成口播分镜脚本（LLM）→ 逐段 TTS 配音；分镜可在草稿页**编辑**（旁白/画面/重选背景素材、增删/排序），并**只对改动的分镜重配**。
 - **合成**：ffmpeg 合成「图片轮播 / 原视频片段 + 中文字幕 + 配音」的 mp4；中文字幕用 PIL 生成画面帧/叠层（规避 ffmpeg 中文字体问题）；画面适配可选 `fit`（完整+黑边）/`crop`/`blur`。同一视频被连续分镜引用时**续播**、放完**冻结最后一帧**。
-- **TTS**：默认内置 `kitten`（中文走 edge-tts，免 key）；可选 **本地声音复刻 `cosyvoice`**（CosyVoice2-0.5B，上传干声本地克隆音色，最佳中文 TTS 自然度，需 Python < 3.13 + NVIDIA GPU）；也支持 Fish Audio 云端克隆、OpenAI 兼容 / 外部 Kitten 服务。
+- **TTS**：默认内置 `kitten`（中文走 edge-tts，免 key）；可选 **本地声音复刻 `cosyvoice`**（CosyVoice2-0.5B，上传干声本地克隆音色，最佳中文 TTS 自然度，需 Python < 3.13 + NVIDIA GPU）；也支持 OpenAI 兼容 TTS。
 - **更像人的语气**：edge-tts 可调 **语速 / 音调**（`tts_rate` / `tts_pitch`）；CosyVoice 可给 **语气/情感指令**（`tts_instruct`，如「用亲切自然的语气」）。多分镜配音**并行**合成，速度更快。
 - **数字人主播（可选）**：在讲解视频中叠加一个口播主播——**画中画（角落）**或**全屏主播**，可按分镜切换。口型同步用本地 **SadTalker**（需 GPU，单独安装）驱动，用每段配音生成说话头像；未配置 SadTalker 时自动回退为**静态头像**叠加（仍显示主播，只是没有口型）。在「设置 → 视频 → 数字人主播」上传主播头像并开启。
 - 合成需本地 **ffmpeg**；原视频/HLS 下载需 **yt-dlp**；数字人口型同步需 **SadTalker**（可选）。
@@ -72,7 +72,6 @@ bash start.sh
 | **CosyVoice2-0.5B** ⬅️内置 | 本地 | <3.13 | 4GB+ | ⭐⭐⭐ 最佳 | ✅ zero-shot(3-10s) | `pip install cosyvoice` |
 | **GPT-SoVITS** | 本地 | 3.9-3.11 | 4GB+ | ⭐⭐⭐ 极好 | ✅ 1分钟样本 | 单独项目(RVC-Boss) |
 | **Fish Speech** | 本地 | >=3.10 | 4GB+ | ⭐⭐ 好 | ✅ 小样本 | `pip install fish-speech` |
-| **Fish Audio SDK** | ☁️ 云端 | **任意** | **无需** | ⭐⭐⭐ 好 | ✅ 即时复刻 | `pip install fish-audio-sdk` |
 | **edge-tts (kitten)** | 云端 | **任意** | **无需** | ⭐⭐ 中上 | ❌ 无 | 内置 |
 
 ```bash
@@ -94,11 +93,10 @@ Windows:  media-agent\media-agent.exe serve
 macOS:    media-agent/media-agent serve
 ```
 
-打包版已内置所有 Python 依赖（含 fish-audio-sdk、playwright 库）。解压后运行 `setup-optional.bat`（Win）或 `setup-optional.sh`（Mac）可自动检测并引导安装可选组件：
+打包版已内置所有 Python 依赖（playwright 库）。解压后运行 `setup-optional.bat`（Win）或 `setup-optional.sh`（Mac）可自动检测并引导安装可选组件：
 
 | 组件 | 打包版内置？ | 说明 |
 |---|---|---|
-| fish-audio-sdk | ✅ 已内置 | 云端声音克隆 |
 | playwright 库 | ✅ 已内置 | 需额外下载 Chromium（脚本一键完成） |
 | ffmpeg | ❌ 需单独装 | 视频合成必需，[下载](https://ffmpeg.org)后加入 PATH |
 | CosyVoice | ✅ 嵌入式 Python 侧边部署 | 脚本自动部署嵌入式 Python + 安装 PyTorch + 下载模型，一键完成 |
@@ -155,8 +153,8 @@ sources:
 | `MEDIA_AGENT_LLM_API_KEY` | 大模型 API Key | 无 |
 | `MEDIA_AGENT_LLM_MODEL` | 模型名（如 `gpt-4o-mini`） | provider 默认 |
 | `MEDIA_AGENT_IMAGE_PROVIDER` | `mock` \| `openai` | `mock` |
-| `MEDIA_AGENT_TTS_PROVIDER` | `kitten`（内置，中文走 edge-tts）\| `cosyvoice`（本地声音复刻/克隆，CosyVoice2-0.5B，需 Python\<3.13 + GPU）\| `fishaudio`（云端声音克隆，纯 HTTP 任意 Python）\| `mock` \| `kitten_http` \| `openai`（兼容） | `kitten` |
-| `MEDIA_AGENT_TTS_API_BASE` | 外部 TTS 服务地址（仅 `kitten_http`/`openai` 需要） | 无 |
+| `MEDIA_AGENT_TTS_PROVIDER` | `kitten`（内置，中文走 edge-tts）\| `cosyvoice`（本地声音复刻/克隆，CosyVoice2-0.5B，需 Python\<3.13 + GPU）\| `mock` \| `openai`（兼容） | `kitten` |
+| `MEDIA_AGENT_TTS_API_BASE` | 外部 TTS 服务地址（仅 `openai` 需要） | 无 |
 | `MEDIA_AGENT_TTS_API_KEY` | TTS API Key（内置/本地服务可留空） | 无 |
 | `MEDIA_AGENT_TTS_MODEL` | TTS 模型名（openai 兼容用） | `tts-1` |
 | `MEDIA_AGENT_TTS_VOICE` | 音色/风格：`female`/`child`/`male`… 或具体音色名 | `assistant` |
@@ -245,7 +243,7 @@ app/
 ├─ media/               # 下载策略链（downloader / strategies：httpx 直链 / URL 变换 / yt-dlp）
 ├─ llm/                 # 大模型抽象层 + providers（mock / openai）
 ├─ images/              # 图片抽象层 + providers（mock / openai）
-├─ tts/                 # TTS 抽象层 + providers（kitten / cosyvoice / fishaudio / openai…）+ 声音库
+├─ tts/                 # TTS 抽象层 + providers（kitten / cosyvoice / openai…）+ 声音库
 ├─ video/              # builder：PIL 字幕帧 + ffmpeg 合成
 ├─ platforms/           # 平台同步（wechat / xiaohongshu / toutiao / zhihu）— 可插拔架构
 ├─ pipeline/            # classifier / rewriter / sanitizer / localize / recommender(+热度)

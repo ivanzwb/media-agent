@@ -28,7 +28,7 @@ jobs:
       - name: Install deps
         run: |
           pip install -r requirements.txt
-          pip install "click<8.2" pyinstaller fish-audio-sdk playwright
+          pip install "click<8.2" pyinstaller playwright
 
       # Download embeddable Python for CosyVoice sidecar env
       - name: Download embeddable Python
@@ -150,7 +150,7 @@ jobs:
       - name: Install deps
         run: |
           pip install -r requirements.txt
-          pip install "click<8.2" pyinstaller fish-audio-sdk playwright
+          pip install "click<8.2" pyinstaller playwright
 
       # Download embeddable Python for CosyVoice sidecar env
       - name: Download embeddable Python

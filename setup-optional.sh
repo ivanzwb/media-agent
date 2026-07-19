@@ -8,10 +8,9 @@ echo ""
 echo "This script auto-detects and installs missing optional components."
 echo ""
 echo "  [1] Playwright + Chromium (for JS-rendered page scraping)"
-echo "  [2] fish-audio-sdk (cloud voice-cloning TTS)"
-echo "  [3] ffmpeg (video compositing — install manually)"
-echo "  [4] CosyVoice (local voice cloning via embedded Python)"
-echo "  [5] SadTalker (digital-human presenter lip-sync — optional, GPU)"
+echo "  [2] ffmpeg (video compositing — install manually)"
+echo "  [3] CosyVoice (local voice cloning via embedded Python)"
+echo "  [4] SadTalker (digital-human presenter lip-sync — optional, GPU)"
 echo ""
 echo "============================================"
 echo ""
@@ -26,7 +25,7 @@ INTERNAL_DIR="${BUNDLE_DIR}/_internal"
 COSYVOICE_DIR="${BUNDLE_DIR}/_cosyvoice-python"
 
 # ── 1. Playwright + Chromium ─────────────────────
-echo "[1/5] Playwright + Chromium ..."
+echo "[1/4] Playwright + Chromium ..."
 
 if [ -d "$INTERNAL_DIR/playwright" ]; then
     echo "  [OK] Playwright library is bundled"
@@ -71,13 +70,8 @@ if [ "$skip_to_end" != true ]; then
 fi
 echo ""
 
-# ── 2. fish-audio-sdk ──────────────────────────
-echo "[2/5] fish-audio-sdk ..."
-echo "  [OK] fish-audio-sdk is bundled in the package"
-echo ""
-
-# ── 3. ffmpeg ──────────────────────────────────
-echo "[3/5] ffmpeg ..."
+# ── 2. ffmpeg ──────────────────────────────────
+echo "[2/4] ffmpeg ..."
 if command -v ffmpeg >/dev/null 2>&1; then
     echo "  [OK] ffmpeg found: $(which ffmpeg)"
 else
@@ -88,8 +82,8 @@ else
 fi
 echo ""
 
-# ── 4. CosyVoice (embedded Python sidecar) ────
-echo "[4/5] CosyVoice (local voice cloning)..."
+# ── 3. CosyVoice (embedded Python sidecar) ────
+echo "[3/4] CosyVoice (local voice cloning)..."
 
 # Skip if already set up
 if [ -f "$COSYVOICE_DIR/bin/python3" ]; then
@@ -179,8 +173,8 @@ echo "  [OK] CosyVoice is ready to use!"
 echo "  Start Media Agent, then set TTS Provider to 'cosyvoice' in Settings."
 echo ""
 
-# ── 5. SadTalker (digital-human presenter lip-sync, optional) ──
-echo "[5/5] SadTalker (数字人主播口型同步, 可选)..."
+# ── 4. SadTalker (digital-human presenter lip-sync, optional) ──
+echo "[4/4] SadTalker (数字人主播口型同步, 可选)..."
 SADTALKER_DIR="$BUNDLE_DIR/SadTalker"
 if [ -f "$SADTALKER_DIR/inference.py" ] && [ -d "$SADTALKER_DIR/checkpoints" ]; then
     echo "  [OK] SadTalker 已就绪：$SADTALKER_DIR"

@@ -45,8 +45,8 @@ class Config:
     tts_api_key: str | None = None
     tts_model: str | None = None
     tts_voice: str | None = None
-    tts_rate: str | None = None    # edge-tts 语速, e.g. "+0%" / "-10%" / "+20%"
-    tts_pitch: str | None = None   # edge-tts 音调, e.g. "+0Hz" / "+15Hz" / "-10Hz"
+    tts_rate: str | None = None    # 语速, e.g. "+0%" / "-10%" / "+20%" (ffmpeg atempo)
+    tts_pitch: str | None = None   # 音调, e.g. "+0Hz" / "+15Hz" / "-10Hz" (ffmpeg pitch)
     tts_instruct: str | None = None  # CosyVoice 语气/情感指令, e.g. "用亲切自然的语气"
     max_age_days: int | None = None
     max_per_source: int | None = None

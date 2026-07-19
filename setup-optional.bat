@@ -11,10 +11,9 @@ echo.
 echo  This script auto-detects and installs missing optional components.
 echo.
 echo  [1] Playwright + Chromium (for JS-rendered page scraping)
-echo  [2] fish-audio-sdk (cloud voice-cloning TTS)
-echo  [3] ffmpeg (video compositing — install manually)
-echo  [4] CosyVoice (local voice cloning via embedded Python)
-echo  [5] SadTalker (digital-human presenter lip-sync — optional, GPU)
+echo  [2] ffmpeg (video compositing — install manually)
+echo  [3] CosyVoice (local voice cloning via embedded Python)
+echo  [4] SadTalker (digital-human presenter lip-sync — optional, GPU)
 echo.
 echo ============================================
 echo.
@@ -25,7 +24,7 @@ set "COSYVOICE_DIR=%BUNDLE_DIR%_cosyvoice-python\"
 
 :: ===== 1. Playwright + Chromium =====================================
 :playwright
-echo [1/5] Playwright + Chromium ...
+echo [1/4] Playwright + Chromium ...
 
 :: --- Check if playwright library is bundled (in _internal/) ----------
 if exist "%INTERNAL_DIR%playwright\" (
@@ -73,18 +72,11 @@ if defined PW_CHROMIUM_DIR (
 )
 :chromium_skip
 echo.
-goto :fish
-
-:: ===== 2. Fish Audio SDK (bundled, nothing to do) ===================
-:fish
-echo [2/5] fish-audio-sdk ...
-echo   [OK] fish-audio-sdk is bundled in the package
-echo.
 goto :ffmpeg
 
-:: ===== 3. ffmpeg ====================================================
+:: ===== 2. ffmpeg ====================================================
 :ffmpeg
-echo [3/5] ffmpeg ...
+echo [2/4] ffmpeg ...
 where ffmpeg >nul 2>nul
 if %errorlevel% equ 0 (
     for /f "delims=" %%i in ('where ffmpeg') do set "FFPATH=%%i"
@@ -100,9 +92,9 @@ if %errorlevel% equ 0 (
 echo.
 goto :cosyvoice
 
-:: ===== 4. CosyVoice (embedded Python sidecar) =======================
+:: ===== 3. CosyVoice (embedded Python sidecar) =======================
 :cosyvoice
-echo [4/5] CosyVoice (local voice cloning)...
+echo [3/4] CosyVoice (local voice cloning)...
 
 :: --- Skip if already set up -----------------------------------------
 if exist "%COSYVOICE_DIR%python.exe" (
@@ -263,9 +255,9 @@ goto :cosyvoice_end
 echo.
 goto :sadtalker
 
-:: ===== 5. SadTalker (digital-human presenter lip-sync, optional) ====
+:: ===== 4. SadTalker (digital-human presenter lip-sync, optional) ====
 :sadtalker
-echo [5/5] SadTalker (digital-human lip-sync, optional)...
+echo [4/4] SadTalker (digital-human lip-sync, optional)...
 set "SADTALKER_DIR=%BUNDLE_DIR%SadTalker"
 if exist "%SADTALKER_DIR%\inference.py" if exist "%SADTALKER_DIR%\checkpoints\" (
     echo   [OK] SadTalker already set up: %SADTALKER_DIR%

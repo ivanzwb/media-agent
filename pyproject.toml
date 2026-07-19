@@ -36,7 +36,6 @@ dependencies = [
 
 [project.optional-dependencies]
 # Heavy / optional integrations (see README + requirements.txt notes).
-voice = ["fish-audio-sdk"]
 render = ["playwright"]
 dev = ["pytest>=8.3.3", "build", "pyinstaller"]
 

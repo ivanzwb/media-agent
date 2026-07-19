@@ -33,16 +33,8 @@ _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]")
 
 
 class LocalKittenTTS:
-    def __init__(self, voice: str | None = None, speed: float = 1.0,
-                 rate: str | None = None, pitch: str | None = None,
-                 volume: str | None = None):
+    def __init__(self, voice: str | None = None):
         self.voice = (voice or "").strip()
-        self.speed = speed
-        # edge-tts prosody: rate "+10%"/"-10%", pitch "+15Hz"/"-10Hz"
-        # (higher pitch + moderate rate reads livelier / more human).
-        self.rate = (rate or "").strip()
-        self.pitch = (pitch or "").strip()
-        self.volume = (volume or "").strip()
 
     def _resolve_voice(self, chinese: bool) -> str:
         v = self.voice
@@ -58,17 +50,11 @@ class LocalKittenTTS:
 
         chinese = bool(_CJK_RE.search(text))
         voice = self._resolve_voice(chinese)
-        # Explicit rate wins; else derive from speed. edge-tts wants "+N%".
-        rate = self.rate or f"{int(round((self.speed - 1.0) * 100)):+d}%"
-        pitch = self.pitch or "+0Hz"
-        opts: dict = {"rate": rate, "pitch": pitch}
-        if self.volume:
-            opts["volume"] = self.volume
         path = Path(out_stem).with_suffix(".mp3")
         path.parent.mkdir(parents=True, exist_ok=True)
 
         async def _run() -> bytes:
-            comm = edge_tts.Communicate(text, voice=voice, **opts)
+            comm = edge_tts.Communicate(text, voice=voice)
             chunks: list[bytes] = []
             async for chunk in comm.stream():
                 if chunk["type"] == "audio":
