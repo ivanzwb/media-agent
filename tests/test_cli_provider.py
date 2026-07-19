@@ -66,31 +66,38 @@ def test_build_prompt_strips_null_bytes():
 
 
 def test_run_strips_null_bytes_before_subprocess():
-    """_run strips null bytes from prompt before passing to subprocess."""
+    """_run strips null bytes from prompt before passing to subprocess.
+
+    _run spawns via subprocess.Popen (a per-call local handle, for thread
+    safety), so we patch Popen and capture the argv it receives.
+    """
     p = CLIProvider("opencode")
 
     captured = {}
 
-    class FakePopenResult:
-        """Duck-typing the subset of subprocess.CompletedProcess we use."""
-        def __init__(self, args, returncode, stdout, stderr):
-            self.args = args
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
+    class FakePopen:
+        def __init__(self, args, **kwargs):
+            captured["args"] = args
+            self.returncode = 0
 
-    def fake_run(*args, **kwargs):
-        captured["args"] = args
-        captured["kwargs"] = kwargs
-        return FakePopenResult(args, 0, stdout="ok", stderr="")
+        def communicate(self, timeout=None):
+            return ("ok", "")
 
-    with patch.object(subprocess, "run", side_effect=fake_run):
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            ...
+
+        def wait(self, timeout=None):
+            return 0
+
+    with patch.object(subprocess, "Popen", FakePopen):
         p._run("hello\x00world\x00", timeout=30)
 
-    # The prompt is embedded in the arg list via {prompt} substitution
-    args = captured["args"]
-    # args[0] is exe_path, rest is the arg list
-    arg_str = " ".join(args[0] if isinstance(args[0], list) else args)
+    # The prompt is embedded in the argv list via {prompt} substitution
+    args = captured["args"]              # [exe_path, ...substituted args...]
+    arg_str = " ".join(args)
     assert "\x00" not in arg_str
     assert "helloworld" in arg_str
 

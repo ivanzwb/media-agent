@@ -36,6 +36,10 @@ def test_sample_path_rejects_unknown_and_traversal(tmp_path):
 
 
 def test_get_tts_provider_cosyvoice():
+    import pytest
+    # CosyVoice pulls in heavy optional deps (numpy/torch); skip if absent.
+    pytest.importorskip("numpy")
+    pytest.importorskip("torch")
     from app.tts.providers.cosyvoice import CosyVoiceTTS
     prov = get_tts_provider("cosyvoice", voice="/tmp/ref.wav",
                             model="FunAudioLLM/CosyVoice2-0.5B")
@@ -46,6 +50,8 @@ def test_get_tts_provider_cosyvoice():
 
 def test_cosyvoice_requires_sample(tmp_path):
     import pytest
+    pytest.importorskip("numpy")
+    pytest.importorskip("torch")
     from app.tts.providers.cosyvoice import CosyVoiceTTS
     prov = CosyVoiceTTS(speaker_wav=None)
     with pytest.raises(RuntimeError):

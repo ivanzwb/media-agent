@@ -402,13 +402,15 @@ def test_draft_edit_has_tabs(tmp_path):
 
 
 def test_archive_view_renders_original(tmp_path):
+    # The page route (/archive/{id}/view) serves the React SPA shell; the
+    # article content is delivered by the JSON API the SPA fetches.
     client, store, _ = make_client(tmp_path)
     art, _draft = seed(store)
-    r = client.get(f"/archive/{art.id}/view")
-    assert r.status_code == 200
-    assert "GPT-5 breakthrough" in r.text       # title
-    assert "返回归档" in r.text                   # view chrome
-    assert "article-body" in r.text
+    assert client.get(f"/archive/{art.id}/view").status_code == 200  # SPA shell
+    data = client.get(f"/api/archive/{art.id}/view").json()
+    assert data["ok"] is True
+    assert data["article"]["title"] == "GPT-5 breakthrough"
+    assert "content_md" in data
 
 
 def test_archive_refetch(tmp_path, monkeypatch):
@@ -448,7 +450,7 @@ def test_archive_rewrite_article(tmp_path):
 
     # Poll until rewrite completes (MockProvider is instant, so this is fast)
     import time
-    for _ in range(30):  # max 3 seconds
+    for _ in range(150):  # up to ~15s (cold-start imports can be slow)
         status = client.get(f"/api/rewrite-status?article_id={art.id}").json()
         if status.get("done"):
             break
@@ -464,7 +466,7 @@ def test_archive_rewrite_article(tmp_path):
     # Rewrite again should overwrite (still exactly one draft)
     r2 = client.post(f"/archive/{art.id}/rewrite")
     assert r2.json()["started"] is True
-    for _ in range(30):
+    for _ in range(150):
         s2 = client.get(f"/api/rewrite-status?article_id={art.id}").json()
         if s2.get("done"):
             break
@@ -497,7 +499,7 @@ def test_archive_rewrite_promotion_footer_no_mechanical_append(tmp_path):
 
     # Poll until done
     import time
-    for _ in range(30):
+    for _ in range(150):  # up to ~15s (cold-start imports can be slow)
         status = client.get(f"/api/rewrite-status?article_id={art.id}").json()
         if status.get("done"):
             break
