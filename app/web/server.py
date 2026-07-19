@@ -524,6 +524,22 @@ def create_app(config: Config | None = None,
         deleted = get_store().delete_articles(ids)
         return {"ok": True, "deleted": deleted}
 
+    @app.post("/api/drafts/delete")
+    async def api_drafts_delete(request: Request):
+        """Batch-delete drafts (DB rows + their markdown files)."""
+        data = await request.json()
+        raw_ids = data.get("ids") or []
+        ids: list[int] = []
+        for x in raw_ids:
+            try:
+                ids.append(int(x))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            return JSONResponse({"ok": False, "error": "未选择草稿"}, status_code=400)
+        deleted = get_store().delete_drafts(ids)
+        return {"ok": True, "deleted": deleted}
+
     @app.post("/archive/{article_id}/refetch")
     def archive_refetch(article_id: int):
         from app.sources.scraper import scrape_single

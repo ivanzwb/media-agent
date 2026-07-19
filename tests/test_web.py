@@ -145,6 +145,23 @@ def test_video_prepare_unsupported_platform(tmp_path):
     assert r.json()["ok"] is False
 
 
+def test_drafts_batch_delete(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    assert store.get_draft(draft.id) is not None
+    r = client.post("/api/drafts/delete", json={"ids": [draft.id]})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "deleted": 1}
+    assert store.get_draft(draft.id) is None
+
+
+def test_drafts_batch_delete_requires_ids(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    r = client.post("/api/drafts/delete", json={"ids": []})
+    assert r.status_code == 400
+    assert r.json()["ok"] is False
+
+
 def test_styled_html_wechat_theme(tmp_path):
     client, store, _ = make_client(tmp_path)
     _, draft = seed(store)

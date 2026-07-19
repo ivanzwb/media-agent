@@ -388,6 +388,28 @@ class Store:
             except OSError:
                 pass
 
+    def delete_drafts(self, ids: list[int]) -> int:
+        """Delete specific drafts (DB rows + their markdown files). Returns the
+        number of drafts deleted."""
+        if not ids:
+            return 0
+        deleted = 0
+        for did in ids:
+            row = self.get_draft(did)
+            if not row:
+                continue
+            self.conn.execute("DELETE FROM drafts WHERE id=?", (did,))
+            if row["draft_path"]:
+                dp = self.config.data_dir / row["draft_path"]
+                try:
+                    if dp.exists():
+                        dp.unlink()
+                except OSError:
+                    pass
+            deleted += 1
+        self.conn.commit()
+        return deleted
+
     def delete_articles(self, ids: list[int]) -> int:
         """Delete specific articles (and their dependent drafts) from the DB and
         remove their archive/draft files. Returns the number of articles deleted."""

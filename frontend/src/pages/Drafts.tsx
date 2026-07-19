@@ -1,7 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
-import { Table, Tag, Button, Space, Typography } from "antd";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { App as AntApp, Table, Tag, Button, Space, Typography } from "antd";
+import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getJson } from "../api/client";
+import { api, getJson } from "../api/client";
 
 const { Title } = Typography;
 
@@ -20,6 +21,9 @@ const STATUS_COLOR: Record<string, string> = {
 export default function Drafts() {
   const [params, setParams] = useSearchParams();
   const status = params.get("status") || "";
+  const qc = useQueryClient();
+  const { message, modal } = AntApp.useApp();
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const { data } = useQuery({
     queryKey: ["drafts", status],
     queryFn: () => getJson<{ drafts: Draft[]; statuses: string[] }>(
@@ -27,18 +31,52 @@ export default function Drafts() {
   });
   const statuses = data?.statuses || [];
 
+  function batchDelete() {
+    if (!selectedIds.length) return;
+    modal.confirm({
+      title: `确定删除选中的 ${selectedIds.length} 篇草稿？`,
+      content: "将同时删除草稿文件，且不可恢复。",
+      okText: "删除", okType: "danger", cancelText: "取消",
+      onOk: async () => {
+        try {
+          const r = await api.post<{ ok: boolean; deleted: number }>(
+            "/api/drafts/delete", { ids: selectedIds });
+          message.success(`已删除 ${r.data.deleted} 篇`);
+          setSelectedIds([]);
+          qc.invalidateQueries({ queryKey: ["drafts"] });
+        } catch { message.error("删除失败"); }
+      },
+    });
+  }
+
   return (
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
       <Title level={2} style={{ margin: 0 }}>草稿</Title>
       <Space wrap>
-        <Tag.CheckableTag checked={!status} onChange={() => setParams({})}>全部</Tag.CheckableTag>
+        <Tag.CheckableTag checked={!status} onChange={() => { setSelectedIds([]); setParams({}); }}>全部</Tag.CheckableTag>
         {statuses.map((s) => (
-          <Tag.CheckableTag key={s} checked={status === s} onChange={() => setParams({ status: s })}>{s}</Tag.CheckableTag>
+          <Tag.CheckableTag key={s} checked={status === s} onChange={() => { setSelectedIds([]); setParams({ status: s }); }}>{s}</Tag.CheckableTag>
         ))}
+      </Space>
+      <Space wrap style={{
+        width: "100%", padding: "8px 12px", background: "#fafafa",
+        border: "1px solid #f0f0f0", borderRadius: 8,
+      }}>
+        {selectedIds.length > 0 && <Tag color="blue">已选 {selectedIds.length}</Tag>}
+        <Button danger size="small" disabled={!selectedIds.length} onClick={batchDelete}>
+          批量删除{selectedIds.length ? ` (${selectedIds.length})` : ""}
+        </Button>
+        {selectedIds.length > 0 && (
+          <Button size="small" onClick={() => setSelectedIds([])}>取消选择</Button>
+        )}
       </Space>
       <Table rowKey="id" size="small" dataSource={data?.drafts || []}
         pagination={{ pageSize: 30, hideOnSinglePage: true }}
         locale={{ emptyText: "暂无草稿。" }}
+        rowSelection={{
+          selectedRowKeys: selectedIds,
+          onChange: (keys) => setSelectedIds(keys as number[]),
+        }}
         columns={[
           { title: "#", dataIndex: "id", width: 60 },
           { title: "状态", dataIndex: "status", width: 100,
