@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import secrets
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from app.config import Config
@@ -16,6 +17,20 @@ _MEDIA_RE = re.compile(r"^(image|video):\d+$|^upload:.+$")
 
 def _noop(*_a, **_k) -> None:
     pass
+
+
+def _tts_workers(tts: TTSProvider) -> int:
+    """How many scenes to voice in parallel.
+
+    Network/cloud TTS (edge-tts / Kitten HTTP / OpenAI-compatible / Fish Audio)
+    is latency-bound, so several concurrent requests are far faster. A local
+    single-GPU model (CosyVoice) already uses the GPU per call and isn't safe to
+    run concurrently on one device, so keep it serial.
+    """
+    name = type(tts).__name__.lower()
+    if "cosyvoice" in name:
+        return 1
+    return 4
 
 
 def _valid_media(m: str) -> str:
@@ -76,16 +91,37 @@ def generate_narration(draft_id: int, store: Store, llm: LLMProvider,
     out_dir = config.videos_dir / f"draft-{draft_id}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    emit(f"共 {len(scenes)} 个分镜，开始逐段配音…")
-    for i, sc in enumerate(scenes):
-        emit(f"配音 {i + 1}/{len(scenes)}：{sc['narration'][:30]}")
+    workers = min(_tts_workers(tts), max(1, len(scenes)))
+
+    def _synth(i: int, sc: dict) -> tuple[int, str | None, str | None]:
         try:
             audio = tts.synthesize(sc["narration"], out_dir / f"scene-{i}")
-            sc["audio"] = audio.name
+            return i, audio.name, None
         except Exception as e:  # noqa: BLE001 - surface per-scene failures
-            sc["audio"] = None
-            sc["audio_error"] = str(e)
-            emit(f"  配音失败：{e}")
+            return i, None, str(e)
+
+    emit(f"共 {len(scenes)} 个分镜，开始配音（并发 {workers}）…")
+    if workers <= 1:
+        for i, sc in enumerate(scenes):
+            emit(f"配音 {i + 1}/{len(scenes)}：{sc['narration'][:30]}")
+            _, name, err = _synth(i, sc)
+            sc["audio"] = name
+            if err:
+                sc["audio_error"] = err
+                emit(f"  配音失败：{err}")
+    else:
+        done = 0
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = [ex.submit(_synth, i, sc) for i, sc in enumerate(scenes)]
+            for f in as_completed(futs):
+                i, name, err = f.result()
+                scenes[i]["audio"] = name
+                done += 1
+                if err:
+                    scenes[i]["audio_error"] = err
+                    emit(f"  配音失败 #{i + 1}：{err}")
+                else:
+                    emit(f"配音 {done}/{len(scenes)} 完成")
 
     script["draft_id"] = draft_id
     if tts_provider is not None:
@@ -175,20 +211,40 @@ def resynth_scenes(draft_id: int, indices: list[int], tts: TTSProvider,
     out_dir.mkdir(parents=True, exist_ok=True)
 
     targets = [i for i in indices if 0 <= i < len(scenes)]
-    emit(f"重新配音 {len(targets)} 个分镜…")
-    for i in targets:
-        sc = scenes[i]
-        emit(f"配音 #{i + 1}：{sc.get('narration', '')[:30]}")
+    workers = min(_tts_workers(tts), max(1, len(targets)))
+    emit(f"重新配音 {len(targets)} 个分镜（并发 {workers}）…")
+
+    def _resynth(i: int) -> tuple[int, str | None, str | None]:
+        # unique name so reordered/edited scenes don't clobber each other
+        stem = out_dir / f"scene-{i}-{secrets.token_hex(3)}"
         try:
-            # unique name so reordered/edited scenes don't clobber each other
-            stem = out_dir / f"scene-{i}-{secrets.token_hex(3)}"
-            audio = tts.synthesize(sc.get("narration", ""), stem)
-            sc["audio"] = audio.name
-            sc.pop("audio_error", None)
+            audio = tts.synthesize(scenes[i].get("narration", ""), stem)
+            return i, audio.name, None
         except Exception as e:  # noqa: BLE001
-            sc["audio"] = None
-            sc["audio_error"] = str(e)
-            emit(f"  失败：{e}")
+            return i, None, str(e)
+
+    if workers <= 1:
+        for i in targets:
+            emit(f"配音 #{i + 1}：{scenes[i].get('narration', '')[:30]}")
+            _, name, err = _resynth(i)
+            scenes[i]["audio"] = name
+            if err:
+                scenes[i]["audio_error"] = err
+                emit(f"  失败：{err}")
+            else:
+                scenes[i].pop("audio_error", None)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = [ex.submit(_resynth, i) for i in targets]
+            for f in as_completed(futs):
+                i, name, err = f.result()
+                scenes[i]["audio"] = name
+                if err:
+                    scenes[i]["audio_error"] = err
+                    emit(f"  失败 #{i + 1}：{err}")
+                else:
+                    scenes[i].pop("audio_error", None)
+                    emit(f"配音 #{i + 1} 完成")
 
     if tts_provider is not None:
         script["tts_provider"] = tts_provider
