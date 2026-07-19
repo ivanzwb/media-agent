@@ -9,6 +9,8 @@
 // it). These helpers only transform the editor's live preview so the author sees
 // styled output instead of literal directive text.
 
+import type { CSSProperties } from "react";
+
 // Flatten an mdast node's text content (soft breaks -> \n).
 function _nodeText(n: any): string {
   if (!n) return "";
@@ -419,6 +421,16 @@ export function remarkAppDirectives() {
   };
 }
 
+// A URL that points straight at a video file (localized /media/*.mp4 or a
+// remote direct link) — as opposed to an embed page (YouTube/Bilibili/…).
+const _DIRECT_VIDEO_RE = /\.(mp4|webm|ogg|ogv|mov|m4v)(?:[?#]|$)/i;
+function _isDirectVideo(url: string): boolean {
+  return !!url && _DIRECT_VIDEO_RE.test(url);
+}
+const _VIDEO_STYLE: CSSProperties = {
+  maxWidth: "100%", borderRadius: 8, display: "block", margin: "12px 0",
+};
+
 // Extra react-markdown component overrides used by the live preview.
 export const previewComponents = {
   // The rewriter emits each video as an <iframe> plus a redundant
@@ -429,4 +441,22 @@ export const previewComponents = {
     if (text.trim().startsWith("▶")) return null;
     return <a {...props}>{children}</a>;
   },
+  // A raw <iframe> whose src is a *direct* video file would make the browser
+  // download the whole file instead of showing it. Render such sources as an
+  // inline <video> (preload=metadata → no bulk download, just a player). Real
+  // embed pages (YouTube/Bilibili/…) keep the iframe so they still play.
+  iframe: ({ src, ...props }: any) => {
+    const url = String(src || "");
+    if (_isDirectVideo(url)) {
+      return <video controls preload="metadata" src={url} style={_VIDEO_STYLE} />;
+    }
+    return <iframe src={url} {...props} />;
+  },
+  // Any <video> in the body: force controls + preload=metadata so it displays
+  // normally and never eagerly downloads the whole file.
+  video: ({ src, children }: any) => (
+    <video controls preload="metadata" src={src ? String(src) : undefined} style={_VIDEO_STYLE}>
+      {children}
+    </video>
+  ),
 };
