@@ -14,6 +14,7 @@ echo  [1] Playwright + Chromium (for JS-rendered page scraping)
 echo  [2] fish-audio-sdk (cloud voice-cloning TTS)
 echo  [3] ffmpeg (video compositing — install manually)
 echo  [4] CosyVoice (local voice cloning via embedded Python)
+echo  [5] SadTalker (digital-human presenter lip-sync — optional, GPU)
 echo.
 echo ============================================
 echo.
@@ -24,7 +25,7 @@ set "COSYVOICE_DIR=%BUNDLE_DIR%_cosyvoice-python\"
 
 :: ===== 1. Playwright + Chromium =====================================
 :playwright
-echo [1/4] Playwright + Chromium ...
+echo [1/5] Playwright + Chromium ...
 
 :: --- Check if playwright library is bundled (in _internal/) ----------
 if exist "%INTERNAL_DIR%playwright\" (
@@ -76,14 +77,14 @@ goto :fish
 
 :: ===== 2. Fish Audio SDK (bundled, nothing to do) ===================
 :fish
-echo [2/4] fish-audio-sdk ...
+echo [2/5] fish-audio-sdk ...
 echo   [OK] fish-audio-sdk is bundled in the package
 echo.
 goto :ffmpeg
 
 :: ===== 3. ffmpeg ====================================================
 :ffmpeg
-echo [3/4] ffmpeg ...
+echo [3/5] ffmpeg ...
 where ffmpeg >nul 2>nul
 if %errorlevel% equ 0 (
     for /f "delims=" %%i in ('where ffmpeg') do set "FFPATH=%%i"
@@ -101,7 +102,7 @@ goto :cosyvoice
 
 :: ===== 4. CosyVoice (embedded Python sidecar) =======================
 :cosyvoice
-echo [4/4] CosyVoice (local voice cloning)...
+echo [4/5] CosyVoice (local voice cloning)...
 
 :: --- Skip if already set up -----------------------------------------
 if exist "%COSYVOICE_DIR%python.exe" (
@@ -259,6 +260,56 @@ echo.
 goto :cosyvoice_end
 
 :cosyvoice_end
+echo.
+goto :sadtalker
+
+:: ===== 5. SadTalker (digital-human presenter lip-sync, optional) ====
+:sadtalker
+echo [5/5] SadTalker (digital-human lip-sync, optional)...
+set "SADTALKER_DIR=%BUNDLE_DIR%SadTalker"
+if exist "%SADTALKER_DIR%\inference.py" if exist "%SADTALKER_DIR%\checkpoints\" (
+    echo   [OK] SadTalker already set up: %SADTALKER_DIR%
+    echo   In Settings, set the SadTalker dir to that path.
+    goto :finish
+)
+echo   SadTalker enables lip-synced digital-human presenter. It is LARGE
+echo   ^(~5GB models^) and needs an NVIDIA GPU. Without it the static-head
+echo   fallback still works.
+set /p "_ans=  Install SadTalker now? [y/N] "
+if /i "!_ans!"=="y" goto :sadtalker_go
+if /i "!_ans!"=="yes" goto :sadtalker_go
+echo   [SKIP] Skipped SadTalker.
+goto :finish
+
+:sadtalker_go
+where git >nul 2>nul
+if %errorlevel% neq 0 (
+    echo   [SKIP] git not found — install Git, then re-run.
+    goto :finish
+)
+set "SPY=%COSYVOICE_DIR%python.exe"
+if not exist "%SPY%" set "SPY=python"
+echo   Cloning SadTalker...
+if not exist "%SADTALKER_DIR%\.git" git clone --depth 1 https://github.com/OpenTalker/SadTalker.git "%SADTALKER_DIR%"
+if exist "%SADTALKER_DIR%\requirements.txt" (
+    echo   Installing SadTalker requirements ^(GPU torch recommended^)...
+    "%SPY%" -m pip install -r "%SADTALKER_DIR%\requirements.txt"
+    if !errorlevel! neq 0 echo   [WARN] Some deps failed — install matching-CUDA torch per SadTalker README.
+)
+echo   Downloading SadTalker checkpoints ^(~5GB, first time only^)...
+"%SPY%" -m pip install huggingface_hub --quiet
+set "HF_ENDPOINT=https://hf-mirror.com"
+set "HF_HUB_DISABLE_XET=1"
+"%SPY%" -c "from huggingface_hub import snapshot_download; snapshot_download('vinthony/SadTalker', local_dir=r'%SADTALKER_DIR%\checkpoints')"
+if exist "%SADTALKER_DIR%\checkpoints\" (
+    echo   [OK] SadTalker ready: %SADTALKER_DIR%
+    echo   In Settings -^> Video -^> Digital Human, set that dir and enable it.
+) else (
+    echo   [WARN] Checkpoints missing. See https://github.com/OpenTalker/SadTalker
+)
+goto :finish
+
+:finish
 echo.
 echo ============================================
 echo  Setup complete!

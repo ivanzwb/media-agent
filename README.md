@@ -102,7 +102,7 @@ macOS:    media-agent/media-agent serve
 | playwright 库 | ✅ 已内置 | 需额外下载 Chromium（脚本一键完成） |
 | ffmpeg | ❌ 需单独装 | 视频合成必需，[下载](https://ffmpeg.org)后加入 PATH |
 | CosyVoice | ✅ 嵌入式 Python 侧边部署 | 脚本自动部署嵌入式 Python + 安装 PyTorch + 下载模型，一键完成 |
-| SadTalker | ❌ 需单独装（可选） | 数字人主播口型同步用；克隆 [SadTalker](https://github.com/OpenTalker/SadTalker)、下模型、装依赖后，在「设置」填其目录。不装则用静态头像叠加 |
+| SadTalker | ❌ 需单独装（可选） | 数字人主播口型同步用；运行 `setup-optional`（第 5 步，交互式选择安装）自动克隆 + 装依赖 + 下模型，或手动克隆 [SadTalker](https://github.com/OpenTalker/SadTalker)。装好后在「设置」填其目录；不装则用静态头像叠加 |
 
 ### 本地构建
 

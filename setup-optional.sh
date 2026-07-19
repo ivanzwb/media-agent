@@ -11,6 +11,7 @@ echo "  [1] Playwright + Chromium (for JS-rendered page scraping)"
 echo "  [2] fish-audio-sdk (cloud voice-cloning TTS)"
 echo "  [3] ffmpeg (video compositing — install manually)"
 echo "  [4] CosyVoice (local voice cloning via embedded Python)"
+echo "  [5] SadTalker (digital-human presenter lip-sync — optional, GPU)"
 echo ""
 echo "============================================"
 echo ""
@@ -25,7 +26,7 @@ INTERNAL_DIR="${BUNDLE_DIR}/_internal"
 COSYVOICE_DIR="${BUNDLE_DIR}/_cosyvoice-python"
 
 # ── 1. Playwright + Chromium ─────────────────────
-echo "[1/4] Playwright + Chromium ..."
+echo "[1/5] Playwright + Chromium ..."
 
 if [ -d "$INTERNAL_DIR/playwright" ]; then
     echo "  [OK] Playwright library is bundled"
@@ -71,12 +72,12 @@ fi
 echo ""
 
 # ── 2. fish-audio-sdk ──────────────────────────
-echo "[2/4] fish-audio-sdk ..."
+echo "[2/5] fish-audio-sdk ..."
 echo "  [OK] fish-audio-sdk is bundled in the package"
 echo ""
 
 # ── 3. ffmpeg ──────────────────────────────────
-echo "[3/4] ffmpeg ..."
+echo "[3/5] ffmpeg ..."
 if command -v ffmpeg >/dev/null 2>&1; then
     echo "  [OK] ffmpeg found: $(which ffmpeg)"
 else
@@ -88,7 +89,7 @@ fi
 echo ""
 
 # ── 4. CosyVoice (embedded Python sidecar) ────
-echo "[4/4] CosyVoice (local voice cloning)..."
+echo "[4/5] CosyVoice (local voice cloning)..."
 
 # Skip if already set up
 if [ -f "$COSYVOICE_DIR/bin/python3" ]; then
@@ -177,6 +178,55 @@ echo ""
 echo "  [OK] CosyVoice is ready to use!"
 echo "  Start Media Agent, then set TTS Provider to 'cosyvoice' in Settings."
 echo ""
+
+# ── 5. SadTalker (digital-human presenter lip-sync, optional) ──
+echo "[5/5] SadTalker (数字人主播口型同步, 可选)..."
+SADTALKER_DIR="$BUNDLE_DIR/SadTalker"
+if [ -f "$SADTALKER_DIR/inference.py" ] && [ -d "$SADTALKER_DIR/checkpoints" ]; then
+    echo "  [OK] SadTalker 已就绪：$SADTALKER_DIR"
+    echo "  在「设置 → 视频 → 数字人主播」把 SadTalker 目录设为上面的路径。"
+else
+    echo "  SadTalker 为数字人提供口型同步，体积大（模型 ~5GB）且需要 NVIDIA GPU；"
+    echo "  不安装时数字人会用静态头像叠加（仍可用）。"
+    printf "  现在安装 SadTalker？[y/N] "
+    read -r _ans || _ans=""
+    if [ "$_ans" = "y" ] || [ "$_ans" = "Y" ] || [ "$_ans" = "yes" ]; then
+        if ! command -v git >/dev/null 2>&1; then
+            echo "  [SKIP] 未找到 git，请先安装 git 再重跑本脚本。"
+        else
+            SPY="${PYTHON:-}"
+            if [ ! -x "$SPY" ]; then SPY="$(command -v python3 || command -v python || true)"; fi
+            if [ -z "$SPY" ]; then
+                echo "  [SKIP] 未找到可用的 Python。"
+            else
+                echo "  克隆 SadTalker…"
+                [ -d "$SADTALKER_DIR/.git" ] || git clone --depth 1 \
+                    https://github.com/OpenTalker/SadTalker.git "$SADTALKER_DIR" \
+                    || echo "  [WARN] 克隆失败，请检查网络/git。"
+                if [ -f "$SADTALKER_DIR/requirements.txt" ]; then
+                    echo "  安装 SadTalker 依赖（建议使用匹配 GPU 的 torch）…"
+                    "$SPY" -m pip install -r "$SADTALKER_DIR/requirements.txt" \
+                        || echo "  [WARN] 依赖未完全安装，请按 SadTalker README 手动补齐（尤其匹配 CUDA 的 torch）。"
+                fi
+                echo "  下载模型（~5GB，首次）…"
+                if [ -f "$SADTALKER_DIR/scripts/download_models.sh" ]; then
+                    ( cd "$SADTALKER_DIR" && bash scripts/download_models.sh ) \
+                        || echo "  [WARN] 模型下载未完成，可重跑本脚本或手动执行 scripts/download_models.sh。"
+                fi
+                if [ -d "$SADTALKER_DIR/checkpoints" ]; then
+                    echo "  [OK] SadTalker 就绪：$SADTALKER_DIR"
+                    echo "  在「设置 → 视频 → 数字人主播」设置该目录并开启数字人。"
+                else
+                    echo "  [WARN] 缺少 checkpoints，参见 https://github.com/OpenTalker/SadTalker"
+                fi
+            fi
+        fi
+    else
+        echo "  [SKIP] 跳过 SadTalker（数字人将用静态头像）。"
+    fi
+fi
+echo ""
+
 echo "============================================"
 echo "  Setup complete!"
 echo "  Report issues: https://github.com/ivanzwb/media-agent/issues"
