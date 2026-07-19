@@ -372,7 +372,8 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
                 out_mp4: Path, progress=None,
                 video_map: dict[int, Path] | None = None,
                 fit: str = "fit",
-                brand_name: str = "Media Agent") -> Path:
+                brand_name: str = "Media Agent",
+                avatar=None) -> Path:
     """Compose a narrated video from a narration script.
 
     image_map: 1-based index -> local image path (for media "image:N").
@@ -531,6 +532,21 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
         _build_video_clip(i)
 
     clips = [work_dir / f"clip-{i}.mp4" for i in range(total)]
+
+    # Phase 2.5 — composite the digital-human presenter (数字人主播) onto scenes
+    # that request it. Runs after backgrounds are built; SadTalker (if set up)
+    # is slow and single-GPU, so keep this sequential.
+    if avatar is not None and getattr(avatar, "enabled", False) and avatar.ready():
+        from app.video.avatar import scene_avatar_mode, composite_scene
+        for i in range(total):
+            mode = scene_avatar_mode(scenes[i], avatar)
+            if mode == "off":
+                continue
+            audio, duration = _scene_audio(i)
+            emit(f"合成数字人主播 {i + 1}/{total}…")
+            composite_scene(clips[i], audio, duration,
+                            scenes[i].get("narration", ""), mode, avatar,
+                            work_dir, i, emit)
 
     # Warn about clips without audio (diagnostic — shouldn't normally happen)
     silent: list[int] = []

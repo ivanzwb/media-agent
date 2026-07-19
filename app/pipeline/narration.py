@@ -183,6 +183,9 @@ def save_scenes(draft_id: int, scenes: list, config: Config) -> dict:
             item["audio_error"] = sc["audio_error"]
         if sc.get("bg_custom"):
             item["bg_custom"] = sc["bg_custom"]
+        av = str((sc or {}).get("avatar", "") or "").strip().lower()
+        if av in ("off", "pip", "full"):
+            item["avatar"] = av
         clean.append(item)
     script["scenes"] = clean
     # Collect all upload references into a flat list so the frontend

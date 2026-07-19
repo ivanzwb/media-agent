@@ -10,6 +10,7 @@ const { Text } = Typography;
 interface Scene {
   narration?: string; visual?: string; media?: string;
   bg_custom?: string; audio?: string; audio_error?: string;
+  avatar?: string;  // "" default | off | pip | full
 }
 interface Script { scenes: Scene[]; images: string[]; videos: string[]; uploads?: string[]; }
 
@@ -137,6 +138,17 @@ export default function SceneEditor({ draftId, ttsVoice }: { draftId: number; tt
             <Button size="small" onClick={() => aiBg(i)}>AI生成</Button>
             {sc.bg_custom && <Button size="small" danger onClick={() => setScene(i, { bg_custom: undefined, media: "none" })}>清除</Button>}
           </Space>
+          <div style={{ marginTop: 6 }}>
+            <Text type="secondary">数字人主播　</Text>
+            <Select size="small" style={{ width: 170 }} value={sc.avatar || ""}
+              onChange={(v) => setScene(i, { avatar: v })}
+              options={[
+                { value: "", label: "默认（跟随全局）" },
+                { value: "off", label: "关闭" },
+                { value: "pip", label: "画中画（角落）" },
+                { value: "full", label: "全屏主播" },
+              ]} />
+          </div>
           <div style={{ marginTop: 8 }}>
             {sc.audio ? (
               <Space>

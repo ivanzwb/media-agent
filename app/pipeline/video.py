@@ -94,8 +94,37 @@ def build_explainer_video(draft_id: int, config: Config, progress=None) -> Path:
     out = work / "video.mp4"
     build_video(script, work, image_map, out, progress=emit,
                 video_map=video_map, fit=(config.video_fit or "fit"),
-                brand_name=(config.video_brand_name or "Media Agent"))
+                brand_name=(config.video_brand_name or "Media Agent"),
+                avatar=_avatar_spec(config, emit))
     return out
+
+
+def _avatar_spec(config: Config, emit):
+    """Build the digital-human presenter spec from config (or None)."""
+    if not config.avatar_enabled:
+        return None
+    from app.video.avatar import AvatarSpec, sadtalker_available
+    img = (config.avatar_image or "").strip()
+    if not img:
+        emit("数字人已启用，但未设置主播头像（设置→视频），本次跳过")
+        return None
+    img_path = Path(img)
+    if not img_path.is_absolute():
+        img_path = config.avatar_dir / img
+    if not img_path.exists():
+        emit(f"数字人主播头像不存在：{img_path.name}，本次跳过")
+        return None
+    spec = AvatarSpec(
+        enabled=True, image=img_path,
+        provider=(config.avatar_provider or "sadtalker"),
+        position=(config.avatar_position or "pip"),
+        sadtalker_dir=config.sadtalker_dir,
+        sadtalker_python=config.sadtalker_python,
+    )
+    if spec.provider == "sadtalker" and not sadtalker_available(spec):
+        emit("提示：未检测到 SadTalker（将用静态头像）。"
+             "配置 SadTalker 目录后可启用口型同步。")
+    return spec
 
 
 def video_path(draft_id: int, config: Config) -> Path | None:

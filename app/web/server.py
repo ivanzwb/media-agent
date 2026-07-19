@@ -1278,6 +1278,30 @@ def create_app(config: Config | None = None,
             return HTMLResponse("not found", status_code=404)
         return FileResponse(str(path))
 
+    @app.get("/avatar/{name}")
+    def serve_avatar_asset(name: str):
+        # Serve the digital-human presenter portrait from data/avatar/<name>.
+        base = config.avatar_dir.resolve()
+        path = (base / name).resolve()
+        if base not in path.parents or not path.exists():
+            return HTMLResponse("not found", status_code=404)
+        return FileResponse(str(path))
+
+    @app.post("/api/avatar/upload")
+    async def api_avatar_upload(file: UploadFile = File(...)):
+        """Upload the digital-human presenter portrait; saved under
+        data/avatar/ and remembered in settings as avatar_image."""
+        import uuid
+        config.avatar_dir.mkdir(parents=True, exist_ok=True)
+        ext = (Path(file.filename or "avatar.png").suffix or ".png").lower()
+        if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+            ext = ".png"
+        name = f"presenter-{uuid.uuid4().hex[:12]}{ext}"
+        (config.avatar_dir / name).write_bytes(await file.read())
+        get_store().set_setting("avatar_image", name)
+        return {"ok": True, "avatar_image": name,
+                "url": f"/avatar/{name}"}
+
     # ---- export / import config (sources + settings, no API keys) ----
     _EXPORT_SETTING_KEYS = [
         "llm_provider", "llm_model", "llm_api_base",
@@ -3290,6 +3314,12 @@ def create_app(config: Config | None = None,
             "default_workers": os.cpu_count() or 4,
             "video_fit": _get("video_fit") or (config.video_fit or "fit"),
             "video_brand_name": _get("video_brand_name") or (config.video_brand_name or "Media Agent"),
+            "avatar_enabled": (store.get_setting("avatar_enabled") or "0") not in ("0", "false", "no", ""),
+            "avatar_image": _get("avatar_image") or (config.avatar_image or ""),
+            "avatar_position": _get("avatar_position") or (config.avatar_position or "pip"),
+            "avatar_provider": _get("avatar_provider") or (config.avatar_provider or "sadtalker"),
+            "sadtalker_dir": _get("sadtalker_dir") or (config.sadtalker_dir or ""),
+            "sadtalker_python": _get("sadtalker_python") or (config.sadtalker_python or ""),
             "sensitive_level": _get("sensitive_level") or (config.sensitive_level or "standard"),
             "sensitive_words": _get("sensitive_words") or (config.sensitive_words or ""),
             "promotion_footer": _get("promotion_footer") or (config.promotion_footer or ""),
@@ -3335,6 +3365,12 @@ def create_app(config: Config | None = None,
                       download_workers: str = Form(""),
                         video_fit: str = Form(""),
                         video_brand_name: str = Form(""),
+                        avatar_enabled: str = Form("0"),
+                        avatar_image: str = Form(""),
+                        avatar_position: str = Form(""),
+                        avatar_provider: str = Form(""),
+                        sadtalker_dir: str = Form(""),
+                        sadtalker_python: str = Form(""),
                        sensitive_level: str = Form(""),
                        sensitive_words: str = Form(""),
                        promotion_footer: str = Form(""),
@@ -3369,6 +3405,11 @@ def create_app(config: Config | None = None,
             "tts_instruct": tts_instruct.strip(),
             "video_fit": video_fit.strip(),
             "video_brand_name": video_brand_name.strip(),
+            "avatar_image": avatar_image.strip(),
+            "avatar_position": avatar_position.strip(),
+            "avatar_provider": avatar_provider.strip(),
+            "sadtalker_dir": sadtalker_dir.strip(),
+            "sadtalker_python": sadtalker_python.strip(),
             "sensitive_level": sensitive_level.strip(),
             "sensitive_words": sensitive_words.strip(),
             "promotion_footer": promotion_footer.strip(),
@@ -3445,6 +3486,8 @@ def create_app(config: Config | None = None,
                           "1" if download_videos in ("1", "on", "true") else "0")
         store.set_setting("relevance_filter",
                           "1" if relevance_filter in ("1", "on", "true") else "0")
+        store.set_setting("avatar_enabled",
+                          "1" if avatar_enabled in ("1", "on", "true") else "0")
 
         # Default rewrite style: validate against the registry; empty or the
         # builtin default clears the setting (falls back to deep-tech).

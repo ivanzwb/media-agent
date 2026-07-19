@@ -53,6 +53,13 @@ class Config:
     download_workers: int | None = None
     video_fit: str | None = None  # fit | crop | blur
     video_brand_name: str | None = None  # brand name for intro/outro
+    # 数字人主播 (digital-human presenter)
+    avatar_enabled: bool = False          # composite a presenter into the video
+    avatar_image: str | None = None       # presenter portrait filename under data/avatar/
+    avatar_position: str | None = None    # default placement: pip | full
+    avatar_provider: str | None = None    # sadtalker | still
+    sadtalker_dir: str | None = None      # path to a local SadTalker checkout
+    sadtalker_python: str | None = None   # python exe to run SadTalker (optional)
     sensitive_level: str | None = None  # off | basic | standard | strict
     sensitive_words: str | None = None  # user custom list (comma/newline)
     promotion_footer: str | None = None  # promotion footer appended to drafts
@@ -87,6 +94,10 @@ class Config:
     @property
     def media_dir(self) -> Path:
         return self.data_dir / "media"
+
+    @property
+    def avatar_dir(self) -> Path:
+        return self.data_dir / "avatar"
 
     @property
     def voices_dir(self) -> Path:
@@ -129,6 +140,12 @@ class Config:
             download_workers=_int_env("MEDIA_AGENT_DOWNLOAD_WORKERS"),
             video_fit=os.environ.get("MEDIA_AGENT_VIDEO_FIT_MODE"),
             video_brand_name=os.environ.get("MEDIA_AGENT_VIDEO_BRAND_NAME"),
+            avatar_enabled=os.environ.get("MEDIA_AGENT_AVATAR_ENABLED", "0") not in ("0", "false", "no", ""),
+            avatar_image=os.environ.get("MEDIA_AGENT_AVATAR_IMAGE"),
+            avatar_position=os.environ.get("MEDIA_AGENT_AVATAR_POSITION"),
+            avatar_provider=os.environ.get("MEDIA_AGENT_AVATAR_PROVIDER"),
+            sadtalker_dir=os.environ.get("MEDIA_AGENT_SADTALKER_DIR"),
+            sadtalker_python=os.environ.get("MEDIA_AGENT_SADTALKER_PYTHON"),
             sensitive_level=os.environ.get("MEDIA_AGENT_SENSITIVE_LEVEL"),
             sensitive_words=os.environ.get("MEDIA_AGENT_SENSITIVE_WORDS"),
             promotion_footer=os.environ.get("MEDIA_AGENT_PROMOTION_FOOTER"),
@@ -169,6 +186,11 @@ class Config:
             "tts_voice": "tts_voice",
             "video_fit": "video_fit",
             "video_brand_name": "video_brand_name",
+            "avatar_image": "avatar_image",
+            "avatar_position": "avatar_position",
+            "avatar_provider": "avatar_provider",
+            "sadtalker_dir": "sadtalker_dir",
+            "sadtalker_python": "sadtalker_python",
             "sensitive_level": "sensitive_level",
             "sensitive_words": "sensitive_words",
             "promotion_footer": "promotion_footer",
@@ -220,8 +242,12 @@ class Config:
         rf = store.get_setting("relevance_filter")
         if rf is not None:
             self.relevance_filter = rf.strip() not in ("0", "false", "no", "")
+        ae = store.get_setting("avatar_enabled")
+        if ae is not None:
+            self.avatar_enabled = ae.strip() not in ("0", "false", "no", "")
 
     def ensure_dirs(self) -> None:
         for d in (self.archive_dir, self.drafts_dir, self.images_dir,
-                  self.videos_dir, self.media_dir, self.voices_dir):
+                  self.videos_dir, self.media_dir, self.voices_dir,
+                  self.avatar_dir):
             d.mkdir(parents=True, exist_ok=True)
