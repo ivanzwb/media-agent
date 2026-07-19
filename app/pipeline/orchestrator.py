@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from datetime import datetime, timedelta, timezone
 
 from app.feeds import FeedsConfig
@@ -23,6 +24,8 @@ from app.pipeline.relevance import filter_relevant
 from app.pipeline.rewriter import rewrite
 from app.pipeline.sanitizer import load_words, sanitize_draft
 from app.pipeline.score import compute_draft_score
+
+logger = logging.getLogger(__name__)
 
 
 def _fetch_source(src, proxy: str | None = None) -> list[Article]:
@@ -45,7 +48,15 @@ def _fetch_source(src, proxy: str | None = None) -> list[Article]:
 def collect_sources(feeds: FeedsConfig,
                     max_per_source: int | None = None,
                     progress=None, workers: int | None = None,
-                    proxy: str | None = None) -> list[Article]:
+                    proxy: str | None = None,
+                    source_timeout: float = 120.0) -> list[Article]:
+    """Fetch articles from all enabled sources concurrently.
+
+    Uses ``ex.submit()`` with per-task timeouts to prevent a single slow
+    source (e.g. Playwright hanging on a page) from blocking the entire
+    pipeline.  Each source gets *source_timeout* seconds; if it doesn't
+    finish, the task is abandoned and an error is logged.
+    """
     enabled = [s for s in feeds.sources if s.enabled]
     if not enabled:
         return []
@@ -88,10 +99,30 @@ def collect_sources(feeds: FeedsConfig,
         return items
 
     articles: list[Article] = []
+    # Submit all tasks and collect with per-task timeout to avoid one slow
+    # source blocking the entire pipeline (the ex.map() ordering problem).
+    # Use as_completed() to yield futures as they finish, regardless of input
+    # order — a slow source no longer blocks processing of fast ones.
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        # ex.map preserves input order so results are deterministic.
-        for items in ex.map(fetch_one, enabled):
-            articles.extend(items)
+        future_to_src = {ex.submit(fetch_one, src): src for src in enabled}
+        for future in as_completed(future_to_src):
+            src = future_to_src[future]
+            try:
+                items = future.result(timeout=source_timeout)
+                articles.extend(items)
+            except FuturesTimeoutError:
+                logger.warning(
+                    "collect_sources: source %s timed out after %.0fs, skipping",
+                    src.name, source_timeout,
+                )
+                if progress:
+                    progress(f"  来源超时：{src.name}（>{source_timeout:.0f}s）")
+                future.cancel()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("collect_sources: source %s raised %s: %s",
+                               src.name, type(e).__name__, e)
+                if progress:
+                    progress(f"  来源异常：{src.name}（{type(e).__name__}）")
     return articles
 
 

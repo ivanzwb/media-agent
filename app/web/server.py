@@ -215,6 +215,18 @@ def create_app(config: Config | None = None,
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Recover stale running operations from a previous server session.
+        # If the server crashed or was restarted while a pipeline was running,
+        # those operations would be stuck as 'running' forever.  Mark them as
+        # failed so the UI doesn't show phantom running tasks.
+        conn = connect(config.db_path)
+        init_db(conn)
+        from app.db import recover_stale_ops
+        recovered = recover_stale_ops(conn)
+        if recovered:
+            logger.info("Startup recovery: marked %d stale operation(s) as failed", recovered)
+        conn.close()
+
         # 定时调度 is a Pro feature — only start the scheduler when licensed.
         if license_mgr.has_feature(LF.SCHEDULE):
             app.state.scheduler = start_if_enabled(get_store(), _scheduled_run)

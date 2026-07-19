@@ -164,6 +164,26 @@ def get_running_ops(conn: sqlite3.Connection) -> list[dict]:
     return [_op_row_to_dict(r) for r in rows]
 
 
+def recover_stale_ops(conn: sqlite3.Connection, max_age_seconds: int = 3600) -> int:
+    """Mark stale running operations as failed on server startup.
+
+    Operations that have been 'running' for longer than *max_age_seconds*
+    (default 1 hour) are considered stale — the server must have crashed or
+    restarted while they were in progress.  Returns the number of operations
+    recovered.
+    """
+    from datetime import timedelta as _td
+    cutoff = (_dt.now(_tz.utc) - _td(seconds=max_age_seconds)).isoformat()
+    cur = conn.execute(
+        "UPDATE operations SET status='error', finished_at=?, "
+        "error='服务器重启时自动标记为失败' "
+        "WHERE status='running' AND started_at < ?",
+        (_dt.now(_tz.utc).isoformat(), cutoff),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def get_op(conn: sqlite3.Connection, op_id: int) -> dict | None:
     """Return a single operation by ID."""
     row = conn.execute(

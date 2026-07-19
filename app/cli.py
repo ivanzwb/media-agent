@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import typer
@@ -14,6 +15,7 @@ from app.store import Store
 
 app = typer.Typer(help="Media agent pipeline CLI")
 
+logger = logging.getLogger(__name__)
 
 def _store() -> Store:
     cfg = Config.load()
