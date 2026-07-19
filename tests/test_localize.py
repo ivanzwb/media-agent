@@ -59,6 +59,73 @@ def test_localize_downloads_images_to_local(tmp_path, monkeypatch):
         assert p is not None and p.exists()
 
 
+def _fake_download_set(urls, dest, folder, fn, workers, emit, source_url=None):
+    """Pretend every remote URL downloaded to /media/<folder>/dl-<n>."""
+    out = []
+    for i, u in enumerate(urls, 1):
+        out.append(u if u.startswith("/media/") else f"/media/{folder}/dl-{i}")
+    return out
+
+
+def _media_article():
+    body = ("![封面](https://img.cdn/a.png)\n\n"
+            "<iframe src=\"https://v.cdn/clip.mp4\"></iframe>\n\n"
+            "[▶ 视频链接](https://v.cdn/clip.mp4)\n")
+    return Article(
+        title="t", content_md=body, url="https://x.com/a", source_name="X",
+        source_type="scrape", published_at=None,
+        images=["https://img.cdn/a.png"], raw_summary=None,
+        fetched_at=datetime.now(timezone.utc), topic="AI",
+        videos=["https://v.cdn/clip.mp4"])
+
+
+def test_localize_rewrites_image_and_video_links_absolute(tmp_path, monkeypatch):
+    cfg = Config(data_dir=tmp_path)
+    cfg.ensure_dirs()
+    monkeypatch.setattr(loc, "_download_set", _fake_download_set)
+    art = _media_article()
+    localize_article(art, cfg, relativize=False)
+    # both the image AND the video link are rewritten to local /media/ paths
+    assert "https://img.cdn/a.png" not in art.content_md
+    assert "https://v.cdn/clip.mp4" not in art.content_md
+    assert "/media/" in art.content_md
+    assert "../../media/" not in art.content_md   # absolute, not relative
+
+
+def test_localize_relativizes_when_requested(tmp_path, monkeypatch):
+    cfg = Config(data_dir=tmp_path)
+    cfg.ensure_dirs()
+    monkeypatch.setattr(loc, "_download_set", _fake_download_set)
+    art = _media_article()
+    localize_article(art, cfg, relativize=True)
+    assert "../../media/" in art.content_md
+    assert "https://v.cdn/clip.mp4" not in art.content_md   # video rewritten too
+
+
+def test_save_scenes_persists_avatar_field(tmp_path):
+    import json
+    from app.pipeline.narration import save_scenes, load_narration
+    cfg = Config(data_dir=tmp_path)
+    cfg.ensure_dirs()
+    (cfg.videos_dir / "draft-9").mkdir(parents=True, exist_ok=True)
+    (cfg.videos_dir / "draft-9" / "script.json").write_text(
+        json.dumps({"scenes": [], "images": [], "videos": []}),
+        encoding="utf-8")
+    save_scenes("9", [
+        {"narration": "a", "avatar": "pip"},
+        {"narration": "b", "avatar": "full"},
+        {"narration": "c", "avatar": "off"},
+        {"narration": "d", "avatar": "bogus"},   # invalid → not persisted
+        {"narration": "e"},                        # absent → not persisted
+    ], cfg)
+    scenes = load_narration("9", cfg)["scenes"]
+    assert scenes[0]["avatar"] == "pip"
+    assert scenes[1]["avatar"] == "full"
+    assert scenes[2]["avatar"] == "off"
+    assert "avatar" not in scenes[3]
+    assert "avatar" not in scenes[4]
+
+
 def test_config_workers_default_and_override():
     import os
     cfg = Config(data_dir="x")

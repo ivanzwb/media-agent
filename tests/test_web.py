@@ -162,6 +162,61 @@ def test_drafts_batch_delete_requires_ids(tmp_path):
     assert r.json()["ok"] is False
 
 
+def test_settings_roundtrip_tts_and_avatar(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    r = client.post("/settings", data={
+        "tts_provider": "cosyvoice", "tts_rate": "+10%", "tts_pitch": "+15Hz",
+        "tts_instruct": "用亲切的语气",
+        "avatar_enabled": "1", "avatar_image": "p.png", "avatar_position": "full",
+        "avatar_provider": "sadtalker", "sadtalker_dir": "/opt/SadTalker",
+    }, follow_redirects=False)
+    assert r.status_code in (200, 303)
+    s = client.get("/api/settings").json()
+    assert s["tts_rate"] == "+10%" and s["tts_pitch"] == "+15Hz"
+    assert s["tts_instruct"] == "用亲切的语气"
+    assert s["avatar_enabled"] is True
+    assert s["avatar_image"] == "p.png" and s["avatar_position"] == "full"
+    assert s["sadtalker_dir"] == "/opt/SadTalker"
+    # persisted to DB
+    assert store.get_setting("tts_pitch") == "+15Hz"
+    assert store.get_setting("avatar_enabled") == "1"
+
+
+def test_drafts_pagination_api(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    art = store.save_article(Article(
+        title="A", content_md="# b", url="https://x.com/p", source_name="S",
+        source_type="rss", published_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        images=[], raw_summary=None,
+        fetched_at=datetime(2026, 1, 2, tzinfo=timezone.utc), topic="AI"))
+    for i in range(5):
+        store.save_draft(Draft(
+            article_id=art.id, title_candidates=[f"T{i}"], body_md=f"# {i}",
+            topic="AI", source_url=art.url, source_name=art.source_name))
+    page1 = client.get("/api/drafts?limit=2&offset=0").json()
+    page2 = client.get("/api/drafts?limit=2&offset=2").json()
+    assert page1["total"] == 5 and page2["total"] == 5
+    assert len(page1["drafts"]) == 2 and len(page2["drafts"]) == 2
+    ids1 = {d["id"] for d in page1["drafts"]}
+    ids2 = {d["id"] for d in page2["drafts"]}
+    assert ids1.isdisjoint(ids2)
+
+
+def test_avatar_upload_saves_and_serves(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    png = b"\x89PNG\r\n\x1a\n" + b"x" * 32
+    r = client.post("/api/avatar/upload",
+                    files={"file": ("me.png", png, "image/png")})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["avatar_image"].endswith(".png")
+    # remembered in settings
+    assert store.get_setting("avatar_image") == body["avatar_image"]
+    # served back
+    got = client.get(f"/avatar/{body['avatar_image']}")
+    assert got.status_code == 200 and got.content == png
+
+
 def test_styled_html_wechat_theme(tmp_path):
     client, store, _ = make_client(tmp_path)
     _, draft = seed(store)

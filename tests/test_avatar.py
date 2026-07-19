@@ -83,6 +83,31 @@ def test_composite_full_static_uses_subtitle(tmp_path, monkeypatch):
     assert any("overlay=0:0" in " ".join(c) for c in calls)
 
 
+def test_avatar_spec_from_config(tmp_path):
+    from app.config import Config
+    from app.pipeline.video import _avatar_spec
+    noop = lambda *_a, **_k: None  # noqa: E731
+
+    # disabled → None
+    assert _avatar_spec(Config(data_dir=tmp_path, avatar_enabled=False), noop) is None
+    # enabled but no image set → None
+    assert _avatar_spec(Config(data_dir=tmp_path, avatar_enabled=True,
+                               avatar_image=""), noop) is None
+    # enabled but image file missing → None
+    cfg = Config(data_dir=tmp_path, avatar_enabled=True, avatar_image="nope.png")
+    cfg.ensure_dirs()
+    assert _avatar_spec(cfg, noop) is None
+    # valid → spec with resolved absolute image + position
+    cfg2 = Config(data_dir=tmp_path, avatar_enabled=True, avatar_image="p.png",
+                  avatar_position="full", avatar_provider="still")
+    cfg2.ensure_dirs()
+    (cfg2.avatar_dir / "p.png").write_bytes(b"\x89PNG")
+    spec = _avatar_spec(cfg2, noop)
+    assert spec is not None and spec.enabled and spec.ready()
+    assert spec.position == "full"
+    assert spec.image == cfg2.avatar_dir / "p.png"
+
+
 def test_composite_noop_when_off_or_not_ready(tmp_path, monkeypatch):
     called: list[int] = []
     monkeypatch.setattr(av, "_run", lambda *a, **k: called.append(1))

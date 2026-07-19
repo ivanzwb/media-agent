@@ -36,6 +36,49 @@ def test_mock_tts_writes_wav_scaling_with_text(tmp_path):
     assert long_frames > short_frames
 
 
+def _install_fake_edge_tts(monkeypatch, captured):
+    import sys
+    import types
+
+    class FakeComm:
+        def __init__(self, text, voice=None, **opts):
+            captured["text"] = text
+            captured["voice"] = voice
+            captured["opts"] = opts
+
+        async def stream(self):
+            yield {"type": "audio", "data": b"ID3fake-mp3-audio"}
+
+    mod = types.ModuleType("edge_tts")
+    mod.Communicate = FakeComm
+    monkeypatch.setitem(sys.modules, "edge_tts", mod)
+
+
+def test_get_tts_provider_threads_rate_pitch():
+    prov = get_tts_provider("kitten", voice="female", rate="+10%", pitch="+15Hz")
+    assert isinstance(prov, LocalKittenTTS)
+    assert prov.rate == "+10%" and prov.pitch == "+15Hz"
+
+
+def test_local_kitten_applies_prosody(monkeypatch, tmp_path):
+    captured: dict = {}
+    _install_fake_edge_tts(monkeypatch, captured)
+    prov = get_tts_provider("kitten", voice="female", rate="+10%", pitch="+15Hz")
+    out = prov.synthesize("你好世界", tmp_path / "s")
+    assert out.suffix == ".mp3" and out.exists()
+    assert captured["opts"]["rate"] == "+10%"
+    assert captured["opts"]["pitch"] == "+15Hz"
+
+
+def test_local_kitten_default_prosody(monkeypatch, tmp_path):
+    captured: dict = {}
+    _install_fake_edge_tts(monkeypatch, captured)
+    prov = get_tts_provider("kitten", voice="female")  # no rate/pitch
+    prov.synthesize("你好", tmp_path / "s")
+    assert captured["opts"]["rate"] == "+0%"   # derived from default speed 1.0
+    assert captured["opts"]["pitch"] == "+0Hz"
+
+
 def test_get_tts_provider_openai_compatible():
     from app.tts.providers.openai_compatible import OpenAICompatibleTTS
     prov = get_tts_provider("openai", base_url="http://localhost:9999/v1",
