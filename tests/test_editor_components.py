@@ -108,6 +108,54 @@ def test_update_and_delete_custom():
     assert C.delete_custom_component(st, a.id) is False
 
 
+# ── Custom template CRUD ──────────────────────────────────────────────────
+
+def test_create_custom_template():
+    st = FakeStore()
+    t = C.save_custom_template(st, id=None, name="我的模板",
+                               markdown="# 标题\n\n正文")
+    assert t.id and not t.is_builtin
+    allt = C.all_templates(st)
+    assert any(x.id == t.id for x in allt)
+    assert len(allt) == len(C.builtin_templates()) + 1
+    # resolvable via get_template with a store
+    assert C.get_template(t.id, st) is not None
+    assert C.get_template(t.id) is None  # builtin-only lookup
+
+
+def test_custom_template_requires_name_and_markdown():
+    st = FakeStore()
+    with pytest.raises(ValueError):
+        C.save_custom_template(st, id=None, name="", markdown="x")
+    with pytest.raises(ValueError):
+        C.save_custom_template(st, id=None, name="x", markdown="   ")
+
+
+def test_custom_template_unique_ids():
+    st = FakeStore()
+    a = C.save_custom_template(st, id=None, name="Tpl", markdown="a")
+    b = C.save_custom_template(st, id=None, name="Tpl", markdown="b")
+    assert a.id != b.id
+
+
+def test_cannot_overwrite_or_delete_builtin_template():
+    st = FakeStore()
+    with pytest.raises(ValueError):
+        C.save_custom_template(st, id="product-launch", name="x", markdown="y")
+    with pytest.raises(ValueError):
+        C.delete_custom_template(st, "product-launch")
+
+
+def test_update_and_delete_custom_template():
+    st = FakeStore()
+    a = C.save_custom_template(st, id=None, name="Tpl", markdown="a")
+    C.save_custom_template(st, id=a.id, name="Tpl2", markdown="bb")
+    got = [x for x in C.custom_templates(st) if x.id == a.id][0]
+    assert got.name == "Tpl2" and got.markdown == "bb"
+    assert C.delete_custom_template(st, a.id) is True
+    assert C.delete_custom_template(st, a.id) is False
+
+
 # ── Formatter directive rendering ─────────────────────────────────────────
 
 def test_formatter_renders_tip_card():

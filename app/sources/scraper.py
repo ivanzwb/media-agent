@@ -350,6 +350,10 @@ def _render_with_playwright(url: str, timeout: float) -> str | None:
                 "--disable-gpu",
                 "--disable-dev-shm-usage",
                 "--disable-setuid-sandbox",
+                # Windows: Chrome 129+ "new" headless can flash a blank white
+                # window while scraping. Shove any stray window far off-screen
+                # so the user never sees it (safe across chromium/chrome).
+                "--window-position=-32000,-32000",
             ],
             **kwargs,
         )
