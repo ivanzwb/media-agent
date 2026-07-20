@@ -5,7 +5,7 @@ import logging
 import os
 import random
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, wait, FIRST_COMPLETED
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from datetime import datetime, timedelta, timezone
 
 from app.feeds import FeedsConfig
@@ -105,7 +105,14 @@ def collect_sources(feeds: FeedsConfig,
     # Use wait(FIRST_COMPLETED) in a loop: each iteration waits up to
     # source_timeout for the NEXT future to complete.  If nothing finishes
     # within that window, we cancel remaining futures and move on.
-    with ThreadPoolExecutor(max_workers=workers) as ex:
+    #
+    # IMPORTANT: We must NOT use `with ThreadPoolExecutor()` here because
+    # its __exit__ calls shutdown(wait=True), which blocks until ALL threads
+    # finish — even cancelled ones (Python cannot kill threads).  Instead we
+    # call shutdown(wait=False, cancel_futures=True) so cancelled stragglers
+    # are abandoned immediately and the pipeline continues.
+    ex = ThreadPoolExecutor(max_workers=workers)
+    try:
         future_to_src = {ex.submit(fetch_one, src): src for src in enabled}
         pending: set = set(future_to_src.keys())
         while pending:
@@ -131,9 +138,13 @@ def collect_sources(feeds: FeedsConfig,
                     )
                     if progress:
                         progress(f"  来源超时：{src.name}（>{source_timeout:.0f}s）")
-                    future.cancel()
                 break
             pending = not_done
+    finally:
+        # wait=False: don't block on still-running threads (e.g. Playwright
+        # hanging).  cancel_futures=True: drop any queued-but-not-started
+        # tasks.  Abandoned threads will finish on their own in the background.
+        ex.shutdown(wait=False, cancel_futures=True)
     return articles
 
 
