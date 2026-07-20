@@ -631,3 +631,21 @@ def test_draft_adapt_returns_json(tmp_path):
     assert "publish_url" in data
     # Should NOT create a new draft
     assert len(store.list_drafts()) == 1
+
+
+def test_apply_template_unknown_template_404(tmp_path):
+    """apply-template rejects an unknown template id without starting a task."""
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    r = client.post(f"/api/draft/{draft.id}/apply-template",
+                    data={"template_id": "__no_such_template__"})
+    assert r.status_code == 404
+    assert r.json()["error"] == "模板不存在"
+
+
+def test_apply_template_missing_draft_404(tmp_path):
+    """apply-template on a non-existent draft returns 404, not 500."""
+    client, store, _ = make_client(tmp_path)
+    r = client.post("/api/draft/999999/apply-template",
+                    data={"template_id": "whatever"})
+    assert r.status_code == 404

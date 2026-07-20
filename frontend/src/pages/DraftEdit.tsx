@@ -170,15 +170,18 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   const [localizing, setLocalizing] = useState(false);
   const [locLog, setLocLog] = useState<string[]>([]);
   const [locClosed, setLocClosed] = useState(false);
+  const [tplApplying, setTplApplying] = useState(false);
   const TOUTIAO_URL = "https://mp.toutiao.com/profile_v4/graphic/publish";
 
   // Track active poll interval so we can clear on unmount
   const rewritePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const locPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tplPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     return () => {
       if (rewritePollRef.current) clearInterval(rewritePollRef.current);
       if (locPollRef.current) clearInterval(locPollRef.current);
+      if (tplPollRef.current) clearInterval(tplPollRef.current);
     };
   }, []);
 
@@ -477,30 +480,63 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
       execute: (s, api) => api.replaceSelection(
         `\n::::columns\n:::col\n${s.selectedText || "左栏内容"}\n:::\n:::col\n右栏内容\n:::\n::::\n\n`) },
   ];
-  // Apply a template to the article: put the existing body into the template's
-  // main content slot (so 点击模板 = 把文章内容套用上模板), preserving the
-  // template's title/structure/footer for the user to fill. Undoable via commit.
-  function applyTemplate(t: any) {
-    const tpl = String(t.markdown || "");
+  // Apply a template to the article. If the draft has content, the article is
+  // REWRITTEN to follow the template's structure/visual style (via LLM or CLI
+  // Agent per settings, async with progress). If the draft is empty there's
+  // nothing to rewrite, so the template is dropped in as a starter. Undoable.
+  async function applyTemplate(t: any) {
+    if (tplApplying) return;
     const content = body.trim();
-    let next: string;
     if (!content) {
-      next = tpl;
-    } else {
-      // first "body-like" placeholder → the article content goes there
-      const slot = /\{[^}]*(?:正文|段落|内容|钩子|开场|导语|简介|说明|背景|详情)[^}]*\}/;
-      next = slot.test(tpl) ? tpl.replace(slot, content) : (tpl.trimEnd() + "\n\n" + content + "\n");
+      commit(String(t.markdown || ""));
+      setTplOpen(false);
+      refocusEditor();
+      message.success(`已套用模板：${t.name}`);
+      return;
     }
-    commit(next);
-    setTplOpen(false);
-    refocusEditor();
-    message.success(`已套用模板：${t.name}`);
+    setTplApplying(true);
+    message.loading({ content: `正在用「${t.name}」模板重写文章…`, key: "tpl", duration: 0 });
+    try {
+      const r = await postForm<{ ok?: boolean; running?: boolean; error?: string }>(
+        `/api/draft/${data.id}/apply-template`, { template_id: t.id });
+      if (r.error || r.ok === false) {
+        setTplApplying(false);
+        message.error({ content: "套用模板失败：" + (r.error || "未知错误"), key: "tpl" });
+        return;
+      }
+      setTplOpen(false);
+      if (tplPollRef.current) clearInterval(tplPollRef.current);
+      const poll = setInterval(async () => {
+        try {
+          const s = await getJson<{ status: string; body_md?: string; error?: string }>(
+            `/api/draft/${data.id}/agent-status`);
+          if (s.status === "completed") {
+            clearInterval(poll); tplPollRef.current = null; setTplApplying(false);
+            if (s.body_md) commit(s.body_md);
+            try { await postForm(`/api/draft/${data.id}/agent-clear`); } catch { /* ignore */ }
+            message.success({ content: `已用「${t.name}」模板重写`, key: "tpl" });
+            qc.invalidateQueries({ queryKey: ["draft", data.id] });
+            refocusEditor();
+          } else if (s.status === "error") {
+            clearInterval(poll); tplPollRef.current = null; setTplApplying(false);
+            message.error({ content: "套用模板失败：" + (s.error || "未知错误"), key: "tpl" });
+          }
+        } catch { /* transient poll error — keep polling */ }
+      }, 1200);
+      tplPollRef.current = poll;
+    } catch {
+      setTplApplying(false);
+      message.error({ content: "请求失败", key: "tpl" });
+    }
   }
   const templateCommand: ICommand = {
     name: "template", keyCommand: "template",
-    buttonProps: { title: "套用模板（可视化预览，点击把正文套入模板）" },
-    icon: label("套用模板 ▾"),
-    execute: () => setTplOpen(true),
+    buttonProps: {
+      title: tplApplying ? "正在用模板重写文章…" : "套用模板（用所选模板重写文章）",
+      disabled: tplApplying,
+    },
+    icon: label(tplApplying ? "套用模板…" : "套用模板 ▾"),
+    execute: () => { if (!tplApplying) setTplOpen(true); },
   };
   const panelCommand: ICommand = {
     name: "panel", keyCommand: "panel", buttonProps: { title: "组件面板" }, icon: label("组件面板 ▸"),
@@ -694,12 +730,13 @@ function TemplateGallery({ open, onClose, templates, hasContent, onApply }: {
       title="套用模板" styles={{ body: { maxHeight: "72vh", overflow: "auto" } }}>
       <Text type="secondary" style={{ fontSize: 12 }}>
         {hasContent
-          ? "点击模板：把当前正文套入所选模板（保留模板标题/结构，可 Ctrl+Z 撤销）。"
+          ? "点击模板：用所选模板重写文章（保留事实与信息，套用模板的排版结构与视觉风格，可 Ctrl+Z 撤销）。"
           : "点击模板：以该模板作为正文起稿（可 Ctrl+Z 撤销）。"}
       </Text>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
         {templates.map((t) => (
-          <div key={t.id} className="ma-comp-card" role="button" title={`套用：${t.name}`}
+          <div key={t.id} className="ma-comp-card" role="button"
+            title={hasContent ? `用此模板重写文章：${t.name}` : `套用：${t.name}`}
             onClick={() => onApply(t)}
             style={{ border: "1px solid #eaeaea", borderRadius: 8, overflow: "hidden",
               cursor: "pointer", background: "#fff" }}>

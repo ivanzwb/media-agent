@@ -1170,6 +1170,82 @@ def create_app(config: Config | None = None,
 
         return {"ok": True, "running": True, "draft_id": draft_id}
 
+    @app.post("/api/draft/{draft_id}/apply-template")
+    def draft_apply_template(draft_id: int, template_id: str = Form(...)):
+        """Rewrite the draft so it follows the selected template's structure and
+        visual style. Honors the configured rewrite priority (LLM vs CLI Agent)
+        and reuses the agent background flow + /agent-status polling."""
+        store = get_store()
+
+        if draft_id in _agent_tasks and _agent_tasks[draft_id]["status"] == "running":
+            return JSONResponse(
+                {"ok": False, "error": "正在处理中，请等待完成或取消当前任务"},
+                status_code=409)
+
+        body = store.read_draft_body(draft_id)
+        if not body or "body_md" not in body:
+            return JSONResponse({"ok": False, "error": "草稿不存在或内容为空"},
+                                status_code=404)
+
+        tpl = editor_components.get_template(template_id)
+        if not tpl:
+            return JSONResponse({"ok": False, "error": "模板不存在"},
+                                status_code=404)
+
+        row = store.get_draft(draft_id)
+        full_md = ""
+        if row and row["draft_path"]:
+            abs_path = config.data_dir / row["draft_path"]
+            if abs_path.exists():
+                full_md = abs_path.read_text(encoding="utf-8")
+        if not full_md:
+            import frontmatter
+            full_md = frontmatter.dumps(frontmatter.Post(body["body_md"]))
+
+        # Run the agent/LLM inside the data dir so any scratch file it writes
+        # (output-draft.md) lands there, not in the project root.
+        try:
+            config.data_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+
+        # Resolve provider honoring rewrite_priority (LLM or CLI Agent).
+        rc = Config.load(store=store)
+        provider = _resolve_provider(rc)
+        # CLI agents write output-draft.md relative to their cwd.
+        if provider.__class__.__name__ == "CLIProvider":
+            try:
+                provider._cwd = str(config.data_dir)
+            except Exception:  # noqa: BLE001
+                pass
+
+        prompt = (
+            "请把这篇文章按照下面「目标模板」的结构、排版层级和视觉组件进行重写：\n"
+            "- 保留文章的事实、数据与核心信息，不要编造内容；\n"
+            "- 套用模板的标题层级、分段方式与视觉组件（如 :::tip 提示卡片、"
+            ":::center 居中、==高亮==、{color:#HEX} 彩色字、::::columns 双栏 等），"
+            "并保留模板的结尾结构；\n"
+            "- 用模板的板式重新组织正文，使成品排版风格与模板一致；\n"
+            "- 保留 front-matter 中的 title_candidates 等元信息（可按需润色标题）。\n\n"
+            f"## 目标模板（{tpl.name}）\n```markdown\n{tpl.markdown}\n```"
+        )
+
+        _agent_tasks[draft_id] = {
+            "status": "running",
+            "provider": provider,
+            "started_at": time.time(),
+            "prompt": prompt,
+        }
+        t = threading.Thread(
+            target=_agent_run_background,
+            args=(draft_id, prompt, full_md, body.get("body_md", ""), provider),
+            daemon=True,
+        )
+        t.start()
+
+        return {"ok": True, "running": True, "draft_id": draft_id,
+                "template": tpl.name}
+
     @app.get("/api/draft/{draft_id}/agent-status")
     def draft_agent_status(draft_id: int):
         """Poll agent execution status."""
