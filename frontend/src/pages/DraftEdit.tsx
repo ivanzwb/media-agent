@@ -163,7 +163,6 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   const colorRef = useRef("#e67514");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
-  const [tplOpen, setTplOpen] = useState(false);
   const [rewriting, setRewriting] = useLocalState<boolean>(`draftedit-rewriting-${data.id}`, false);
   const [rewriteStyle, setRewriteStyle] = useState("");
   const [platform, setPlatform] = useState("");
@@ -489,7 +488,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     const content = body.trim();
     if (!content) {
       commit(String(t.markdown || ""));
-      setTplOpen(false);
+      setDrawerOpen(false);
       refocusEditor();
       message.success(`已套用模板：${t.name}`);
       return;
@@ -504,7 +503,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
         message.error({ content: "套用模板失败：" + (r.error || "未知错误"), key: "tpl" });
         return;
       }
-      setTplOpen(false);
+      setDrawerOpen(false);
       if (tplPollRef.current) clearInterval(tplPollRef.current);
       const poll = setInterval(async () => {
         try {
@@ -524,22 +523,17 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
         } catch { /* transient poll error — keep polling */ }
       }, 1200);
       tplPollRef.current = poll;
-    } catch {
+    } catch (e: any) {
       setTplApplying(false);
-      message.error({ content: "请求失败", key: "tpl" });
+      // Surface Pro-gate / rewrite-quota messages (403 body carries .error).
+      const msg = e?.response?.data?.error || "请求失败";
+      message.error({ content: msg, key: "tpl" });
     }
   }
-  const templateCommand: ICommand = {
-    name: "template", keyCommand: "template",
-    buttonProps: {
-      title: tplApplying ? "正在用模板重写文章…" : "套用模板（用所选模板重写文章）",
-      disabled: tplApplying,
-    },
-    icon: label(tplApplying ? "套用模板…" : "套用模板 ▾"),
-    execute: () => { if (!tplApplying) setTplOpen(true); },
-  };
   const panelCommand: ICommand = {
-    name: "panel", keyCommand: "panel", buttonProps: { title: "组件面板" }, icon: label("组件面板 ▸"),
+    name: "panel", keyCommand: "panel",
+    buttonProps: { title: tplApplying ? "正在用模板重写文章…" : "组件面板（套用模板 / 组件库 / 素材库）" },
+    icon: label(tplApplying ? "组件面板…（重写中）" : "组件面板 ▸"),
     execute: () => setDrawerOpen(true),
   };
   const localizeCommand: ICommand = {
@@ -597,7 +591,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   };
   const editorCommands: ICommand[] = [
     ...commands.getCommands(), commands.divider,
-    ...styleCommands, styleParamCommand, commands.divider, localizeCommand, commands.divider, templateCommand, panelCommand,
+    ...styleCommands, styleParamCommand, commands.divider, localizeCommand, commands.divider, panelCommand,
   ];
 
   return (
@@ -676,9 +670,8 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
         </Col>
       </Row>
 
-      <TemplateGallery open={tplOpen} onClose={() => setTplOpen(false)}
-        templates={tplData?.templates || []} hasContent={!!body.trim()} onApply={applyTemplate} />
-      <ComponentDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onInsert={insertAtCursor} getSelection={getSelection} />
+      <ComponentDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onInsert={insertAtCursor} getSelection={getSelection}
+        templates={tplData?.templates || []} hasContent={!!body.trim()} onApplyTemplate={applyTemplate} tplApplying={tplApplying} />
       <AgentModal open={agentOpen} draftId={data.id} onClose={() => setAgentOpen(false)}
         onApplied={(md) => { commit(md); setAgentOpen(false); }} />
       <FloatButton icon={<RobotOutlined />} type="primary" tooltip="Agent 编辑"
@@ -718,46 +711,6 @@ function ComponentThumb({ markdown }: { markdown: string }) {
   );
 }
 
-// WYSIWYG template picker: renders each full-article template as a scaled-down
-// preview card so the user sees the 模板样子 before applying. Clicking a card
-// applies the template to the article (fills content into it).
-function TemplateGallery({ open, onClose, templates, hasContent, onApply }: {
-  open: boolean; onClose: () => void; templates: any[]; hasContent: boolean;
-  onApply: (t: any) => void;
-}) {
-  return (
-    <Modal open={open} onCancel={onClose} footer={null} width={760} zIndex={100001}
-      title="套用模板" styles={{ body: { maxHeight: "72vh", overflow: "auto" } }}>
-      <Text type="secondary" style={{ fontSize: 12 }}>
-        {hasContent
-          ? "点击模板：用所选模板重写文章（保留事实与信息，套用模板的排版结构与视觉风格，可 Ctrl+Z 撤销）。"
-          : "点击模板：以该模板作为正文起稿（可 Ctrl+Z 撤销）。"}
-      </Text>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
-        {templates.map((t) => (
-          <div key={t.id} className="ma-comp-card" role="button"
-            title={hasContent ? `用此模板重写文章：${t.name}` : `套用：${t.name}`}
-            onClick={() => onApply(t)}
-            style={{ border: "1px solid #eaeaea", borderRadius: 8, overflow: "hidden",
-              cursor: "pointer", background: "#fff" }}>
-            <div className="ma-comp-thumb" data-color-mode="light"
-              style={{ height: 220, overflow: "hidden", pointerEvents: "none",
-                background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
-              <div style={{ transform: "scale(0.6)", transformOrigin: "top left",
-                width: `${100 / 0.6}%`, padding: "8px 12px", boxSizing: "border-box" }}>
-                <MDEditor.Markdown source={t.markdown} remarkPlugins={[remarkAppDirectives]}
-                  components={previewComponents}
-                  style={{ background: "transparent", fontSize: 13, lineHeight: 1.5 }} />
-              </div>
-            </div>
-            <div style={{ padding: "6px 10px", fontSize: 13, fontWeight: 600, color: "#333" }}>{t.name}</div>
-          </div>
-        ))}
-      </div>
-    </Modal>
-  );
-}
-
 // One clickable gallery card: rendered thumbnail + name; click → insert.
 function ComponentCard({ c, onPick }: { c: any; onPick: (c: any) => void }) {
   return (
@@ -783,7 +736,10 @@ function groupByCategory(comps: any[], order: string[]) {
   return [...known, ...extra].map((cat) => ({ cat, items: groups[cat] }));
 }
 
-function ComponentDrawer({ open, onClose, onInsert, getSelection }: { open: boolean; onClose: () => void; onInsert: (t: string) => void; getSelection: () => string; }) {
+function ComponentDrawer({ open, onClose, onInsert, getSelection, templates, hasContent, onApplyTemplate, tplApplying }: {
+  open: boolean; onClose: () => void; onInsert: (t: string) => void; getSelection: () => string;
+  templates: any[]; hasContent: boolean; onApplyTemplate: (t: any) => void; tplApplying: boolean;
+}) {
   const qc = useQueryClient();
   const { message } = AntApp.useApp();
   const { data: comps } = useQuery({
@@ -829,6 +785,37 @@ function ComponentDrawer({ open, onClose, onInsert, getSelection }: { open: bool
     <Drawer open={open} onClose={onClose} title="组件面板" width={560} zIndex={100000}
       className="ma-component-drawer">
       <Tabs items={[
+        { key: "t", label: "套用模板", children: (
+          <div data-testid="template-gallery">
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {hasContent
+                ? "点击模板：用所选模板重写文章（保留事实与信息，套用模板的排版结构与视觉风格，可 Ctrl+Z 撤销）。"
+                : "点击模板：以该模板作为正文起稿（可 Ctrl+Z 撤销）。"}
+            </Text>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12,
+              opacity: tplApplying ? 0.6 : 1, pointerEvents: tplApplying ? "none" : "auto" }}>
+              {(templates || []).map((t: any) => (
+                <div key={t.id} className="ma-comp-card" role="button"
+                  title={hasContent ? `用此模板重写文章：${t.name}` : `套用：${t.name}`}
+                  onClick={() => onApplyTemplate(t)}
+                  style={{ border: "1px solid #eaeaea", borderRadius: 8, overflow: "hidden",
+                    cursor: "pointer", background: "#fff" }}>
+                  <div className="ma-comp-thumb" data-color-mode="light"
+                    style={{ height: 200, overflow: "hidden", pointerEvents: "none",
+                      background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
+                    <div style={{ transform: "scale(0.6)", transformOrigin: "top left",
+                      width: `${100 / 0.6}%`, padding: "8px 12px", boxSizing: "border-box" }}>
+                      <MDEditor.Markdown source={t.markdown} remarkPlugins={[remarkAppDirectives]}
+                        components={previewComponents}
+                        style={{ background: "transparent", fontSize: 13, lineHeight: 1.5 }} />
+                    </div>
+                  </div>
+                  <div style={{ padding: "6px 10px", fontSize: 13, fontWeight: 600, color: "#333" }}>{t.name}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) },
         { key: "c", label: "组件库", children: (
           <div data-testid="component-gallery">
             <Input.Search placeholder="搜索组件…" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 8 }} />
