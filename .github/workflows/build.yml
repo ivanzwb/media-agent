@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Build frontend (React SPA)
         run: |
@@ -126,10 +126,22 @@ jobs:
           print('Created dist/' + name)
           "
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: media-agent-windows
-          path: dist/media-agent-*.zip
+      # Upload directly to the release repo (no cross-job artifacts, which
+      # would consume the Actions artifact-storage quota).
+      - name: Publish to release repo
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -e
+          file=$(ls dist/media-agent-*.zip | head -n1)
+          echo "Uploading $file to ivanzwb/release@$VERSION"
+          gh release create "$VERSION" --repo ivanzwb/release \
+            --title "media-agent $VERSION" \
+            --notes "media-agent $VERSION 自动构建包（Windows / macOS）" 2>/dev/null || true
+          gh release upload "$VERSION" "$file" --repo ivanzwb/release --clobber
 
   macos:
     runs-on: macos-latest
@@ -142,7 +154,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Build frontend (React SPA)
         run: |
@@ -245,38 +257,18 @@ jobs:
           print('Created dist/' + name)
           "
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: media-agent-macos
-          path: dist/media-agent-*.zip
-
-  publish:
-    # Push the built packages into the public release repo (ivanzwb/release)
-    # under media-agent/release/. Requires a PAT secret RELEASE_TOKEN with
-    # Contents:write on ivanzwb/release.
-    needs: [windows, macos]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    steps:
-      - name: Download built packages
-        uses: actions/download-artifact@v4
-        with:
-          path: _artifacts
-
-      - name: Publish as a GitHub Release on the release repo
+      # Upload directly to the release repo (no cross-job artifacts, which
+      # would consume the Actions artifact-storage quota).
+      - name: Publish to release repo
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           VERSION: ${{ github.ref_name }}
         run: |
           set -e
-          # Release assets allow up to 2GB/file — git push is capped at 100MB,
-          # and our packages are ~120MB, so we MUST use Releases, not commits.
-          files=$(find _artifacts -name 'media-agent-*.zip')
-          echo "Uploading: $files"
-          if gh release view "$VERSION" --repo ivanzwb/release >/dev/null 2>&1; then
-            gh release upload "$VERSION" $files --repo ivanzwb/release --clobber
-          else
-            gh release create "$VERSION" $files --repo ivanzwb/release \
-              --title "media-agent $VERSION" \
-              --notes "media-agent $VERSION 自动构建包（Windows / macOS）"
-          fi
+          file=$(ls dist/media-agent-*.zip | head -n1)
+          echo "Uploading $file to ivanzwb/release@$VERSION"
+          gh release create "$VERSION" --repo ivanzwb/release \
+            --title "media-agent $VERSION" \
+            --notes "media-agent $VERSION 自动构建包（Windows / macOS）" 2>/dev/null || true
+          gh release upload "$VERSION" "$file" --repo ivanzwb/release --clobber
