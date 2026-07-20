@@ -574,6 +574,7 @@ def _render_blocks(lines: list[str], st: dict, params: dict,
     out: list[str] = []
     para: list[str] = []
     list_type: str | None = None
+    ol_count = 0
     i = 0
     p_style = st["p"]
     if align:
@@ -586,10 +587,12 @@ def _render_blocks(lines: list[str], st: dict, params: dict,
             para.clear()
 
     def flush_list():
-        nonlocal list_type
-        if list_type:
-            out.append(f"</{list_type}>")
-            list_type = None
+        # Lists are emitted as manually-numbered/bulleted <p> blocks (WeChat's
+        # API re-parser mangles native <ol>/<ul>: it drops numbering and injects
+        # empty items). So "closing" a list is just resetting the counters.
+        nonlocal list_type, ol_count
+        list_type = None
+        ol_count = 0
 
     while i < len(lines):
         raw = lines[i]
@@ -714,21 +717,25 @@ def _render_blocks(lines: list[str], st: dict, params: dict,
         m = re.match(r'^[-*]\s+(.*)$', stripped)
         if m:
             flush_para()
-            if list_type != "ul":
-                flush_list()
-                out.append(f'<ul style="{st["ul"]}">')
-                list_type = "ul"
-            out.append(f'<li style="{st["li"]}">{_inline(m.group(1), st)}</li>')
+            list_type = "ul"
+            out.append(
+                f'<p style="{st["li"]}">'
+                f'<span style="color:{st["accent"]};font-weight:bold;">• </span>'
+                f'{_inline(m.group(1), st)}</p>')
             continue
 
         m = re.match(r'^\d+\.\s+(.*)$', stripped)
         if m:
             flush_para()
             if list_type != "ol":
-                flush_list()
-                out.append(f'<ol style="{st["ol"]}">')
-                list_type = "ol"
-            out.append(f'<li style="{st["li"]}">{_inline(m.group(1), st)}</li>')
+                ol_count = 0
+            list_type = "ol"
+            ol_count += 1
+            out.append(
+                f'<p style="{st["li"]}">'
+                f'<span style="color:{st["accent"]};font-weight:bold;">'
+                f'{ol_count}. </span>'
+                f'{_inline(m.group(1), st)}</p>')
             continue
 
         if _IMG_RE.fullmatch(stripped):

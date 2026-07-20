@@ -31,6 +31,22 @@ def test_image_src_helpers():
     assert 'src="/images/a.png"' not in dropped
 
 
+def test_replace_image_srcs_drops_whole_tag_no_leaked_attrs():
+    """Dropping an image must remove the ENTIRE <img …> tag, not just the
+    src="…" prefix (which left alt/style leaking as visible text on WeChat)."""
+    html = ('<p><img src="x.svg" alt="" '
+            'style="max-width:100%;display:block;"/><br/><strong>t</strong></p>')
+    dropped = H.replace_image_srcs(html, {"x.svg": ""})
+    assert "<img" not in dropped
+    assert "alt=" not in dropped
+    assert "style=" not in dropped
+    assert "<strong>t</strong>" in dropped   # surrounding content preserved
+    # replacement still rewrites the whole tag's src
+    swapped = H.replace_image_srcs(html, {"x.svg": "https://w/y.png"})
+    assert 'src="https://w/y.png"' in swapped
+    assert "alt=" in swapped                  # other attrs kept on replace
+
+
 # ── client (mocked httpx) ───────────────────────────────────────────────────
 
 class _Resp:

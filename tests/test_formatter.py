@@ -21,7 +21,10 @@ def test_render_wraps_in_section_with_inline_styles():
     assert "<strong>加粗</strong>" in html
     assert "<code style=" in html            # inline code styled
     assert '<a href="https://e.com" style=' in html
-    assert "<ul style=" in html and "<li style=" in html
+    # Lists render as manually-bulleted <p> (WeChat's API mangles native
+    # <ul>/<ol>), not <ul><li>.
+    assert "<ul" not in html and "<li" not in html
+    assert "• " in html and "一" in html and "二" in html
     assert "<blockquote style=" in html
     assert '<img src="/images/p.png"' in html and "style=" in html
     assert "<style" not in html              # no <style> blocks (inlined)
@@ -135,6 +138,19 @@ def test_steps_auto_numbered():
     assert ">1</span>" in html and ">2</span>" in html and ">3</span>" in html
     assert "第一步" in html and "第三步" in html
     assert "display:flex;align-items:flex-start" in html
+
+
+def test_ordered_list_manual_numbering_no_native_ol():
+    """Ordered lists render as manually-numbered <p> so WeChat's API doesn't
+    drop the numbering or inject empty items."""
+    md = "1. 甲\n2. 乙\n3. 丙"
+    html = render_styled_html(md, platform="wechat")
+    assert "<ol" not in html and "<li" not in html
+    assert "1. " in html and "2. " in html and "3. " in html
+    assert "甲" in html and "乙" in html and "丙" in html
+    # a fresh ordered list restarts numbering
+    html2 = render_styled_html("段落\n\n1. A\n2. B", platform="wechat")
+    assert "1. " in html2 and "2. " in html2
 
 
 def test_numlist_alias_of_steps():

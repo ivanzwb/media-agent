@@ -18,6 +18,11 @@ _CODE_RE = re.compile(r'`(?P<t>[^`]+?)`')
 _VIDEO_PLACEHOLDER_RE = re.compile(r'\[\[VIDEO:\d+\]\]')
 
 _IMG_SRC_RE = re.compile(r'<img\b[^>]*\bsrc="([^"]+)"')
+# Full <img …> tag (any attr order, optional self-close) so we can drop/replace
+# the WHOLE element — matching only up to src=".." leaves trailing attrs
+# (alt/style/…) leaking as visible text when an image is dropped.
+_IMG_TAG_RE = re.compile(r'<img\b[^>]*?/?>', re.I)
+_SRC_ATTR_RE = re.compile(r'\bsrc="([^"]*)"', re.I)
 
 
 def _inline(text: str) -> str:
@@ -196,23 +201,30 @@ def image_srcs(html_str: str) -> list[str]:
     """Unique image src URLs in document order."""
     seen: set[str] = set()
     out: list[str] = []
-    for m in _IMG_SRC_RE.finditer(html_str):
+    for tag in _IMG_TAG_RE.finditer(html_str):
+        m = _SRC_ATTR_RE.search(tag.group(0))
+        if not m:
+            continue
         u = m.group(1)
-        if u not in seen:
+        if u and u not in seen:
             seen.add(u)
             out.append(u)
     return out
 
 
 def replace_image_srcs(html_str: str, mapping: dict[str, str]) -> str:
-    """Replace <img src> URLs per mapping; drop <img> whose src maps to ''."""
+    """Replace <img src> URLs per mapping; drop the WHOLE <img> tag when its
+    src maps to '' (e.g. upload failed) so no leftover attributes leak."""
     def sub(m):
-        full = m.group(0)
-        src = m.group(1)
+        tag = m.group(0)
+        sm = _SRC_ATTR_RE.search(tag)
+        if not sm:
+            return tag
+        src = sm.group(1)
         if src not in mapping:
-            return full
+            return tag
         new = mapping[src]
-        if not new:                       # upload failed -> drop the tag
+        if not new:                       # upload failed -> drop the whole tag
             return ""
-        return full.replace(f'src="{src}"', f'src="{new}"')
-    return _IMG_SRC_RE.sub(sub, html_str)
+        return tag.replace(f'src="{src}"', f'src="{new}"')
+    return _IMG_TAG_RE.sub(sub, html_str)

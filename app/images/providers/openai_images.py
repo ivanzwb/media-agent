@@ -8,6 +8,11 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
+# Remember which optional params a given model has already rejected, so we don't
+# send-and-retry (and log a warning) on every single generation. Persists for
+# the process lifetime, keyed by model name.
+_REJECTED_PARAMS: dict[str, set[str]] = {}
+
 
 class OpenAIImageProvider:
     def __init__(self, api_key: str | None = None, model: str | None = None,
@@ -27,7 +32,11 @@ class OpenAIImageProvider:
         # retry — so a picky model still produces an image.
         base = {"model": self.model, "prompt": prompt, "n": 1}
         optional = {"size": "1024x1024", "response_format": "b64_json"}
-        attempt = {**base, **optional}
+        # Skip params this model already rejected earlier this process, so we
+        # don't repeat the failing request (and its warning) every time.
+        known_bad = _REJECTED_PARAMS.get(self.model, set())
+        attempt = {**base, **{k: v for k, v in optional.items()
+                              if k not in known_bad}}
         last_exc: Exception | None = None
         for _ in range(len(optional) + 1):
             try:
@@ -42,9 +51,10 @@ class OpenAIImageProvider:
                                 "support", "unsupported", "drop_params",
                                 "unexpected", "invalid", "unknown"))):
                         attempt.pop(param, None)
+                        _REJECTED_PARAMS.setdefault(self.model, set()).add(param)
                         logger.warning(
-                            "image API rejected '%s'; retrying without it (%s)",
-                            param, self.model)
+                            "image API rejected '%s'; will skip it for '%s' "
+                            "from now on", param, self.model)
                         dropped = True
                 last_exc = exc
                 if not dropped:
