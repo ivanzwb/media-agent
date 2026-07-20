@@ -85,11 +85,13 @@ export default function Layout() {
         okText="去激活" cancelText="稍后再说"
         onOk={() => { setGuideOpen(false); navigate("/settings"); }}>
         <p style={{ color: "#888" }}>当前为免费版。免费版可用：RSS/网页抓取、去重归档、
-          主题分类、kitten 配音、每日 1 篇 LLM 改写。</p>
+          主题分类、手动添加来源、编辑器排版组件 / 模板、本地化媒体、
+          kitten 配音、每日 1 篇 LLM 改写（含套用模板重写）。</p>
         <p>Pro 版额外解锁：</p>
         <ul style={{ lineHeight: 2, color: "#555" }}>
-          <li>无限 LLM 改写</li>
-          <li>讲解视频生成</li>
+          <li>无限 LLM 改写（含套用模板重写文章）</li>
+          <li>AI 智能推荐与一键 / 批量发现来源</li>
+          <li>讲解视频生成（含数字人主播）</li>
           <li>平台同步 / 一键发布（公众号 / 头条 / 视频号）</li>
           <li>声音复刻配音</li>
           <li>定时调度</li>

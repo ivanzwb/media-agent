@@ -6,7 +6,7 @@ import {
 import { ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useEffect, useRef, useState } from "react";
 import { api, getJson, postForm } from "../api/client";
-import { useLocalState } from "../api/hooks";
+import { useLocalState, useLicense } from "../api/hooks";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -38,6 +38,18 @@ export default function Sources() {
   const qc = useQueryClient();
   const { message } = AntApp.useApp();
   const { data } = useQuery({ queryKey: ["feeds"], queryFn: () => getJson<Feeds>("/api/feeds") });
+  // AI 智能推荐/一键发现 is a Pro feature. Guard on the client so free users get a
+  // clear upgrade hint (and auto-discover doesn't hang the poll). The backend
+  // enforces it regardless.
+  const { data: lic } = useLicense();
+  const canDiscover = !!(lic?.dev || (lic?.active && lic?.features?.includes("auto_discover")));
+  function requireDiscover(): boolean {
+    if (canDiscover) return true;
+    const msg = "「AI 智能推荐与一键发现来源」为 Pro 版功能，激活后可用。";
+    message.warning(msg);
+    setRecoStatus("🔒 " + msg);
+    return false;
+  }
   const refetch = () => qc.invalidateQueries({ queryKey: ["feeds"] });
 
   // smart recommendation state (persisted across refresh)
@@ -120,6 +132,7 @@ export default function Sources() {
 
   // ── smart recommendation ──
   async function recoSubtopics() {
+    if (!requireDiscover()) return;
     if (!themes.trim()) { setRecoStatus("请先输入主题"); return; }
     setRecoStatus("推荐中…");
     try {
@@ -312,6 +325,7 @@ export default function Sources() {
   }
 
   async function autoDiscoverAll() {
+    if (!requireDiscover()) return;
     if (!themes.trim()) { setRecoStatus("请先输入主题"); return; }
     requestNotifyPermission();
     // Write synchronously to localStorage BEFORE any await — useLocalState's useEffect
@@ -340,6 +354,7 @@ export default function Sources() {
 
   // ── topic discover sources ──
   async function topicDiscover(topic: string) {
+    if (!requireDiscover()) return;
     setDiscover((d) => ({ ...d, [topic]: { cands: [], sel: new Set(), status: "推荐中…" } }));
     try {
       const r = await postForm<{ candidates: Candidate[]; error?: string }>("/sources/suggest-sources", { topic });
@@ -473,6 +488,7 @@ export default function Sources() {
     }
   }
   async function batchDiscoverSelected() {
+    if (!requireDiscover()) return;
     if (batchDiscovering || !selTopics.length) return; // guard double-click
     setBatchDiscovering(true);
     try {
@@ -514,8 +530,8 @@ export default function Sources() {
       <Title level={2} style={{ margin: 0 }}>来源与主题</Title>
 
       {/* Smart recommendation */}
-      <Card title="智能推荐主题">
-        <Paragraph type="secondary">输入一个或多个大主题（逗号分隔）→ 推荐子主题（可多选）→ 每个子主题分别推荐关键词 → 逐个或批量加为主题。</Paragraph>
+      <Card title={<Space>智能推荐主题{!canDiscover && <Tag color="gold">Pro</Tag>}</Space>}>
+        <Paragraph type="secondary">输入一个或多个大主题（逗号分隔）→ 推荐子主题（可多选）→ 每个子主题分别推荐关键词 → 逐个或批量加为主题。{!canDiscover && <Text type="warning">（AI 智能推荐与一键/批量发现来源为 Pro 功能）</Text>}</Paragraph>
         <Space wrap>
           <Input placeholder="如：科技, 财经" value={themes} onChange={(e) => setThemes(e.target.value)} style={{ width: 320 }} />
           <Button type="primary" onClick={recoSubtopics}>推荐子主题</Button>

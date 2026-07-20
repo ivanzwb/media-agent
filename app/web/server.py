@@ -1182,6 +1182,11 @@ def create_app(config: Config | None = None,
                 {"ok": False, "error": "正在处理中，请等待完成或取消当前任务"},
                 status_code=409)
 
+        # Template rewrite is an LLM/Agent rewrite → same quota as other rewrites
+        # (free: FREE_REWRITE_PER_DAY/day shared with archive rewrite; Pro: 无限).
+        if not LG.rewrite_allowed(license_mgr, store):
+            return LG.rewrite_error()
+
         body = store.read_draft_body(draft_id)
         if not body or "body_md" not in body:
             return JSONResponse({"ok": False, "error": "草稿不存在或内容为空"},
@@ -1236,6 +1241,7 @@ def create_app(config: Config | None = None,
             "started_at": time.time(),
             "prompt": prompt,
         }
+        LG.consume_rewrite(license_mgr, store)   # free-tier daily quota
         t = threading.Thread(
             target=_agent_run_background,
             args=(draft_id, prompt, full_md, body.get("body_md", ""), provider),
@@ -1593,6 +1599,9 @@ def create_app(config: Config | None = None,
 
     @app.post("/sources/topics/suggest")
     def topics_suggest(themes: str = Form(...)):
+        err = LG.require(license_mgr, LF.AUTO_DISCOVER)
+        if err:
+            return err
         theme_list = [t.strip() for t in re.split(r"[,，\n]", themes) if t.strip()]
         try:
             subtopics = suggest_subtopics(theme_list, _resolve_provider())
@@ -1602,6 +1611,9 @@ def create_app(config: Config | None = None,
 
     @app.post("/sources/topics/keywords")
     def topics_keywords(subtopic: str = Form(...)):
+        err = LG.require(license_mgr, LF.AUTO_DISCOVER)
+        if err:
+            return err
         try:
             keywords = suggest_keywords(subtopic.strip(), _resolve_provider())
         except Exception as exc:
@@ -1610,6 +1622,9 @@ def create_app(config: Config | None = None,
 
     @app.post("/sources/suggest-sources")
     def sources_suggest_frontier(topic: str = Form(...)):
+        err = LG.require(license_mgr, LF.AUTO_DISCOVER)
+        if err:
+            return err
         try:
             candidates = suggest_sources(topic.strip(), _resolve_provider())
         except Exception as exc:
@@ -1881,6 +1896,9 @@ def create_app(config: Config | None = None,
 
     @app.post("/sources/auto-discover")
     def sources_auto_discover(themes: str = Form(...)):
+        err = LG.require(license_mgr, LF.AUTO_DISCOVER)
+        if err:
+            return err
         from concurrent.futures import (
             ThreadPoolExecutor, as_completed,
             TimeoutError as FuturesTimeoutError,

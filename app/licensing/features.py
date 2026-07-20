@@ -12,8 +12,10 @@ VIDEO = "video"                            # 讲解视频生成
 PLATFORM_SYNC = "platform_sync"            # 平台适配/一键同步/发布
 VOICE_CLONE = "voice_clone"                # 声音复刻 TTS (cosyvoice)
 SCHEDULE = "schedule"                      # 定时调度
+AUTO_DISCOVER = "auto_discover"            # AI 智能推荐 + 一键/批量发现来源
 
-ALL_FEATURES = [REWRITE_UNLIMITED, VIDEO, PLATFORM_SYNC, VOICE_CLONE, SCHEDULE]
+ALL_FEATURES = [REWRITE_UNLIMITED, VIDEO, PLATFORM_SYNC, VOICE_CLONE,
+                SCHEDULE, AUTO_DISCOVER]
 
 # Everything a Pro license grants.
 PRO_FEATURES = set(ALL_FEATURES)
@@ -28,6 +30,7 @@ LABELS = {
     PLATFORM_SYNC: "平台同步 / 一键发布",
     VOICE_CLONE: "声音复刻配音",
     SCHEDULE: "定时调度",
+    AUTO_DISCOVER: "AI 智能推荐与一键发现来源",
 }
 
 

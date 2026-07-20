@@ -259,6 +259,49 @@ def test_platform_sync_gated_on_free_tier(tmp_path):
     assert r.json().get("upgrade") is True
 
 
+def test_auto_discover_gated_on_free_tier(tmp_path):
+    client, store, _ = make_client(tmp_path, pro=False)
+    r = client.post("/sources/auto-discover", data={"themes": "AI"})
+    assert r.status_code == 403
+    assert r.json().get("upgrade") is True
+
+
+def test_topics_suggest_gated_on_free_tier(tmp_path):
+    client, store, _ = make_client(tmp_path, pro=False)
+    r = client.post("/sources/topics/suggest", data={"themes": "AI"})
+    assert r.status_code == 403
+    assert r.json().get("upgrade") is True
+
+
+def test_suggest_sources_gated_on_free_tier(tmp_path):
+    client, store, _ = make_client(tmp_path, pro=False)
+    r = client.post("/sources/suggest-sources", data={"topic": "AI"})
+    assert r.status_code == 403
+    assert r.json().get("upgrade") is True
+
+
+def test_auto_discover_allowed_for_pro(tmp_path):
+    """Pro (dev) tier passes the gate (endpoint proceeds past the 403)."""
+    client, store, _ = make_client(tmp_path, pro=True)
+    r = client.post("/sources/topics/suggest", data={"themes": "AI"})
+    assert r.status_code == 200
+
+
+def test_apply_template_rewrite_quota_exhausted_free_tier(tmp_path):
+    """Template rewrite counts against the free daily rewrite quota."""
+    from app.licensing import gates as LG, features as LF
+    client, store, _ = make_client(tmp_path, pro=False)
+    _, draft = seed(store)
+    lic = client.app.state.license
+    # Exhaust the free daily rewrite quota, then the template rewrite is blocked.
+    for _ in range(LF.FREE_REWRITE_PER_DAY):
+        LG.consume_rewrite(lic, store)
+    r = client.post(f"/api/draft/{draft.id}/apply-template",
+                    data={"template_id": "whatever"})
+    assert r.status_code == 403
+    assert r.json().get("upgrade") is True
+
+
 def test_license_status_and_activate(tmp_path, monkeypatch):
     import base64
     from cryptography.hazmat.primitives import serialization
