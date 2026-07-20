@@ -65,6 +65,13 @@ export default function Sources() {
   const [selTopics, setSelTopics] = useState<string[]>([]);
   const [selSources, setSelSources] = useState<string[]>([]);
 
+  // in-flight guards for "加为主题" so the button disables + shows a spinner and
+  // can't be double-clicked while the request is slow
+  const [addingTopics, setAddingTopics] = useState<Set<string>>(new Set());
+  const [batchAdding, setBatchAdding] = useState(false);
+  const [batchDiscovering, setBatchDiscovering] = useState(false);
+  const [selectingAllSub, setSelectingAllSub] = useState(false);
+
   // edit modals
   const [topicEdit, setTopicEdit] = useState<Topic | null>(null);
   const [sourceEdit, setSourceEdit] = useState<Source | null>(null);
@@ -136,20 +143,48 @@ export default function Sources() {
     } catch { /* ignore */ }
   }
 
+  // Select every recommended subtopic that isn't picked yet (each pull triggers
+  // its keyword recommendation). Sequential to avoid hammering the endpoint.
+  async function selectAllSubtopics() {
+    if (selectingAllSub) return;
+    setSelectingAllSub(true);
+    try {
+      const missing = subtopics.filter((st) => !groups.find((g) => g.name === st));
+      for (const st of missing) await toggleSubtopic(st);
+    } finally {
+      setSelectingAllSub(false);
+    }
+  }
+  function clearAllSubtopics() { setGroups([]); }
+
   async function addTopic(name: string, keywords: string) {
-    await postForm("/sources/topics/add", { name, keywords });
-    message.success(`已添加主题：${name}`);
-    refetch();
+    if (addingTopics.has(name) || batchAdding) return; // guard double-click
+    setAddingTopics((s) => new Set(s).add(name));
+    try {
+      await postForm("/sources/topics/add", { name, keywords });
+      message.success(`已添加主题：${name}`);
+      refetch();
+    } catch {
+      message.error(`添加主题失败：${name}`);
+    } finally {
+      setAddingTopics((s) => { const n = new Set(s); n.delete(name); return n; });
+    }
   }
 
   async function batchAddTopics() {
-    for (const g of groups) {
-      const kws = g.keywords.filter((k) => k.on).map((k) => k.kw).join(", ");
-      try { await postForm("/sources/topics/add", { name: g.name, keywords: kws }); } catch { /* skip */ }
+    if (batchAdding) return; // guard double-click
+    setBatchAdding(true);
+    try {
+      for (const g of groups) {
+        const kws = g.keywords.filter((k) => k.on).map((k) => k.kw).join(", ");
+        try { await postForm("/sources/topics/add", { name: g.name, keywords: kws }); } catch { /* skip */ }
+      }
+      message.success("批量添加完成");
+      setGroups([]); setSubtopics([]);
+      refetch();
+    } finally {
+      setBatchAdding(false);
     }
-    message.success("批量添加完成");
-    setGroups([]); setSubtopics([]);
-    refetch();
   }
 
   // Poll the backend progress endpoint until the run reaches a terminal state.
@@ -192,11 +227,17 @@ export default function Sources() {
             const beat = r.updated_at ?? 0;
             if (beat !== lastBeat) { lastBeat = beat; lastBeatSeenAt = Date.now(); }
             else if (Date.now() - lastBeatSeenAt > STALL_LIMIT_MS) {
-              const msg = "自动发现卡住了（后端长时间无进展），已中止，请重试";
+              // Timed out — tell the user WHERE it stalled and the likely cause,
+              // not just a generic "卡住了".
+              const mins = Math.round(STALL_LIMIT_MS / 60000);
+              const where = r.step_name ? `在「${r.step_name}」步骤` : "";
+              const last = r.detail ? `（最后进度：${r.detail}）` : "";
+              const msg = `自动发现${where}超过 ${mins} 分钟无进展，已自动中止${last}。`
+                + "常见原因：LLM/Agent 无响应或超时、网络/代理不可达。请重试，或在设置中改用其他 Provider / 检查网络代理。";
               setAutoProg(null);
               setRecoStatus("✗ " + msg);
-              notifyDone("自动发现中止", msg);
-              finish(() => reject(new Error("自动发现卡住")));
+              notifyDone("自动发现超时中止", msg);
+              finish(() => reject(new Error(msg)));
               return;
             }
             const emojis = ["①", "②", "③", "④", "⑤"];
@@ -432,7 +473,19 @@ export default function Sources() {
     }
   }
   async function batchDiscoverSelected() {
-    for (const t of selTopics) await topicDiscover(t);
+    if (batchDiscovering || !selTopics.length) return; // guard double-click
+    setBatchDiscovering(true);
+    try {
+      let i = 0;
+      for (const t of selTopics) {
+        i += 1;
+        setRecoStatus(`批量发现来源中… (${i}/${selTopics.length}) ${t}`);
+        await topicDiscover(t);
+      }
+      setRecoStatus(`✓ 批量发现完成：${selTopics.length} 个主题`);
+    } finally {
+      setBatchDiscovering(false);
+    }
   }
 
   // Resume reachability polling on mount if backend check is still running
@@ -481,7 +534,14 @@ export default function Sources() {
         )}
         {subtopics.length > 0 && (
           <div style={{ marginTop: 12 }}>
-            <Text>① 选择子主题（可多选，选中即推荐其关键词）：</Text>
+            <Space wrap>
+              <Text>① 选择子主题（可多选，选中即推荐其关键词）：</Text>
+              <Button size="small" loading={selectingAllSub}
+                disabled={selectingAllSub || subtopics.every((st) => groups.find((g) => g.name === st))}
+                onClick={selectAllSubtopics}>全选</Button>
+              <Button size="small" disabled={selectingAllSub || groups.length === 0}
+                onClick={clearAllSubtopics}>清空</Button>
+            </Space>
             <div style={{ marginTop: 8 }}>
               {subtopics.map((st) => (
                 <Tag.CheckableTag key={st} checked={!!groups.find((g) => g.name === st)}
@@ -495,7 +555,7 @@ export default function Sources() {
             title={<Input defaultValue={g.name} onChange={(e) => {
               const v = e.target.value; setGroups((gs) => gs.map((x, i) => i === gi ? { ...x, name: v } : x));
             }} style={{ width: 200 }} />}
-            extra={<Button type="primary" size="small" onClick={() => addTopic(g.name, g.keywords.filter((k) => k.on).map((k) => k.kw).join(", "))}>加为主题</Button>}>
+            extra={<Button type="primary" size="small" loading={addingTopics.has(g.name)} disabled={addingTopics.has(g.name) || batchAdding} onClick={() => addTopic(g.name, g.keywords.filter((k) => k.on).map((k) => k.kw).join(", "))}>加为主题</Button>}>
             {g.keywords.length ? g.keywords.map((k, ki) => (
               <Tag.CheckableTag key={k.kw} checked={k.on} onChange={(on) =>
                 setGroups((gs) => gs.map((x, i) => i === gi
@@ -503,7 +563,7 @@ export default function Sources() {
             )) : <Text type="secondary">加载关键词中…</Text>}
           </Card>
         ))}
-        {groups.length > 1 && <Button type="primary" style={{ marginTop: 10 }} onClick={batchAddTopics}>＋ 批量加为主题</Button>}
+        {groups.length > 1 && <Button type="primary" style={{ marginTop: 10 }} loading={batchAdding} disabled={batchAdding} onClick={batchAddTopics}>＋ 批量加为主题</Button>}
       </Card>
 
       {/* Topics */}
@@ -511,8 +571,8 @@ export default function Sources() {
         <Space style={{ marginBottom: 8 }}>
           <Title level={4} style={{ margin: 0 }}>主题</Title>
           {selTopics.length > 0 && <>
-            <Button danger size="small" onClick={batchDeleteTopics}>批量删除</Button>
-            <Button type="primary" size="small" onClick={batchDiscoverSelected}>批量发现来源</Button>
+            <Button danger size="small" disabled={batchDiscovering} onClick={batchDeleteTopics}>批量删除</Button>
+            <Button type="primary" size="small" loading={batchDiscovering} disabled={batchDiscovering} onClick={batchDiscoverSelected}>批量发现来源</Button>
           </>}
         </Space>
         <Table rowKey="name" size="small" pagination={false} dataSource={topics}

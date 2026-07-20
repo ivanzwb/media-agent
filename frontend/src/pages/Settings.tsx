@@ -104,19 +104,22 @@ export default function Settings() {
                     <Input.Password placeholder={data.image_api_key.set ? "留空则保持不变" : "输入 API Key"} />
                   </Form.Item>
                 </Card>
-                <Card title="转写 Provider" size="small">
-                  <Form.Item name="rewrite_priority" label="优先级">
-                    <Select options={[
-                      { value: "agent", label: "Agent 优先" },
-                      { value: "llm", label: "大模型优先" },
-                    ]} style={{ width: 200 }} />
-                  </Form.Item>
+                <Card title="转写 Agent（CLI）" size="small" style={{ marginBottom: 16 }}>
                   <Space align="end">
                     <Form.Item name="cli_tool" label="CLI Agent" style={{ marginBottom: 0 }}>
                       <Select options={["auto", "opencode", "claude", "codex", "copilot", "cursor-agent", "none"].map((v) => ({ value: v }))} style={{ width: 200 }} />
                     </Form.Item>
                     <CliTestButton form={form} />
                   </Space>
+                </Card>
+                <Card title="转写优先级" size="small">
+                  <Form.Item name="rewrite_priority" label="优先级"
+                    tooltip="转写文章时，大模型（LLM）与 CLI Agent 谁优先。选中的不可用时自动回退到另一个。">
+                    <Select options={[
+                      { value: "agent", label: "Agent 优先" },
+                      { value: "llm", label: "大模型优先" },
+                    ]} style={{ width: 200 }} />
+                  </Form.Item>
                 </Card>
               </>
             ),
