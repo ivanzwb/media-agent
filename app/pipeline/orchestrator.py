@@ -5,7 +5,7 @@ import logging
 import os
 import random
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, wait, FIRST_COMPLETED
 from datetime import datetime, timedelta, timezone
 
 from app.feeds import FeedsConfig
@@ -101,28 +101,39 @@ def collect_sources(feeds: FeedsConfig,
     articles: list[Article] = []
     # Submit all tasks and collect with per-task timeout to avoid one slow
     # source blocking the entire pipeline (the ex.map() ordering problem).
-    # Use as_completed() to yield futures as they finish, regardless of input
-    # order — a slow source no longer blocks processing of fast ones.
+    #
+    # Use wait(FIRST_COMPLETED) in a loop: each iteration waits up to
+    # source_timeout for the NEXT future to complete.  If nothing finishes
+    # within that window, we cancel remaining futures and move on.
     with ThreadPoolExecutor(max_workers=workers) as ex:
         future_to_src = {ex.submit(fetch_one, src): src for src in enabled}
-        for future in as_completed(future_to_src):
-            src = future_to_src[future]
-            try:
-                items = future.result(timeout=source_timeout)
-                articles.extend(items)
-            except FuturesTimeoutError:
-                logger.warning(
-                    "collect_sources: source %s timed out after %.0fs, skipping",
-                    src.name, source_timeout,
-                )
-                if progress:
-                    progress(f"  来源超时：{src.name}（>{source_timeout:.0f}s）")
-                future.cancel()
-            except Exception as e:  # noqa: BLE001
-                logger.warning("collect_sources: source %s raised %s: %s",
-                               src.name, type(e).__name__, e)
-                if progress:
-                    progress(f"  来源异常：{src.name}（{type(e).__name__}）")
+        pending: set = set(future_to_src.keys())
+        while pending:
+            done, not_done = wait(pending, timeout=source_timeout,
+                                  return_when=FIRST_COMPLETED)
+            for future in done:
+                src = future_to_src[future]
+                try:
+                    items = future.result(timeout=0)
+                    articles.extend(items)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("collect_sources: source %s raised %s: %s",
+                                   src.name, type(e).__name__, e)
+                    if progress:
+                        progress(f"  来源异常：{src.name}（{type(e).__name__}）")
+            if not done:
+                # Nothing completed within source_timeout — cancel stragglers.
+                for future in not_done:
+                    src = future_to_src[future]
+                    logger.warning(
+                        "collect_sources: source %s still running after %.0fs, cancelling",
+                        src.name, source_timeout,
+                    )
+                    if progress:
+                        progress(f"  来源超时：{src.name}（>{source_timeout:.0f}s）")
+                    future.cancel()
+                break
+            pending = not_done
     return articles
 
 
