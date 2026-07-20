@@ -111,12 +111,28 @@ def collect_sources(feeds: FeedsConfig,
     # finish — even cancelled ones (Python cannot kill threads).  Instead we
     # call shutdown(wait=False, cancel_futures=True) so cancelled stragglers
     # are abandoned immediately and the pipeline continues.
+    #
+    # STOP SUPPORT: We use short 5-second poll intervals so that the main
+    # thread calls ``progress`` frequently.  ``_pausable_log`` (the typical
+    # progress callback) checks ``stop_requested`` and raises ``SystemExit``
+    # — but only when it is invoked from the *main* thread.  Worker threads
+    # raising SystemExit only kill themselves, not the pipeline.  By polling
+    # every 5 s, the stop button takes effect within ~5 s even when all
+    # sources are slow.
+    _POLL_INTERVAL = 5.0  # seconds — must be << source_timeout
     ex = ThreadPoolExecutor(max_workers=workers)
     try:
         future_to_src = {ex.submit(fetch_one, src): src for src in enabled}
         pending: set = set(future_to_src.keys())
+        elapsed = 0.0
         while pending:
-            done, not_done = wait(pending, timeout=source_timeout,
+            # Wait a short interval so the main thread can call progress
+            # (which checks stop_requested).  If a source finishes before
+            # the interval, wait() returns immediately.
+            poll = min(_POLL_INTERVAL, source_timeout - elapsed)
+            if poll <= 0:
+                poll = 0.1  # ensure we don't pass <= 0 to wait()
+            done, not_done = wait(pending, timeout=poll,
                                   return_when=FIRST_COMPLETED)
             for future in done:
                 src = future_to_src[future]
@@ -129,16 +145,27 @@ def collect_sources(feeds: FeedsConfig,
                     if progress:
                         progress(f"  来源异常：{src.name}（{type(e).__name__}）")
             if not done:
-                # Nothing completed within source_timeout — cancel stragglers.
-                for future in not_done:
-                    src = future_to_src[future]
-                    logger.warning(
-                        "collect_sources: source %s still running after %.0fs, cancelling",
-                        src.name, source_timeout,
-                    )
-                    if progress:
-                        progress(f"  来源超时：{src.name}（>{source_timeout:.0f}s）")
-                break
+                elapsed += _POLL_INTERVAL
+                # Heartbeat on main thread — triggers stop_requested check
+                if progress:
+                    progress(f"  等待来源完成中…（{len(not_done)} 个仍在运行，"
+                             f"已等待 {elapsed:.0f}s）")
+                if elapsed >= source_timeout:
+                    # Per-source timeout exceeded — cancel stragglers.
+                    for future in not_done:
+                        src = future_to_src[future]
+                        logger.warning(
+                            "collect_sources: source %s still running after "
+                            "%.0fs, cancelling", src.name, source_timeout,
+                        )
+                        if progress:
+                            progress(f"  来源超时：{src.name}"
+                                     f"（>{source_timeout:.0f}s）")
+                    break
+            else:
+                # At least one completed — reset elapsed so each source
+                # gets the full source_timeout budget independently.
+                elapsed = 0.0
             pending = not_done
     finally:
         # wait=False: don't block on still-running threads (e.g. Playwright

@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import ANY, patch
 
@@ -312,3 +314,116 @@ def test_run_pipeline_handles_source_failure(tmp_path, monkeypatch):
     # No articles fetched, but pipeline should not crash
     assert stats["fetched"] == 0
     assert stats["archived"] == 0
+
+
+# ── stop button (SystemExit propagation from main thread) ────────────────
+
+
+def test_collect_sources_stop_via_progress(tmp_path, monkeypatch):
+    """When progress raises SystemExit (stop button), collect_sources propagates it."""
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    from app.pipeline.orchestrator import collect_sources
+
+    feeds = FeedsConfig(
+        topics=[],
+        sources=[
+            SourceConfig(name="SlowFeed", type="rss",
+                         url="https://slow.example.com/feed", topics=["AI"]),
+        ],
+    )
+
+    # Make _fetch_source hang for 60s to simulate a slow source
+    def slow_fetch(src, proxy=None):
+        time.sleep(60)
+        return []
+
+    # Progress callback that raises SystemExit on the second call
+    # (first call = "抓取来源 [1/1]", second call = heartbeat "等待来源完成中…")
+    call_count = [0]
+
+    def stop_progress(msg):
+        call_count[0] += 1
+        if "等待来源完成中" in msg:
+            raise SystemExit("stopped")
+
+    with patch("app.pipeline.orchestrator._fetch_source", side_effect=slow_fetch):
+        try:
+            collect_sources(feeds, progress=stop_progress, source_timeout=30)
+            assert False, "Should have raised SystemExit"
+        except SystemExit as e:
+            assert str(e) == "stopped"
+    # Progress was called at least twice: fetch_one start + heartbeat
+    assert call_count[0] >= 2
+
+
+def test_collect_sources_heartbeat_on_main_thread(tmp_path, monkeypatch):
+    """Heartbeat progress is called on the main thread every ~5s during waits."""
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    from app.pipeline.orchestrator import collect_sources
+
+    feeds = FeedsConfig(
+        topics=[],
+        sources=[
+            SourceConfig(name="SlowFeed", type="rss",
+                         url="https://slow.example.com/feed", topics=["AI"]),
+        ],
+    )
+
+    def slow_fetch(src, proxy=None):
+        time.sleep(20)
+        return []
+
+    main_thread_id = threading.current_thread().ident
+    heartbeat_thread_ids = []
+
+    def track_thread(msg):
+        # Only track heartbeat messages (called from main thread),
+        # not fetch_one progress (called from worker threads)
+        if "等待来源完成中" in msg:
+            heartbeat_thread_ids.append(threading.current_thread().ident)
+
+    with patch("app.pipeline.orchestrator._fetch_source", side_effect=slow_fetch):
+        # Use short timeout to abort quickly
+        collect_sources(feeds, progress=track_thread, source_timeout=6,
+                        workers=1)
+
+    # Heartbeat progress calls should all be on the main thread
+    assert len(heartbeat_thread_ids) >= 1
+    assert all(tid == main_thread_id for tid in heartbeat_thread_ids)
+
+
+def test_collect_sources_stop_after_heartbeat(tmp_path, monkeypatch):
+    """Stop takes effect within ~5 seconds via heartbeat, not source_timeout."""
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    from app.pipeline.orchestrator import collect_sources
+
+    feeds = FeedsConfig(
+        topics=[],
+        sources=[
+            SourceConfig(name="SlowFeed", type="rss",
+                         url="https://slow.example.com/feed", topics=["AI"]),
+        ],
+    )
+
+    def slow_fetch(src, proxy=None):
+        time.sleep(120)  # very slow
+        return []
+
+    stop_at_call = [0]
+
+    def progress_with_stop(msg):
+        stop_at_call[0] += 1
+        # Stop on the heartbeat call (not the initial "抓取来源" call)
+        if "等待来源完成中" in msg:
+            raise SystemExit("stopped")
+
+    start = time.monotonic()
+    with patch("app.pipeline.orchestrator._fetch_source", side_effect=slow_fetch):
+        try:
+            collect_sources(feeds, progress=progress_with_stop,
+                            source_timeout=60)
+        except SystemExit:
+            pass
+    elapsed = time.monotonic() - start
+    # Stop should take effect within ~5-6 seconds, not 60
+    assert elapsed < 15, f"Stop took {elapsed:.1f}s, expected < 15s"
