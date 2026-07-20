@@ -24,6 +24,7 @@ pyinstaller --onedir \
     --add-data "app/web/static:app/web/static" \
     --add-data "app/licensing/public_key.b64:app/licensing" \
     --exclude-module "torch" \
+    --exclude-module "zstandard" \
     --exclude-module "torchvision" \
     --exclude-module "torchaudio" \
     --exclude-module "transformers" \

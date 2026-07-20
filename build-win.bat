@@ -59,6 +59,7 @@ python -m PyInstaller --onedir --noconfirm ^
     --add-data "packaging/python-embed-win64.zip;packaging" ^
     --add-data "packaging/get-pip.py;packaging" ^
     --exclude-module "torch" ^
+    --exclude-module "zstandard" ^
     --exclude-module "torchvision" ^
     --exclude-module "torchaudio" ^
     --exclude-module "transformers" ^
