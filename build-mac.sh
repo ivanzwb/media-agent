@@ -55,6 +55,8 @@ pyinstaller --onedir \
     --hidden-import "uvicorn.protocols.http.auto" \
     --hidden-import "uvicorn.protocols.websockets.auto" \
     --hidden-import "fastapi" \
+    --hidden-import "fastapi.staticfiles" \
+    --hidden-import "starlette.staticfiles" \
     --hidden-import "jinja2" \
     --hidden-import "cryptography" \
     --hidden-import "cryptography.fernet" \
