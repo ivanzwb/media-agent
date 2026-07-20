@@ -50,7 +50,7 @@ echo Packaging files ready
 
 :: Build
 echo Building...
-pyinstaller --onedir ^
+python -m PyInstaller --onedir --noconfirm ^
     --collect-all "app" ^
     --name "media-agent" ^
     --add-data "frontend/dist;frontend/dist" ^
