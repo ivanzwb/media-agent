@@ -170,6 +170,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   const [locLog, setLocLog] = useState<string[]>([]);
   const [locClosed, setLocClosed] = useState(false);
   const [tplApplying, setTplApplying] = useState(false);
+  const [coverCollapsed, setCoverCollapsed] = useLocalState<boolean>("draftedit-coverCollapsed", false);
   const TOUTIAO_URL = "https://mp.toutiao.com/profile_v4/graphic/publish";
 
   // Track active poll interval so we can clear on unmount
@@ -445,7 +446,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
 
   const { data: tplData } = useQuery({
     queryKey: ["editor-templates"],
-    queryFn: () => getJson<{ templates: { id: string; name: string; markdown: string }[] }>("/api/editor/templates"),
+    queryFn: () => getJson<{ templates: { id: string; name: string; markdown: string; category?: string; is_builtin?: boolean }[]; categories?: string[] }>("/api/editor/templates"),
   });
 
   // Custom buttons injected into the MDEditor toolbar (mirrors trunk).
@@ -613,31 +614,44 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
           }]} />
       )}
 
-      <Row gutter={16} style={{ flex: 1, minHeight: 0 }}>
-        <Col span={6}>
-          <Card size="small" title="封面">
-            {data.cover_image
-              ? <img src={`/images/${data.cover_image}`} alt="cover" style={{ width: "100%", borderRadius: 6 }} />
-              : <div style={{ aspectRatio: "16/9", background: "#f0f0f0", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 6, color: "#999" }}>暂无封面</div>}
-            <Space style={{ marginTop: 8 }}>
-              <Button size="small" onClick={() => cover("scrape")}>网上抓取</Button>
-              <Button size="small" onClick={() => cover("generate")}>AI 生成</Button>
-            </Space>
-          </Card>
-          <Card size="small" title="来源" style={{ marginTop: 12 }}>
-            <a href={data.source_url} target="_blank" rel="noopener">{data.source_name}</a>
-          </Card>
-          {data.article_id && (
-            <Card size="small" title="操作" style={{ marginTop: 12 }}>
-              <Space direction="vertical" style={{ width: "100%" }}>
-                <Select size="small" style={{ width: "100%" }} value={rewriteStyle} onChange={setRewriteStyle} options={styleOptions} />
-                <Button size="small" loading={rewriting} onClick={rewrite}>重写（覆盖主稿）</Button>
+      <Row gutter={16} style={{ flex: 1, minHeight: 0 }} wrap={false}>
+        {coverCollapsed ? (
+          <Col flex="0 0 auto">
+            <Button size="small" type="text" onClick={() => setCoverCollapsed(false)}
+              title="展开封面栏"
+              style={{ height: "100%", writingMode: "vertical-rl", padding: "8px 2px" }}>
+              封面 »
+            </Button>
+          </Col>
+        ) : (
+          <Col flex="0 0 25%" style={{ maxWidth: "25%" }}>
+            <div style={{ textAlign: "right", marginBottom: 4 }}>
+              <Button size="small" type="text" onClick={() => setCoverCollapsed(true)} title="收起封面栏">« 收起</Button>
+            </div>
+            <Card size="small" title="封面">
+              {data.cover_image
+                ? <img src={`/images/${data.cover_image}`} alt="cover" style={{ width: "100%", borderRadius: 6 }} />
+                : <div style={{ aspectRatio: "16/9", background: "#f0f0f0", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 6, color: "#999" }}>暂无封面</div>}
+              <Space style={{ marginTop: 8 }}>
+                <Button size="small" onClick={() => cover("scrape")}>网上抓取</Button>
+                <Button size="small" onClick={() => cover("generate")}>AI 生成</Button>
               </Space>
             </Card>
-          )}
-        </Col>
+            <Card size="small" title="来源" style={{ marginTop: 12 }}>
+              <a href={data.source_url} target="_blank" rel="noopener">{data.source_name}</a>
+            </Card>
+            {data.article_id && (
+              <Card size="small" title="操作" style={{ marginTop: 12 }}>
+                <Space direction="vertical" style={{ width: "100%" }}>
+                  <Select size="small" style={{ width: "100%" }} value={rewriteStyle} onChange={setRewriteStyle} options={styleOptions} />
+                  <Button size="small" loading={rewriting} onClick={rewrite}>重写（覆盖主稿）</Button>
+                </Space>
+              </Card>
+            )}
+          </Col>
+        )}
 
-        <Col span={18} className="ma-draft-right-col">
+        <Col flex="auto" className="ma-draft-right-col">
           <Card size="small" styles={{ body: { paddingBottom: 8 } }}>
             <Space wrap style={{ marginBottom: 12, flexShrink: 0 }}>
               <Select value={status} onChange={setStatus} style={{ width: 120 }}
@@ -671,7 +685,8 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
       </Row>
 
       <ComponentDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onInsert={insertAtCursor} getSelection={getSelection}
-        templates={tplData?.templates || []} hasContent={!!body.trim()} onApplyTemplate={applyTemplate} tplApplying={tplApplying} />
+        templates={tplData?.templates || []} templateCategories={tplData?.categories || []}
+        hasContent={!!body.trim()} onApplyTemplate={applyTemplate} tplApplying={tplApplying} />
       <AgentModal open={agentOpen} draftId={data.id} onClose={() => setAgentOpen(false)}
         onApplied={(md) => { commit(md); setAgentOpen(false); }} />
       <FloatButton icon={<RobotOutlined />} type="primary" tooltip="Agent 编辑"
@@ -736,9 +751,9 @@ function groupByCategory(comps: any[], order: string[]) {
   return [...known, ...extra].map((cat) => ({ cat, items: groups[cat] }));
 }
 
-function ComponentDrawer({ open, onClose, onInsert, getSelection, templates, hasContent, onApplyTemplate, tplApplying }: {
+function ComponentDrawer({ open, onClose, onInsert, getSelection, templates, templateCategories, hasContent, onApplyTemplate, tplApplying }: {
   open: boolean; onClose: () => void; onInsert: (t: string) => void; getSelection: () => string;
-  templates: any[]; hasContent: boolean; onApplyTemplate: (t: any) => void; tplApplying: boolean;
+  templates: any[]; templateCategories: string[]; hasContent: boolean; onApplyTemplate: (t: any) => void; tplApplying: boolean;
 }) {
   const qc = useQueryClient();
   const { message } = AntApp.useApp();
@@ -754,11 +769,15 @@ function ComponentDrawer({ open, onClose, onInsert, getSelection, templates, has
   const [mq, setMq] = useState("");
   const [cat, setCat] = useState("");
   const [cc, setCc] = useState({ id: "", name: "", category: "", markdown: "" });
+  const [ct, setCt] = useState({ id: "", name: "", markdown: "" });
+  const [tcat, setTcat] = useState("");  // template filter: "" all, "__custom__", or a category
+  const [mcat, setMcat] = useState("");  // material filter: "" all, or a category
   const filtered = (comps?.components || []).filter((c) =>
     (!cat || c.category === cat) &&
     (!q || (c.name + " " + (c.tags || []).join(" ") + " " + c.category).toLowerCase().includes(q.toLowerCase())));
   const groups = groupByCategory(filtered, comps?.categories || []);
   const customs = (comps?.components || []).filter((c) => !c.is_builtin);
+  const customTpls = (templates || []).filter((t: any) => !t.is_builtin);
 
   function pick(c: any) {
     onInsert(c.markdown);
@@ -781,70 +800,164 @@ function ComponentDrawer({ open, onClose, onInsert, getSelection, templates, has
     qc.invalidateQueries({ queryKey: ["editor-components"] });
   }
 
+  async function saveCustomTpl() {
+    const fd = new FormData();
+    fd.set("name", ct.name); fd.set("markdown", ct.markdown);
+    const url = ct.id ? `/api/editor/templates/${encodeURIComponent(ct.id)}` : "/api/editor/templates";
+    const r = await fetch(url, { method: ct.id ? "PUT" : "POST", body: fd });
+    const d = await r.json();
+    if (!r.ok || !d.ok) { message.error(d.error || "保存失败"); return; }
+    setCt({ id: "", name: "", markdown: "" });
+    qc.invalidateQueries({ queryKey: ["editor-templates"] });
+    message.success("已保存模板");
+  }
+  async function delCustomTpl(id: string) {
+    await fetch(`/api/editor/templates/${encodeURIComponent(id)}`, { method: "DELETE" });
+    qc.invalidateQueries({ queryKey: ["editor-templates"] });
+  }
+
   return (
     <Drawer open={open} onClose={onClose} title="组件面板" width={560} zIndex={100000}
       className="ma-component-drawer">
       <Tabs items={[
         { key: "t", label: "套用模板", children: (
           <div data-testid="template-gallery">
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {hasContent
-                ? "点击模板：用所选模板重写文章（保留事实与信息，套用模板的排版结构与视觉风格，可 Ctrl+Z 撤销）。"
-                : "点击模板：以该模板作为正文起稿（可 Ctrl+Z 撤销）。"}
-            </Text>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12,
-              opacity: tplApplying ? 0.6 : 1, pointerEvents: tplApplying ? "none" : "auto" }}>
-              {(templates || []).map((t: any) => (
-                <div key={t.id} className="ma-comp-card" role="button"
-                  title={hasContent ? `用此模板重写文章：${t.name}` : `套用：${t.name}`}
-                  onClick={() => onApplyTemplate(t)}
-                  style={{ border: "1px solid #eaeaea", borderRadius: 8, overflow: "hidden",
-                    cursor: "pointer", background: "#fff" }}>
-                  <div className="ma-comp-thumb" data-color-mode="light"
-                    style={{ height: 200, overflow: "hidden", pointerEvents: "none",
-                      background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
-                    <div style={{ transform: "scale(0.6)", transformOrigin: "top left",
-                      width: `${100 / 0.6}%`, padding: "8px 12px", boxSizing: "border-box" }}>
-                      <MDEditor.Markdown source={t.markdown} remarkPlugins={[remarkAppDirectives]}
-                        components={previewComponents}
-                        style={{ background: "transparent", fontSize: 13, lineHeight: 1.5 }} />
-                    </div>
-                  </div>
-                  <div style={{ padding: "6px 10px", fontSize: 13, fontWeight: 600, color: "#333" }}>{t.name}</div>
-                </div>
+            <Space wrap style={{ marginBottom: 10 }}>
+              <Tag.CheckableTag checked={!tcat} onChange={() => setTcat("")}>全部</Tag.CheckableTag>
+              {(templateCategories || []).map((c) => (
+                <Tag.CheckableTag key={c} checked={tcat === c} onChange={() => setTcat(tcat === c ? "" : c)}>{c}</Tag.CheckableTag>
               ))}
-            </div>
+              <Tag.CheckableTag checked={tcat === "__custom__"}
+                onChange={() => setTcat(tcat === "__custom__" ? "" : "__custom__")}>自定义</Tag.CheckableTag>
+            </Space>
+            {tcat === "__custom__" ? (
+              <Space direction="vertical" style={{ width: "100%" }}>
+                <Text type="secondary">自定义模板（整篇文章结构，保存后出现在“全部”模板中）</Text>
+                <Input placeholder="模板名称" value={ct.name} onChange={(e) => setCt({ ...ct, name: e.target.value })} />
+                <Input.TextArea rows={5} placeholder="模板 Markdown 内容（整篇结构，可含 :::tip / ::::columns 等指令）"
+                  value={ct.markdown} onChange={(e) => setCt({ ...ct, markdown: e.target.value })} />
+                <Space>
+                  <Button size="small" onClick={() => setCt({ ...ct, markdown: getSelection() })}>用选中文字填充</Button>
+                  <Button size="small" type="primary" onClick={saveCustomTpl}>{ct.id ? "更新模板" : "保存模板"}</Button>
+                  <Button size="small" onClick={() => setCt({ id: "", name: "", markdown: "" })}>清空</Button>
+                </Space>
+                {customTpls.length === 0 && <Text type="secondary">还没有自定义模板。</Text>}
+                {customTpls.map((t: any) => (
+                  <Card key={t.id} size="small" styles={{ body: { padding: 8 } }}>
+                    <Space style={{ justifyContent: "space-between", width: "100%" }}>
+                      <b>{t.name}</b>
+                      <Space>
+                        <Button size="small" onClick={() => onApplyTemplate(t)}>套用</Button>
+                        <Button size="small" onClick={() => setCt({ id: t.id, name: t.name, markdown: t.markdown })}>编辑</Button>
+                        <Button size="small" danger onClick={() => delCustomTpl(t.id)}>删除</Button>
+                      </Space>
+                    </Space>
+                  </Card>
+                ))}
+              </Space>
+            ) : (
+              <>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {hasContent
+                    ? "点击模板：用所选模板重写文章（保留事实与信息，套用模板的排版结构与视觉风格，可 Ctrl+Z 撤销）。"
+                    : "点击模板：以该模板作为正文起稿（可 Ctrl+Z 撤销）。"}
+                </Text>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12,
+                  opacity: tplApplying ? 0.6 : 1, pointerEvents: tplApplying ? "none" : "auto" }}>
+                  {(templates || []).filter((t: any) => !tcat || t.category === tcat).map((t: any) => (
+                    <div key={t.id} className="ma-comp-card" role="button"
+                      title={hasContent ? `用此模板重写文章：${t.name}` : `套用：${t.name}`}
+                      onClick={() => onApplyTemplate(t)}
+                      style={{ border: "1px solid #eaeaea", borderRadius: 8, overflow: "hidden",
+                        cursor: "pointer", background: "#fff" }}>
+                      <div className="ma-comp-thumb" data-color-mode="light"
+                        style={{ height: 200, overflow: "hidden", pointerEvents: "none",
+                          background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
+                        <div style={{ transform: "scale(0.6)", transformOrigin: "top left",
+                          width: `${100 / 0.6}%`, padding: "8px 12px", boxSizing: "border-box" }}>
+                          <MDEditor.Markdown source={t.markdown} remarkPlugins={[remarkAppDirectives]}
+                            components={previewComponents}
+                            style={{ background: "transparent", fontSize: 13, lineHeight: 1.5 }} />
+                        </div>
+                      </div>
+                      <div style={{ padding: "6px 10px", fontSize: 13, fontWeight: 600, color: "#333" }}>{t.name}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         ) },
         { key: "c", label: "组件库", children: (
           <div data-testid="component-gallery">
-            <Input.Search placeholder="搜索组件…" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 8 }} />
+            {cat !== "__custom__" && (
+              <Input.Search placeholder="搜索组件…" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 8 }} />
+            )}
             <Space wrap style={{ marginBottom: 12 }}>
               <Tag.CheckableTag checked={!cat} onChange={() => setCat("")}>全部</Tag.CheckableTag>
               {(comps?.categories || []).map((c) => (
                 <Tag.CheckableTag key={c} checked={cat === c} onChange={() => setCat(cat === c ? "" : c)}>{c}</Tag.CheckableTag>
               ))}
+              <Tag.CheckableTag checked={cat === "__custom__"}
+                onChange={() => setCat(cat === "__custom__" ? "" : "__custom__")}>自定义</Tag.CheckableTag>
             </Space>
-            {groups.length === 0 && <Text type="secondary">没有匹配的组件。</Text>}
-            {groups.map(({ cat: gcat, items }) => (
-              <div key={gcat} data-testid="comp-group" data-category={gcat} style={{ marginBottom: 16 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0 8px" }}>
-                  <Text strong style={{ fontSize: 13 }}>{gcat}</Text>
-                  <Text type="secondary" style={{ fontSize: 12 }}>{items.length}</Text>
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  {items.map((c) => <ComponentCard key={c.id} c={c} onPick={pick} />)}
-                </div>
-              </div>
-            ))}
+            {cat === "__custom__" ? (
+              <Space direction="vertical" style={{ width: "100%" }}>
+                <Text type="secondary">自定义组件（把常用片段存为可复用组件）</Text>
+                <Input placeholder="组件名称" value={cc.name} onChange={(e) => setCc({ ...cc, name: e.target.value })} />
+                <Input placeholder="分类（默认：自定义）" value={cc.category} onChange={(e) => setCc({ ...cc, category: e.target.value })} />
+                <Input.TextArea rows={4} placeholder="组件 Markdown 内容（可含 :::tip 等指令）" value={cc.markdown} onChange={(e) => setCc({ ...cc, markdown: e.target.value })} />
+                <Space>
+                  <Button size="small" onClick={() => setCc({ ...cc, markdown: getSelection() })}>用选中文字填充</Button>
+                  <Button size="small" type="primary" onClick={saveCustom}>{cc.id ? "更新组件" : "保存组件"}</Button>
+                  <Button size="small" onClick={() => setCc({ id: "", name: "", category: "", markdown: "" })}>清空</Button>
+                </Space>
+                {customs.length === 0 && <Text type="secondary">还没有自定义组件。</Text>}
+                {customs.map((c) => (
+                  <Card key={c.id} size="small" styles={{ body: { padding: 8 } }}>
+                    <Space style={{ justifyContent: "space-between", width: "100%" }}>
+                      <b>{c.name}</b>
+                      <Space>
+                        <Button size="small" onClick={() => onInsert(c.markdown)}>插入</Button>
+                        <Button size="small" onClick={() => setCc({ id: c.id, name: c.name, category: c.category, markdown: c.markdown })}>编辑</Button>
+                        <Button size="small" danger onClick={() => delCustom(c.id)}>删除</Button>
+                      </Space>
+                    </Space>
+                  </Card>
+                ))}
+              </Space>
+            ) : (
+              <>
+                {groups.length === 0 && <Text type="secondary">没有匹配的组件。</Text>}
+                {groups.map(({ cat: gcat, items }) => (
+                  <div key={gcat} data-testid="comp-group" data-category={gcat} style={{ marginBottom: 16 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0 8px" }}>
+                      <Text strong style={{ fontSize: 13 }}>{gcat}</Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>{items.length}</Text>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      {items.map((c) => <ComponentCard key={c.id} c={c} onPick={pick} />)}
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
           </div>
         ) },
         { key: "m", label: "素材库", children: (
           <div>
-            <Input.Search placeholder="搜索素材…" value={mq} onChange={(e) => setMq(e.target.value)} style={{ marginBottom: 12 }} />
+            <Input.Search placeholder="搜索素材…" value={mq} onChange={(e) => setMq(e.target.value)} style={{ marginBottom: 8 }} />
+            <Space wrap style={{ marginBottom: 12 }}>
+              <Tag.CheckableTag checked={!mcat} onChange={() => setMcat("")}>全部</Tag.CheckableTag>
+              {Array.from(new Set((mats?.materials || []).map((m: any) => m.category))).map((c) => (
+                <Tag.CheckableTag key={c as string} checked={mcat === c}
+                  onChange={() => setMcat(mcat === c ? "" : (c as string))}>{c as string}</Tag.CheckableTag>
+              ))}
+            </Space>
             {groupByCategory(
               (mats?.materials || []).filter((m: any) =>
-                !mq || (m.name + " " + m.category + " " + m.markdown).toLowerCase().includes(mq.toLowerCase())),
+                (!mcat || m.category === mcat) &&
+                (!mq || (m.name + " " + m.category + " " + m.markdown).toLowerCase().includes(mq.toLowerCase()))),
               [],
             ).map(({ cat: gcat, items }) => (
               <div key={gcat} style={{ marginBottom: 14 }}>
@@ -853,42 +966,35 @@ function ComponentDrawer({ open, onClose, onInsert, getSelection, templates, has
                   <Text type="secondary" style={{ fontSize: 12 }}>{items.length}</Text>
                 </div>
                 <Space wrap>
-                  {items.map((m: any) => (
-                    <Tooltip key={m.id} title={m.name}>
-                      <Button onClick={() => onInsert(m.markdown + " ")}
-                        style={{ fontSize: 18, minWidth: 40 }}>{m.markdown}</Button>
-                    </Tooltip>
-                  ))}
+                  {items.map((m: any) => {
+                    const md = String(m.markdown || "");
+                    const img = md.match(/^!\[[^\]]*\]\(([^)]+)\)/);
+                    if (img) {
+                      // Image material → thumbnail card; insert as a block.
+                      return (
+                        <Tooltip key={m.id} title={m.name}>
+                          <div role="button" onClick={() => onInsert("\n" + md + "\n")}
+                            style={{ cursor: "pointer", border: "1px solid #eaeaea", borderRadius: 6,
+                              padding: 4, background: "#fff", width: 128 }}>
+                            <img src={img[1]} alt={m.name}
+                              style={{ width: "100%", height: 64, objectFit: "contain", display: "block" }} />
+                            <div style={{ fontSize: 11, textAlign: "center", color: "#666", marginTop: 2,
+                              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}</div>
+                          </div>
+                        </Tooltip>
+                      );
+                    }
+                    return (
+                      <Tooltip key={m.id} title={m.name}>
+                        <Button onClick={() => onInsert(md + " ")}
+                          style={{ fontSize: 18, minWidth: 40 }}>{md}</Button>
+                      </Tooltip>
+                    );
+                  })}
                 </Space>
               </div>
             ))}
           </div>
-        ) },
-        { key: "custom", label: "自定义", children: (
-          <Space direction="vertical" style={{ width: "100%" }}>
-            <Text type="secondary">把常用片段存为自定义组件。</Text>
-            <Input placeholder="组件名称" value={cc.name} onChange={(e) => setCc({ ...cc, name: e.target.value })} />
-            <Input placeholder="分类（默认：自定义）" value={cc.category} onChange={(e) => setCc({ ...cc, category: e.target.value })} />
-            <Input.TextArea rows={4} placeholder="组件 Markdown 内容（可含 :::tip 等指令）" value={cc.markdown} onChange={(e) => setCc({ ...cc, markdown: e.target.value })} />
-            <Space>
-              <Button size="small" onClick={() => setCc({ ...cc, markdown: getSelection() })}>用选中文字填充</Button>
-              <Button size="small" type="primary" onClick={saveCustom}>保存组件</Button>
-              <Button size="small" onClick={() => setCc({ id: "", name: "", category: "", markdown: "" })}>清空</Button>
-            </Space>
-            <Divider style={{ margin: "8px 0" }} />
-            {customs.map((c) => (
-              <Card key={c.id} size="small" styles={{ body: { padding: 8 } }}>
-                <Space style={{ justifyContent: "space-between", width: "100%" }}>
-                  <b>{c.name}</b>
-                  <Space>
-                    <Button size="small" onClick={() => onInsert(c.markdown)}>插入</Button>
-                    <Button size="small" onClick={() => setCc({ id: c.id, name: c.name, category: c.category, markdown: c.markdown })}>编辑</Button>
-                    <Button size="small" danger onClick={() => delCustom(c.id)}>删除</Button>
-                  </Space>
-                </Space>
-              </Card>
-            ))}
-          </Space>
         ) },
       ]} />
     </Drawer>

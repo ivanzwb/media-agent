@@ -855,14 +855,52 @@ def create_app(config: Config | None = None,
 
     @app.get("/api/editor/templates")
     def api_editor_templates():
+        store = get_store()
         return {"templates": [t.to_public()
-                              for t in editor_components.builtin_templates()]}
+                              for t in editor_components.all_templates(store)],
+                "categories": editor_components.TEMPLATE_CATEGORIES}
+
+    @app.post("/api/editor/templates")
+    def api_editor_template_create(name: str = Form(...),
+                                   markdown: str = Form(...),
+                                   theme: str = Form("default")):
+        store = get_store()
+        try:
+            t = editor_components.save_custom_template(
+                store, id=None, name=name, markdown=markdown, theme=theme)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return {"ok": True, "template": t.to_public()}
+
+    @app.put("/api/editor/templates/{template_id}")
+    def api_editor_template_update(template_id: str, name: str = Form(...),
+                                   markdown: str = Form(...),
+                                   theme: str = Form("default")):
+        store = get_store()
+        try:
+            t = editor_components.save_custom_template(
+                store, id=template_id, name=name, markdown=markdown, theme=theme)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return {"ok": True, "template": t.to_public()}
+
+    @app.delete("/api/editor/templates/{template_id}")
+    def api_editor_template_delete(template_id: str):
+        store = get_store()
+        try:
+            ok = editor_components.delete_custom_template(store, template_id)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        if not ok:
+            return JSONResponse({"ok": False, "error": "模板不存在"},
+                                status_code=404)
+        return {"ok": True}
 
     @app.post("/api/editor/templates/{template_id}/apply")
     def api_editor_template_apply(template_id: str):
         """Return the template's markdown outline so the client can insert it
         into the editor (non-destructive — the user saves explicitly)."""
-        tpl = editor_components.get_template(template_id)
+        tpl = editor_components.get_template(template_id, get_store())
         if not tpl:
             return JSONResponse({"ok": False, "error": "模板不存在"},
                                 status_code=404)
@@ -1192,7 +1230,7 @@ def create_app(config: Config | None = None,
             return JSONResponse({"ok": False, "error": "草稿不存在或内容为空"},
                                 status_code=404)
 
-        tpl = editor_components.get_template(template_id)
+        tpl = editor_components.get_template(template_id, store)
         if not tpl:
             return JSONResponse({"ok": False, "error": "模板不存在"},
                                 status_code=404)

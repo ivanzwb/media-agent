@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from app.store import Store
 
 CUSTOM_COMPONENTS_KEY = "editor_custom_components"
+CUSTOM_TEMPLATES_KEY = "editor_custom_templates"
 
 # Categories (display order)
 CATEGORIES = ["标题", "分割线", "卡片", "图文", "布局", "引用框", "按钮", "列表", "标签", "页脚"]
@@ -53,11 +54,13 @@ class EditorTemplate:
     name: str
     markdown: str
     theme: str = "default"
+    category: str = "通用"
     is_builtin: bool = True
 
     def to_public(self) -> dict:
         return {"id": self.id, "name": self.name, "markdown": self.markdown,
-                "theme": self.theme, "is_builtin": self.is_builtin}
+                "theme": self.theme, "category": self.category,
+                "is_builtin": self.is_builtin}
 
 
 @dataclass
@@ -311,8 +314,26 @@ _T: list[tuple[str, str, str, str]] = [
 ]
 
 
+# Scenario categories for builtin templates (display order for the filter tags).
+TEMPLATE_CATEGORIES = ["营销推广", "资讯科技", "教程科普", "节日活动", "职场办公"]
+_T_CATEGORIES = {
+    "product-launch": "营销推广",
+    "review": "营销推广",
+    "deep-tech": "资讯科技",
+    "news": "资讯科技",
+    "interview": "资讯科技",
+    "tutorial": "教程科普",
+    "list-article": "教程科普",
+    "festival": "节日活动",
+    "event": "节日活动",
+    "recruit": "职场办公",
+    "weekly": "职场办公",
+}
+
+
 def builtin_templates() -> list[EditorTemplate]:
     return [EditorTemplate(id=t[0], name=t[1], theme=t[2], markdown=t[3],
+                           category=_T_CATEGORIES.get(t[0], "通用"),
                            is_builtin=True) for t in _T]
 
 
@@ -321,6 +342,20 @@ def builtin_templates() -> list[EditorTemplate]:
 # Strictly NO emoji: only typographic & geometric Unicode marks that render as
 # plain text glyphs (so they stay black in WeChat, never colored emoji).
 _M: list[tuple[str, str, str, str]] = [
+    # 图片 — AI 生成的装饰图片素材（bundled under app/web/static/materials,
+    # served at /static/materials/*.png）。插入为块级 Markdown 图片。
+    ("img-divider-leaf", "枝叶分割线", "图片",
+     "![枝叶分割线](/static/materials/material-divider-leaf.png)"),
+    ("img-divider-ink", "水墨梅花分割线", "图片",
+     "![水墨梅花分割线](/static/materials/material-divider-ink.png)"),
+    ("img-title-header", "标题装饰栏", "图片",
+     "![标题装饰栏](/static/materials/material-title-header.png)"),
+    ("img-badge-seal", "圆形印章框", "图片",
+     "![圆形印章框](/static/materials/material-badge-seal.png)"),
+    ("img-quote-ornament", "引用装饰引号", "图片",
+     "![引用装饰引号](/static/materials/material-quote-ornament.png)"),
+    ("img-footer-banner", "关注引导横幅", "图片",
+     "![关注引导横幅](/static/materials/material-footer-banner.png)"),
     # 符号 — points / bullets
     ("mark-bar", "竖线", "符号", "▎"),
     ("mark-bar-thin", "细竖线", "符号", "▏"),
@@ -495,8 +530,109 @@ def delete_custom_component(store: "Store", comp_id: str) -> bool:
     return True
 
 
-def get_template(template_id: str) -> EditorTemplate | None:
+def get_template(template_id: str,
+                 store: "Store | None" = None) -> EditorTemplate | None:
     for t in builtin_templates():
         if t.id == template_id:
             return t
+    if store is not None:
+        for t in custom_templates(store):
+            if t.id == template_id:
+                return t
     return None
+
+
+# ── custom templates (persisted in settings, mirrors custom components) ──────
+def _load_custom_templates_raw(store: "Store") -> list[dict]:
+    raw = store.get_setting(CUSTOM_TEMPLATES_KEY)
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _save_custom_templates_raw(store: "Store", items: list[dict]) -> None:
+    if items:
+        store.set_setting(CUSTOM_TEMPLATES_KEY,
+                          json.dumps(items, ensure_ascii=False))
+    else:
+        store.delete_setting(CUSTOM_TEMPLATES_KEY)
+
+
+def custom_templates(store: "Store") -> list[EditorTemplate]:
+    out: list[EditorTemplate] = []
+    for d in _load_custom_templates_raw(store):
+        try:
+            out.append(EditorTemplate(
+                id=str(d["id"]), name=str(d.get("name") or d["id"]),
+                markdown=str(d.get("markdown") or ""),
+                theme=str(d.get("theme") or "default"),
+                category="自定义", is_builtin=False))
+        except (KeyError, TypeError):
+            continue
+    return out
+
+
+def _builtin_template_ids() -> set[str]:
+    return {t[0] for t in _T}
+
+
+def all_templates(store: "Store | None" = None) -> list[EditorTemplate]:
+    tpls = builtin_templates()
+    if store is not None:
+        tpls += custom_templates(store)
+    return tpls
+
+
+def save_custom_template(store: "Store", *, id: str | None, name: str,
+                         markdown: str,
+                         theme: str = "default") -> EditorTemplate:
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("模板名称不能为空")
+    markdown = markdown or ""
+    if not markdown.strip():
+        raise ValueError("模板内容不能为空")
+    theme = (theme or "default").strip() or "default"
+
+    items = _load_custom_templates_raw(store)
+    if id:
+        sid = str(id).strip()
+        if sid in _builtin_template_ids():
+            raise ValueError("不能覆盖内置模板")
+        found = False
+        for it in items:
+            if it.get("id") == sid:
+                it.update(name=name, markdown=markdown, theme=theme)
+                found = True
+                break
+        if not found:
+            raise ValueError(f"模板不存在：{sid}")
+    else:
+        base = _slugify(name)
+        sid = base
+        existing = _builtin_template_ids() | {it.get("id") for it in items}
+        i = 2
+        while sid in existing:
+            sid = f"{base}-{i}"
+            i += 1
+        items.append({"id": sid, "name": name, "markdown": markdown,
+                      "theme": theme})
+    _save_custom_templates_raw(store, items)
+    return EditorTemplate(id=sid, name=name, markdown=markdown, theme=theme,
+                          is_builtin=False)
+
+
+def delete_custom_template(store: "Store", template_id: str) -> bool:
+    sid = str(template_id).strip()
+    if sid in _builtin_template_ids():
+        raise ValueError("不能删除内置模板")
+    items = _load_custom_templates_raw(store)
+    new_items = [it for it in items if it.get("id") != sid]
+    if len(new_items) == len(items):
+        return False
+    _save_custom_templates_raw(store, new_items)
+    return True
