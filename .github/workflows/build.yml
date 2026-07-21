@@ -140,11 +140,22 @@ jobs:
           echo "Uploading $file to ivanzwb/release@$VERSION"
           gh release create "$VERSION" --repo ivanzwb/release \
             --title "media-agent $VERSION" \
-            --notes "media-agent $VERSION 自动构建包（Windows / macOS）" 2>/dev/null || true
+            --notes "media-agent $VERSION 自动构建包（Windows / macOS Intel(x86_64) + Apple Silicon(arm64)）" 2>/dev/null || true
           gh release upload "$VERSION" "$file" --repo ivanzwb/release --clobber
 
   macos:
-    runs-on: macos-latest
+    # Build a native package per architecture so it installs on BOTH Intel and
+    # Apple Silicon Macs. macos-latest is now Apple Silicon (arm64) only, which
+    # is why the single build failed to install on some (Intel) models.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-13      # Intel (x86_64)
+            arch: x86_64
+          - runner: macos-14      # Apple Silicon (arm64)
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -167,11 +178,15 @@ jobs:
           pip install -r requirements.txt
           pip install "click<8.2" pyinstaller playwright
 
-      # Download embeddable Python for CosyVoice sidecar env
+      # Download embeddable Python for CosyVoice sidecar env (best-effort:
+      # official embeddables are Windows-only, so this may be absent on macOS —
+      # the sidecar bootstraps at runtime instead). Keep a file present so the
+      # --add-data below never fails the build.
       - name: Download embeddable Python
         run: |
-          curl -sL "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-macosx10.9-x86_64.tar.gz" \
-            -o packaging/python-embed-macos.tar.gz
+          url="https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-macosx10.9-${{ matrix.arch }}.tar.gz"
+          curl -sfL "$url" -o packaging/python-embed-macos.tar.gz || echo "embed python unavailable for ${{ matrix.arch }}; sidecar will bootstrap at runtime"
+          [ -f packaging/python-embed-macos.tar.gz ] || : > packaging/python-embed-macos.tar.gz
           curl -sL "https://bootstrap.pypa.io/get-pip.py" -o packaging/get-pip.py
 
       - name: Build
@@ -244,11 +259,12 @@ jobs:
       - name: Package (zip)
         env:
           VERSION: ${{ github.ref_name }}
+          ARCH: ${{ matrix.arch }}
         run: |
           cp setup-optional.sh dist/media-agent/
           python -c "
           import os, zipfile
-          name = 'media-agent-' + os.environ['VERSION'] + '-macos.zip'
+          name = 'media-agent-' + os.environ['VERSION'] + '-macos-' + os.environ['ARCH'] + '.zip'
           with zipfile.ZipFile(os.path.join('dist', name), 'w', zipfile.ZIP_DEFLATED) as z:
               for dp, _, files in os.walk('dist/media-agent'):
                   for f in files:
@@ -270,5 +286,5 @@ jobs:
           echo "Uploading $file to ivanzwb/release@$VERSION"
           gh release create "$VERSION" --repo ivanzwb/release \
             --title "media-agent $VERSION" \
-            --notes "media-agent $VERSION 自动构建包（Windows / macOS）" 2>/dev/null || true
+            --notes "media-agent $VERSION 自动构建包（Windows / macOS Intel(x86_64) + Apple Silicon(arm64)）" 2>/dev/null || true
           gh release upload "$VERSION" "$file" --repo ivanzwb/release --clobber
