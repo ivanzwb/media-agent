@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import logging
 from pathlib import Path
+from urllib.parse import urlparse
 
 import json as _json
 
@@ -9,23 +12,76 @@ from app.pipeline.localize import local_media_file
 from app.pipeline.narration import load_narration
 from app.video.builder import build_video
 
+logger = logging.getLogger(__name__)
+
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
 
 def _noop(*_a, **_k) -> None:
     pass
 
 
-def _resolve_media(urls: list[str], config: Config) -> dict[int, Path]:
-    """Resolve already-localised media URLs to local Paths.
+def _download_remote_image(url: str, work: Path, emit) -> Path | None:
+    """Best-effort download of a remote article image into the draft's video
+    work dir so it can be used as a scene background."""
+    try:
+        import httpx
+        work.mkdir(parents=True, exist_ok=True)
+        ext = Path(urlparse(url).path).suffix.lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
+            ext = ".jpg"
+        name = "dl-" + hashlib.sha1(url.encode("utf-8")).hexdigest()[:12] + ext
+        dest = work / name
+        if dest.exists() and dest.stat().st_size > 0:
+            return dest
+        r = httpx.get(url, timeout=30.0, follow_redirects=True,
+                      headers={"User-Agent": _UA})
+        r.raise_for_status()
+        dest.write_bytes(r.content)
+        return dest
+    except Exception as exc:  # noqa: BLE001 - never block the build
+        emit(f"    远程配图下载失败：{url[:60]}… ({exc})")
+        return None
 
-    All assets are expected to be already localised when the article was
-    fetched — the video stage never downloads from the network.  Any URL
-    that does not resolve to a local file is silently skipped.
-    """
+
+def _resolve_one(url: str, config: Config, work: Path | None,
+                 emit, download: bool) -> Path | None:
+    if not url:
+        return None
+    # Drafts written by the rewriter/localizer store file-relative paths
+    # (../../media/…, ../../images/…). Absolutize them the same way the WeChat
+    # publisher does so they resolve to the served local files.
+    if url.startswith("../../media/"):
+        url = "/media/" + url[len("../../media/"):]
+    elif url.startswith("../../images/"):
+        url = "/images/" + url[len("../../images/"):]
+
+    if url.startswith("/media/"):
+        return local_media_file(url, config)
+    if url.startswith("/images/"):
+        p = (config.images_dir / url[len("/images/"):]).resolve()
+        return p if p.exists() else None
+    if url.startswith("/videos/"):
+        p = (config.videos_dir / url[len("/videos/"):]).resolve()
+        return p if p.exists() else None
+    if download and work is not None and url.startswith(("http://", "https://")):
+        return _download_remote_image(url, work, emit)
+    return None
+
+
+def _resolve_media(urls: list[str], config: Config, work: Path | None = None,
+                   emit=None, download: bool = False) -> dict[int, Path]:
+    """Resolve media URLs (index→Path). Handles absolute /media|/images|/videos
+    paths AND file-relative ../../media|../../images (as drafts store them). When
+    *download* is set, remote http(s) images are fetched into *work* so article
+    images embedded as remote URLs still become scene backgrounds."""
+    emit = emit or _noop
     out: dict[int, Path] = {}
     for i, url in enumerate(urls, 1):
-        local = local_media_file(url, config)
-        if local:
-            out[i] = local
+        p = _resolve_one(url, config, work, emit, download)
+        if p:
+            out[i] = p
     return out
 
 
@@ -75,8 +131,13 @@ def build_explainer_video(draft_id: int, config: Config, progress=None) -> Path:
     if not imgs:
         emit("提示：正文未发现图片，画面会是纯色；可在归档页对该文章「重写」"
              "以带回原文配图后，重新生成脚本+配音再合成")
-    emit("查找本地配图素材…")
-    image_map = _resolve_media(imgs, config)
+    emit("查找配图素材…")
+    # Resolve article images: absolute /media, file-relative ../../media (as
+    # drafts store them), or remote URLs (downloaded into the work dir).
+    image_map = _resolve_media(imgs, config, work=work, emit=emit,
+                               download=True)
+    if imgs and not image_map:
+        emit(f"提示：{len(imgs)} 张配图均无法解析为本地文件，画面将使用纯色背景")
 
     # Only use videos actually referenced by a scene (media "video:N").
     referenced = any(str(s.get("media", "")).startswith("video:")
