@@ -7,7 +7,10 @@ import tempfile
 import threading
 from pathlib import Path
 
-import numpy as np
+# NOTE: heavy deps (numpy/torch/cosyvoice) are imported *after*
+# _discover_sidecar_python() below, so a sidecar install (setup-optional) or a
+# venv install both satisfy them. Importing numpy here (before the sidecar path
+# is added) is what caused "No module named 'numpy'" even with the sidecar set up.
 
 # CosyVoice2 — local zero-shot voice cloning TTS.
 # Best-quality Chinese TTS with voice cloning from a 3–10 s reference sample.
@@ -61,6 +64,10 @@ def _discover_sidecar_python():
 
 
 _discover_sidecar_python()
+
+# Heavy import AFTER sidecar discovery so it resolves from _cosyvoice-python/
+# (setup-optional) when not present in the base environment.
+import numpy as np  # noqa: E402
 
 
 # ------------------------------------------------------------------
