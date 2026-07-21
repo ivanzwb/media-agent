@@ -3567,7 +3567,8 @@ def create_app(config: Config | None = None,
             "avatar_position": avatar_position.strip(),
             "avatar_provider": avatar_provider.strip(),
             "sadtalker_dir": sadtalker_dir.strip(),
-            "sadtalker_python": sadtalker_python.strip(),
+            # sadtalker_python is auto-resolved (not user-facing); leave any
+            # advanced env/DB override untouched on save.
             "sensitive_level": sensitive_level.strip(),
             "sensitive_words": sensitive_words.strip(),
             "promotion_footer": promotion_footer.strip(),

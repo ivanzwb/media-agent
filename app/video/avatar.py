@@ -23,6 +23,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,6 +86,34 @@ def sadtalker_available(spec: AvatarSpec) -> bool:
     return p.is_dir() and (p / "inference.py").exists()
 
 
+def resolve_sadtalker_python(spec: AvatarSpec) -> str:
+    """Pick the python that runs SadTalker's inference.py — automatically, so
+    the user never has to configure an interpreter path.
+
+    Order: explicit override (advanced/env) → a prebuilt ``_sadtalker-runtime``
+    shipped/downloaded next to the app → a venv inside the SadTalker checkout →
+    the current interpreter.
+    """
+    if spec.sadtalker_python:
+        return spec.sadtalker_python
+    from app.tts.providers.cosyvoice_runtime import runtime_python
+    roots = [Path.cwd()]
+    if getattr(sys, "frozen", False):
+        roots.insert(0, Path(sys.executable).resolve().parent)
+    for root in roots:
+        py = runtime_python(str(root / "_sadtalker-runtime"))
+        if py:
+            return str(py)
+    if spec.sadtalker_dir:
+        d = Path(spec.sadtalker_dir)
+        for c in (d / "venv" / "Scripts" / "python.exe",
+                  d / ".venv" / "Scripts" / "python.exe",
+                  d / "venv" / "bin" / "python", d / ".venv" / "bin" / "python"):
+            if c.exists():
+                return str(c)
+    return sys.executable or "python"
+
+
 def _to_wav(audio: Path, out_wav: Path) -> Path | None:
     try:
         _run(["ffmpeg", "-y", "-i", str(audio), "-ar", "16000", "-ac", "1",
@@ -107,7 +136,7 @@ def generate_talking_head(audio: Path, spec: AvatarSpec,
         wav = _to_wav(audio, result_dir / "drive.wav") if audio else None
         if wav is None:
             return None
-        py = spec.sadtalker_python or "python"
+        py = resolve_sadtalker_python(spec)
         cmd = [py, "inference.py",
                "--driven_audio", str(wav),
                "--source_image", str(spec.image),

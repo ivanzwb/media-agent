@@ -226,11 +226,8 @@ export default function Settings() {
                   ]} />
                 </Form.Item>
                 <Form.Item name="sadtalker_dir" label="SadTalker 目录"
-                  tooltip="本地 SadTalker 代码目录（含 inference.py）；配置后启用口型同步，否则回退静态头像">
-                  <Input placeholder="如 C:\\Projects\\SadTalker" />
-                </Form.Item>
-                <Form.Item name="sadtalker_python" label="SadTalker Python（可选）">
-                  <Input placeholder="留空用 python" />
+                  tooltip="本地 SadTalker 代码目录（含 inference.py）；配置后启用口型同步，否则回退静态头像。运行所用的 Python 会自动识别（预编译运行时 / 项目内 venv），无需手动指定。">
+                  <Input placeholder="如 C:\\Projects\\SadTalker（Python 自动识别）" />
                 </Form.Item>
               </Card>
             ),
