@@ -68,7 +68,7 @@ export default function Settings() {
         video_fit: data.video_fit, video_brand_name: data.video_brand_name,
         avatar_enabled: data.avatar_enabled, avatar_image: data.avatar_image,
         avatar_position: data.avatar_position, avatar_provider: data.avatar_provider,
-        sadtalker_dir: data.sadtalker_dir, sadtalker_python: data.sadtalker_python,
+
         fetch_proxy: data.fetch_proxy,
         sensitive_level: data.sensitive_level, sensitive_words: data.sensitive_words,
         promotion_footer: data.promotion_footer,
@@ -636,9 +636,7 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
                 setProgress(null);
                 if (payload.ok) {
                   message.success(payload.message || "数字人模型安装完成！");
-                  // Auto-fill paths into form
-                  if (payload.sadtalker_dir) form.setFieldsValue({ sadtalker_dir: payload.sadtalker_dir });
-                  if (payload.sadtalker_python) form.setFieldsValue({ sadtalker_python: payload.sadtalker_python });
+                  // Paths are auto-configured by the setup endpoint, no need to fill form
                   onSuccess();
                 } else {
                   message.error(payload.message || "安装失败");
