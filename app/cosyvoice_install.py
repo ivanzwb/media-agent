@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import tarfile
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -62,28 +63,69 @@ def _runtime_python(target: Path) -> Path | None:
     return None
 
 
-def _download(url: str, dest: Path, progress: Progress, label: str) -> None:
+def _download(url: str, dest: Path, progress: Progress, label: str,
+              max_retries: int = 10) -> None:
+    """Resumable, retrying download.
+
+    Keeps a ``.part`` file across attempts and uses HTTP Range to resume from
+    where a previous (interrupted) download left off — important for the ~1GB
+    runtime on a flaky connection. Falls back to a full restart if the server
+    ignores Range.
+    """
     import httpx
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    with httpx.stream("GET", url, follow_redirects=True, timeout=None) as r:
-        r.raise_for_status()
-        total = int(r.headers.get("content-length", 0) or 0)
-        done = 0
-        last_pct = -1
-        with open(tmp, "wb") as f:
-            for chunk in r.iter_bytes(262144):
-                f.write(chunk)
-                done += len(chunk)
-                if total:
-                    pct = int(done * 100 / total)
-                    if pct != last_pct:
-                        last_pct = pct
-                        progress(f"{label} {done // 1048576}/{total // 1048576} MB",
-                                 pct)
-                elif done % (8 * 1048576) < 262144:
-                    progress(f"{label} {done // 1048576} MB", None)
-    os.replace(tmp, dest)
+    part = dest.with_suffix(dest.suffix + ".part")
+
+    for attempt in range(1, max_retries + 1):
+        existing = part.stat().st_size if part.exists() else 0
+        headers = {"Range": f"bytes={existing}-"} if existing else {}
+        try:
+            with httpx.stream("GET", url, follow_redirects=True, timeout=None,
+                              headers=headers) as r:
+                # Already-complete part → server says the range is unsatisfiable.
+                if r.status_code == 416 and existing:
+                    os.replace(part, dest)
+                    return
+                # Server ignored Range (200 with a resume request) → restart.
+                if existing and r.status_code == 200:
+                    existing = 0
+                    try:
+                        part.unlink()
+                    except OSError:
+                        pass
+                r.raise_for_status()
+
+                if r.status_code == 206:
+                    cr = r.headers.get("content-range", "")
+                    total = (int(cr.split("/")[-1]) if "/" in cr
+                             else existing + int(r.headers.get("content-length", 0) or 0))
+                else:
+                    total = int(r.headers.get("content-length", 0) or 0)
+
+                done = existing
+                last_pct = -1
+                with open(part, "ab" if existing else "wb") as f:
+                    for chunk in r.iter_bytes(262144):
+                        f.write(chunk)
+                        done += len(chunk)
+                        if total:
+                            pct = int(done * 100 / total)
+                            if pct != last_pct:
+                                last_pct = pct
+                                progress(
+                                    f"{label} {done // 1048576}/{total // 1048576} MB",
+                                    pct)
+                        elif done % (8 * 1048576) < 262144:
+                            progress(f"{label} {done // 1048576} MB", None)
+            os.replace(part, dest)
+            return
+        except (httpx.HTTPError, OSError) as e:
+            if attempt >= max_retries:
+                raise RuntimeError(
+                    f"下载失败（已重试 {max_retries} 次）：{e}") from e
+            progress(f"{label} 网络中断，第 {attempt}/{max_retries} 次重试"
+                     "（断点续传）…", None)
+            time.sleep(min(5, attempt))
 
 
 def _extract(tgz: Path, target: Path, progress: Progress) -> None:
@@ -126,15 +168,23 @@ def _download_model(target: Path, progress: Progress) -> None:
     env.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
     env["HF_HUB_DISABLE_XET"] = "1"
     env["HF_XET_DISABLE"] = "1"
+    # snapshot_download resumes partial files on re-run, so a retry loop
+    # continues from where a timeout/drop left off (large model, flaky mirror).
     code = (
         "from huggingface_hub import snapshot_download; "
         f"snapshot_download('{_MODEL_ID}', local_dir=r'{model_dir}', "
         "max_workers=2)")
-    proc = subprocess.run([str(py), "-c", code], env=env,
-                          capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError("模型下载失败：" + (proc.stderr or "")[-400:])
-    progress("模型下载完成", 100)
+    last_err = ""
+    for attempt in range(1, 9):
+        proc = subprocess.run([str(py), "-c", code], env=env,
+                              capture_output=True, text=True)
+        if proc.returncode == 0:
+            progress("模型下载完成", 100)
+            return
+        last_err = (proc.stderr or "")[-400:]
+        progress(f"模型下载中断，第 {attempt}/8 次重试（断点续传）…", None)
+        time.sleep(3)
+    raise RuntimeError("模型下载失败：" + last_err)
 
 
 def install_runtime(progress: Progress, want_model: bool = True) -> None:
