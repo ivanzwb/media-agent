@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import typer
@@ -78,6 +79,12 @@ def serve(host: str = typer.Option("127.0.0.1"),
     from app.feeds import ensure_feeds_file
     from app.web.server import create_app
     cfg = Config.load()
+    # Anchor the data dir to an absolute path for the whole process so every
+    # later Config.load() (in request/worker threads) resolves to the SAME
+    # location regardless of the current working directory. Otherwise a fresh
+    # Config.load() uses a CWD-relative "data", which can split video/narration
+    # files away from the DB and make them appear "lost" after a restart.
+    os.environ["MEDIA_AGENT_DATA_DIR"] = str(cfg.data_dir)
     cfg.ensure_dirs()
     ensure_feeds_file(feeds)
     uvicorn.run(create_app(cfg, feeds_path=feeds), host=host, port=port)

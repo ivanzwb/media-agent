@@ -1195,6 +1195,9 @@ function VideoTab({ data }: { data: DraftData }) {
   const [voice, setVoice] = useState<string | undefined>(undefined);
   const [narrLog, setNarrLog] = useState<string[]>([]);
   const [videoCollapsed, setVideoCollapsed] = useLocalState<boolean>("videotab-video-collapsed", false);
+  // Keep the player in sync with the persisted state (e.g. after a server
+  // restart / page reload the draft API reports has_video from disk).
+  useEffect(() => { setHasVideo(data.has_video); }, [data.has_video]);
 
   const { data: ttsProvider } = useQuery({ queryKey: ["settings"], queryFn: () => getJson<{ tts_provider?: string }>("/api/settings"), select: (d) => d.tts_provider || "kitten" });
   const { data: voiceData } = useQuery({
@@ -1258,7 +1261,7 @@ function VideoTab({ data }: { data: DraftData }) {
     const poll = setInterval(async () => {
       const s = await getJson<{ running: boolean; error: string | null; logs: string[] }>(`/api/narration-status?draft_id=${data.id}`);
       if (s.logs) setNarrLog(s.logs);
-      if (!s.running) { clearInterval(poll); setNarrating(false); setNarrLog([]); s.error ? message.error("生成失败：" + s.error) : message.success("讲解脚本+配音已生成"); qc.invalidateQueries({ queryKey: ["script", data.id] }); }
+      if (!s.running) { clearInterval(poll); setNarrating(false); setNarrLog([]); s.error ? message.error("生成失败：" + s.error) : message.success("讲解脚本+配音已生成"); qc.invalidateQueries({ queryKey: ["script", data.id] }); qc.invalidateQueries({ queryKey: ["draft", data.id] }); }
     }, 1500);
     narrPollRef.current = poll;
   }
@@ -1268,7 +1271,7 @@ function VideoTab({ data }: { data: DraftData }) {
     if (synthPollRef.current) clearInterval(synthPollRef.current);
     const poll = setInterval(async () => {
       const s = await getJson<{ running: boolean; error: string | null }>(`/api/video-status?draft_id=${data.id}`);
-      if (!s.running) { clearInterval(poll); setSynth(false); if (s.error) message.error("合成失败：" + s.error); else { message.success("视频已合成"); setHasVideo(true); } }
+      if (!s.running) { clearInterval(poll); setSynth(false); if (s.error) message.error("合成失败：" + s.error); else { message.success("视频已合成"); setHasVideo(true); qc.invalidateQueries({ queryKey: ["draft", data.id] }); } }
     }, 2000);
     synthPollRef.current = poll;
   }
