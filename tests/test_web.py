@@ -692,3 +692,43 @@ def test_apply_template_missing_draft_404(tmp_path):
     r = client.post("/api/draft/999999/apply-template",
                     data={"template_id": "whatever"})
     assert r.status_code == 404
+
+
+def test_rewrite_preserves_title_not_body(tmp_path):
+    """Regression guard: an Agent/template rewrite must keep the draft's title
+    and never dump the article body into title_cn.
+
+    Exercises the shared _agent_run_background path (used by both Agent-edit and
+    套用模板) via the apply-template endpoint, which runs on MockProvider in
+    tests. Previously, when the rewritten output had no title_cn front-matter,
+    the whole body was written into title_cn.
+    """
+    import time
+    client, store, _ = make_client(tmp_path)          # dev license → not gated
+    _, draft = seed(store)
+    store.update_draft_body(draft.id, title_candidates=["原标题"],
+                            body_md="# 原正文\n第一段原始内容，用于验证不会跑进标题。",
+                            status="drafted", title_cn="我的中文标题")
+
+    tpls = client.get("/api/editor/templates").json()["templates"]
+    assert tpls, "expected builtin templates"
+    r = client.post(f"/api/draft/{draft.id}/apply-template",
+                    data={"template_id": tpls[0]["id"]})
+    assert r.status_code == 200 and r.json().get("running") is True
+
+    status = None
+    for _ in range(200):                               # MockProvider is instant
+        status = client.get(
+            f"/api/draft/{draft.id}/agent-status").json()
+        if status.get("status") in ("completed", "error"):
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError("apply-template did not finish in time")
+    assert status["status"] == "completed", status
+
+    row = store.get_draft(draft.id)
+    body_now = store.read_draft_body(draft.id).get("body_md", "") or ""
+    # Title must be preserved — NOT replaced by (or containing) the body.
+    assert row["title_cn"] == "我的中文标题"
+    assert body_now and row["title_cn"] != body_now
