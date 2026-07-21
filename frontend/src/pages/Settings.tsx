@@ -64,7 +64,7 @@ export default function Settings() {
         rewrite_priority: data.rewrite_priority,
         tts_provider: data.tts_provider || "kitten", tts_api_base: data.tts_api_base, tts_model: data.tts_model, tts_voice: data.tts_voice,
         tts_rate: data.tts_rate, tts_pitch: data.tts_pitch, tts_instruct: data.tts_instruct,
-        max_age_days: data.max_age_days, max_per_source: data.max_per_source, download_workers: data.download_workers,
+        max_age_days: data.max_age_days, max_per_source: data.max_per_source, max_drafts: data.max_drafts, download_workers: data.download_workers,
         video_fit: data.video_fit, video_brand_name: data.video_brand_name,
         avatar_enabled: data.avatar_enabled, avatar_image: data.avatar_image,
         avatar_position: data.avatar_position, avatar_provider: data.avatar_provider,
@@ -239,6 +239,10 @@ export default function Settings() {
                 <Card title="采集" size="small" style={{ marginBottom: 16 }}>
                   <Form.Item name="max_age_days" label="最大天数（留空不限）"><Input /></Form.Item>
                   <Form.Item name="max_per_source" label="每来源最多抓取（留空不限）"><Input /></Form.Item>
+                  <Form.Item name="max_drafts" label="每次运行改写篇数（留空默认 10）"
+                    tooltip="每次「立即运行」最多改写/转写的文章篇数，留空则默认 10（MEDIA_AGENT_MAX_DRAFTS）">
+                    <Input />
+                  </Form.Item>
                   <Form.Item name="relevance_filter" label="AI 相关性过滤（只保留新闻/行业动态/研究文章）" valuePropName="checked"
                     tooltip="抓取后用大模型判断每条内容是否为真正的新闻/行业动态/研究文章，丢弃公司主页、关于我们、产品/营销落地页、招聘、导航/列表页等非文章内容（MEDIA_AGENT_RELEVANCE_FILTER）">
                     <Switch />
@@ -338,10 +342,24 @@ function LicenseCard({ lic, labels, onChange }: { lic: any; labels: Record<strin
 function RewriteStyleManager({ styles, onChange }: { styles: StylePub[]; onChange: () => void; }) {
   const { message } = AntApp.useApp();
   const customs = styles.filter((s) => !s.is_builtin);
+  const builtins = styles.filter((s) => s.is_builtin);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<StylePub | null>(null);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
+
+  // Pre-fill the create form from a built-in style so a new custom style can
+  // start from (and then tweak) an existing one.
+  function applyBase(id: string | undefined) {
+    const b = builtins.find((x) => x.id === id);
+    if (!b) return;
+    form.setFieldsValue({
+      name: form.getFieldValue("name") || `${b.name} 副本`,
+      description: b.description,
+      instruction: b.instruction,
+      prompt: b.prompt,
+    });
+  }
 
   async function openCreate() {
     setEditing(null); form.resetFields(); setModalOpen(true);
@@ -391,6 +409,14 @@ function RewriteStyleManager({ styles, onChange }: { styles: StylePub[]; onChang
       <Modal title={editing ? "编辑风格" : "新建风格"} open={modalOpen}
         onCancel={() => setModalOpen(false)} onOk={onSubmit} confirmLoading={saving}>
         <Form form={form} layout="vertical">
+          {!editing && (
+            <Form.Item name="based_on" label="基于内置风格（可选）"
+              tooltip="选择一个内置转写风格作为起点，会把它的改写指令与系统提示词填入下方，你可以再修改">
+              <Select allowClear placeholder="从空白开始，或选择一个内置风格作为模板"
+                onChange={(val) => applyBase(val as string | undefined)}
+                options={builtins.map((b) => ({ value: b.id, label: b.name }))} />
+            </Form.Item>
+          )}
           <Form.Item name="name" label="名称" rules={[{ required: true, message: "请输入风格名称" }]}>
             <Input />
           </Form.Item>
