@@ -120,7 +120,14 @@ def get_tts_provider(name: str | None, base_url: str | None = None,
     elif name == "cosyvoice":
         # voice = speaker reference wav path (resolved by caller);
         # model = CosyVoice2 model name/path (HuggingFace ID or local dir).
-        from app.tts.providers.cosyvoice import CosyVoiceTTS
+        try:
+            from app.tts.providers.cosyvoice import CosyVoiceTTS
+        except ImportError as exc:
+            raise RuntimeError(
+                "CosyVoice 声音复刻需要额外依赖（numpy、torch、cosyvoice 等），"
+                f"当前环境缺少：{exc.name or exc}。请运行 setup-optional 安装这些依赖，"
+                "或在「设置 → 语音」里把 TTS Provider 改为 Kitten（本地 edge-tts，"
+                "无需额外依赖）或 OpenAI 兼容（云端 API）。") from exc
         inner = CosyVoiceTTS(speaker_wav=voice, model=model, instruct=instruct)
     else:
         raise ValueError(f"Unknown TTS provider: {name}")

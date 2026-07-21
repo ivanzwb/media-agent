@@ -129,7 +129,7 @@ export default function Settings() {
               <Card title="TTS 与声音库" size="small">
                 <Form.Item name="tts_provider" label="Provider">
                   <Select options={[
-                    { value: "kitten", label: "Kitten（本地 edge-tts，默认，云端语音）" },
+                    { value: "kitten", label: "Kitten（本地 edge-tts，默认）" },
                     { value: "cosyvoice", label: "CosyVoice（本地 GPU 声音复刻）" },
                     { value: "openai_compatible", label: "OpenAI 兼容（云端 API）" },
                     { value: "mock", label: "Mock（测试）" },
