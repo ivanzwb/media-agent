@@ -417,9 +417,13 @@ function VoiceManager({ voices, onChange }: { voices: Voice[]; onChange: () => v
       <Space style={{ marginBottom: 8 }}>
         <Text strong>声音库</Text>
         <Upload accept="audio/*" showUploadList={false} customRequest={async ({ file, onSuccess, onError }) => {
-          const fd = new FormData(); fd.append("file", file as File);
+          const f = file as File;
+          const fd = new FormData(); fd.append("file", f);
+          // Default the voice name to the file's stem so uploads aren't all
+          // saved as "未命名声音" (which then collide on the 2nd upload).
+          fd.append("name", (f.name || "").replace(/\.[^.]+$/, ""));
           try { await api.post("/voices", fd); message.success("已上传"); onChange(); onSuccess?.({}); }
-          catch (e) { message.error("上传失败"); onError?.(e as any); }
+          catch (e: any) { message.error(e?.response?.data?.error || "上传失败"); onError?.(e as any); }
         }}><Button size="small" icon={<UploadOutlined />}>上传音频样本</Button></Upload>
         <VoiceRecorder onSave={() => { onChange(); message.success("录音已保存"); }} />
       </Space>
@@ -441,6 +445,7 @@ function VoiceRecorder({ onSave }: { onSave: () => void }) {
   const [elapsed, setElapsed] = useState(0);
   const [blob, setBlob] = useState<Blob | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -464,7 +469,7 @@ function VoiceRecorder({ onSave }: { onSave: () => void }) {
     }
   }
   function closePanel() {
-    setOpen(false); setRecording(false); setElapsed(0); setBlob(null); setAudioUrl(null);
+    setOpen(false); setRecording(false); setElapsed(0); setBlob(null); setAudioUrl(null); setName("");
     timerRef.current && clearInterval(timerRef.current); timerRef.current = null;
     streamRef.current?.getTracks().forEach(t => t.stop()); streamRef.current = null;
   }
@@ -478,6 +483,10 @@ function VoiceRecorder({ onSave }: { onSave: () => void }) {
     mr.onstop = () => {
       const b = new Blob(chunksRef.current, { type: mr.mimeType });
       setBlob(b); setAudioUrl(URL.createObjectURL(b));
+      // Pre-fill a unique default name so saving never lands on a duplicate
+      // "未命名声音"; the user can rename it before saving.
+      const d = new Date(); const p = (n: number) => String(n).padStart(2, "0");
+      setName((cur) => cur || `录音 ${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`);
     };
     mr.start();
     mediaRecorder.current = mr;
@@ -491,14 +500,18 @@ function VoiceRecorder({ onSave }: { onSave: () => void }) {
   }
   async function saveRecording() {
     if (!blob) return;
+    if (!name.trim()) { message.warning("请先为声音命名"); return; }
     setSaving(true);
     try {
       const fd = new FormData();
       fd.append("blob", blob, "recording.webm");
+      fd.append("name", name.trim());
       await api.post("/api/voices/record", fd);
       onSave();
       closePanel();
-    } catch { message.error("保存失败"); }
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || "保存失败");
+    }
     finally { setSaving(false); }
   }
 
@@ -517,6 +530,9 @@ function VoiceRecorder({ onSave }: { onSave: () => void }) {
       ) : (
         <>
           <audio src={audioUrl!} controls style={{ height: 32, maxWidth: 200 }} />
+          <Input size="small" placeholder="声音名称" value={name}
+            onChange={(e) => setName(e.target.value)} style={{ width: 160 }}
+            onPressEnter={saveRecording} />
           <Button size="small" type="primary" icon={<CheckOutlined />}
             loading={saving} onClick={saveRecording}>保存</Button>
         </>
