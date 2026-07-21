@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   App as AntApp, Button, Card, Input, Select, Space, Typography, Upload,
 } from "antd";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, getJson } from "../api/client";
 
 const { Text } = Typography;
@@ -21,19 +21,29 @@ export default function SceneEditor({ draftId, ttsVoice }: { draftId: number; tt
   const [images, setImages] = useState<string[]>([]);
   const [videos, setVideos] = useState<string[]>([]);
   const [uploads, setUploads] = useState<string[]>([]);
-  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Re-sync local editor state from the server whenever the script's identity
+  // changes (a fresh 生成分镜 / regeneration / resynth) so new scenes appear
+  // without a manual page refresh. We key on a signature of the server data so
+  // the user's in-progress local edits aren't clobbered when the server copy is
+  // unchanged (e.g. right after our own save + invalidate).
+  const syncedSigRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (data && !loaded) {
-      setScenes(data.scenes || []);
-      setImages(data.images || []);
-      setVideos(data.videos || []);
-      const up = new Set<string>(data.uploads || []);
-      (data.scenes || []).forEach((s) => { if (s.bg_custom) up.add(s.bg_custom); });
-      setUploads([...up]);
-      setLoaded(true);
-    }
+    if (!data) return;
+    const sig = JSON.stringify({
+      n: (data.scenes || []).length,
+      s: (data.scenes || []).map((x) => `${x.narration || ""}|${x.audio || ""}`),
+      i: data.images || [], v: data.videos || [], u: data.uploads || [],
+    });
+    if (sig === syncedSigRef.current) return;
+    syncedSigRef.current = sig;
+    setScenes(data.scenes || []);
+    setImages(data.images || []);
+    setVideos(data.videos || []);
+    const up = new Set<string>(data.uploads || []);
+    (data.scenes || []).forEach((s) => { if (s.bg_custom) up.add(s.bg_custom); });
+    setUploads([...up]);
   }, [data]);
 
   if (!data) return null;
