@@ -113,7 +113,12 @@ def generate_talking_head(audio: Path, spec: AvatarSpec,
                "--source_image", str(spec.image),
                "--result_dir", str(result_dir),
                "--still", "--preprocess", "full"]
-        logger.info("avatar: running SadTalker for scene #%d …", idx + 1)
+        # pip 画中画头像很小，跳过 GFPGAN 省 10x 时间；全屏模式保留增强
+        if spec.position != "full":
+            cmd.append("--enhancer")
+            cmd.append("none")
+        logger.info("avatar: running SadTalker for scene #%d (enhancer=%s) …",
+                     idx + 1, "gfpgan" if spec.position == "full" else "none")
         proc = subprocess.run(cmd, cwd=spec.sadtalker_dir,
                               capture_output=True, text=True, timeout=900)
         if proc.returncode != 0:
