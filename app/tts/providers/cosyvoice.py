@@ -132,11 +132,16 @@ class CosyVoiceTTS:
         self.speaker_wav = speaker_wav
         self.model_name = model or _DEFAULT_MODEL
         # Optional natural-language style/emotion instruction (语气/情感),
-        # e.g. "用亲切自然的语气" / "热情激昂地讲解". When set, CosyVoice2's
-        # instruct mode is used for expressive prosody.
+        # e.g. "用亲切自然的语气" / "热情激昂地讲解". When set, this text is
+        # prepended to the whisper transcription as prompt_text, so the LLM
+        # uses it for style control during zero-shot cloning.
         self.instruct = (instruct or "").strip()
         self._model_dir: str | None = None  # resolved local path
         self._prompt_text: str | None = None  # whisper transcription, lazy init
+        # Cached speaker embedding ID for consistent voice across segments.
+        # Once initialized via add_zero_shot_spk(), all subsequent synthesize()
+        # calls reuse this ID to avoid per-call embedding variation.
+        self._spk_id: str | None = None
 
     # ------------------------------------------------------------------
     # Model loading (lazy, process-global singleton)
@@ -332,6 +337,49 @@ class CosyVoiceTTS:
             raise RuntimeError(
                 f"参考音频格式转换失败（{speaker_wav}）：{e}") from e
 
+    def _ensure_spk_cached(self, model, prompt_wav: str) -> str:
+        """Cache speaker embedding once; return zero_shot_spk_id for reuse.
+
+        CosyVoice2's ``add_zero_shot_spk`` extracts and stores speaker
+        embeddings (LLM + flow) keyed by ``zero_shot_spk_id``.  Subsequent
+        ``inference_zero_shot`` calls with this ID skip re-extraction and
+        produce **consistent** voice across all segments — solving the
+        "different voice per segment" problem.
+        """
+        if self._spk_id is not None:
+            return self._spk_id
+        # Use a stable ID derived from the reference audio path so the
+        # cache survives across provider recreations within the same process.
+        import hashlib
+        self._spk_id = "spk_" + hashlib.md5(
+            prompt_wav.encode()).hexdigest()[:12]
+        try:
+            # Ensure whisper transcription is ready (needed by add_zero_shot_spk)
+            if self._prompt_text is None:
+                with _PROMPT_LOCK:
+                    if self._prompt_text is None:
+                        self._prompt_text = self._transcribe_ref_audio(
+                            prompt_wav)
+                        if self._prompt_text:
+                            logger.info("参考音频转写完成（%d 字）",
+                                        len(self._prompt_text))
+                        else:
+                            logger.warning(
+                                "参考音频转写失败，使用空文本（音质可能受损）")
+                            self._prompt_text = ""
+            model.add_zero_shot_spk(
+                prompt_text=self._prompt_text,
+                prompt_wav=prompt_wav,
+                zero_shot_spk_id=self._spk_id,
+            )
+            logger.info("说话人缓存初始化完成: %s", self._spk_id)
+        except Exception as e:
+            # If add_zero_shot_spk fails (e.g. API change), clear the ID
+            # and fall back to per-call zero-shot (less consistent but works).
+            logger.warning("说话人缓存失败，回退到逐句克隆：%s", e)
+            self._spk_id = ""
+        return self._spk_id
+
     def synthesize(self, text: str, out_stem: Path) -> Path:
         if not self.speaker_wav or not Path(self.speaker_wav).exists():
             raise RuntimeError(
@@ -345,52 +393,32 @@ class CosyVoiceTTS:
         model = self._get_model()
         prompt_wav = self._resolve_ref_wav(self.speaker_wav)
 
-        # Transcribe reference audio once for prompt_text (needed for
-        # CosyVoice2 zero-shot LLM alignment).  We do NOT use
-        # add_zero_shot_spk / zero_shot_spk_id caching here because
-        # CosyVoice2's internal spk2info dict is not reliably shared
-        # across threads under ThreadPoolExecutor.
-        #
-        # Guard with _PROMPT_LOCK — ThreadPoolExecutor can call
-        # synthesize() from N threads simultaneously; without this lock
-        # every thread would hammer whisper concurrently.
-        if self._prompt_text is None:
-            with _PROMPT_LOCK:
-                if self._prompt_text is None:
-                    self._prompt_text = self._transcribe_ref_audio(prompt_wav)
-                    if self._prompt_text:
-                        logger.info("参考音频转写完成（%d 字）",
-                                    len(self._prompt_text))
-                    else:
-                        logger.warning("参考音频转写失败，使用空文本（音质可能受损）")
-                        self._prompt_text = ""
-
         with _INFERENCE_LOCK:
-            results = None
-            # Expressive instruct mode (语气/情感) when an instruction is set.
-            # Falls back to plain zero-shot cloning if this build of CosyVoice
-            # doesn't support instruct2 (so it never breaks synthesis).
-            if self.instruct:
-                try:
-                    results = model.inference_instruct2(
-                        tts_text=text,
-                        instruct_text=self.instruct,
-                        prompt_wav=prompt_wav,
-                        stream=False,
-                    )
-                except (AttributeError, TypeError) as e:
-                    logger.warning("CosyVoice instruct 模式不可用，回退到普通克隆：%s", e)
-                    results = None
-            if results is None:
-                results = model.inference_zero_shot(
-                    tts_text=text,
-                    prompt_text=self._prompt_text,
-                    prompt_wav=prompt_wav,
-                    stream=False,
-                )
+            # Ensure speaker embedding is cached (one-time extraction).
+            # This guarantees consistent voice across all segments.
+            spk_id = self._ensure_spk_cached(model, prompt_wav)
+
+            # Build prompt_text: whisper transcription of reference audio,
+            # optionally prepended with the instruct text for style control.
+            # CosyVoice2's LLM uses prompt_text as context — prepending the
+            # style instruction (e.g. "热情激昂地讲解") lets the model
+            # follow the desired prosody WITHOUT reading the instruction
+            # aloud (it's treated as metadata, not speech content).
+            prompt_text = self._prompt_text or ""
+            if self.instruct and self.instruct not in prompt_text:
+                prompt_text = self.instruct + "，" + prompt_text
+
+            results = model.inference_zero_shot(
+                tts_text=text,
+                prompt_text=prompt_text,
+                prompt_wav=prompt_wav,
+                zero_shot_spk_id=spk_id,
+                stream=False,
+            )
             for result in results:
                 audio = result["tts_speech"]  # shape: [1, samples]
-                sf.write(str(path), audio.squeeze(0).numpy(), model.sample_rate)
+                sf.write(str(path), audio.squeeze(0).numpy(),
+                         model.sample_rate)
 
         if not path.exists():
             raise RuntimeError(
