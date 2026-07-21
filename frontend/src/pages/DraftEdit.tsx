@@ -1194,6 +1194,7 @@ function VideoTab({ data }: { data: DraftData }) {
   const [hasVideo, setHasVideo] = useState(data.has_video);
   const [voice, setVoice] = useState<string | undefined>(undefined);
   const [narrLog, setNarrLog] = useState<string[]>([]);
+  const [videoCollapsed, setVideoCollapsed] = useLocalState<boolean>("videotab-video-collapsed", false);
 
   const { data: ttsProvider } = useQuery({ queryKey: ["settings"], queryFn: () => getJson<{ tts_provider?: string }>("/api/settings"), select: (d) => d.tts_provider || "kitten" });
   const { data: voiceData } = useQuery({
@@ -1302,16 +1303,29 @@ function VideoTab({ data }: { data: DraftData }) {
         )}
         {hasVideo && (
           <div style={{ marginTop: 8 }}>
-            <video controls preload="metadata" style={{ maxWidth: "100%", borderRadius: 8 }} src={`/videos/draft-${data.id}/video.mp4`} />
-            <div style={{ marginTop: 8 }}>
-        <Space wrap size="middle">
-                <a href={`/videos/draft-${data.id}/video.mp4`} download><Button size="small">下载 mp4</Button></a>
-                {data.platforms.filter((p) => p.video_publish_url).map((p) => (
-                  <a key={p.id} href={p.video_publish_url!} target="_blank" rel="noopener"><Button size="small">{p.label}</Button></a>
-                ))}
-                <Button size="small" className="pro-feature" onClick={prepareChannels}>视频号发布（半自动）</Button>
-              </Space>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <Text strong>已合成视频</Text>
+              <Button size="small" type="text" onClick={() => setVideoCollapsed(!videoCollapsed)}
+                title={videoCollapsed ? "展开视频预览" : "收起视频预览（腾出空间给分镜）"}>
+                {videoCollapsed ? "展开 ▾" : "收起 ▴"}
+              </Button>
             </div>
+            {!videoCollapsed && (
+              // Video preview is capped in height and sits beside its action
+              // buttons so it never crowds out the 分镜 editor below.
+              <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+                <video controls preload="metadata"
+                  style={{ maxHeight: "30vh", maxWidth: "min(100%, 520px)", borderRadius: 8, background: "#000" }}
+                  src={`/videos/draft-${data.id}/video.mp4`} />
+                <Space direction="vertical" size="small">
+                  <a href={`/videos/draft-${data.id}/video.mp4`} download><Button size="small">下载 mp4</Button></a>
+                  {data.platforms.filter((p) => p.video_publish_url).map((p) => (
+                    <a key={p.id} href={p.video_publish_url!} target="_blank" rel="noopener"><Button size="small">{p.label}</Button></a>
+                  ))}
+                  <Button size="small" className="pro-feature" onClick={prepareChannels}>视频号发布（半自动）</Button>
+                </Space>
+              </div>
+            )}
           </div>
         )}
       </div>
