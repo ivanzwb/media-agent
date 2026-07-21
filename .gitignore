@@ -36,3 +36,6 @@ frontend/.vite/
 packaging/get-pip.py
 packaging/python-embed-win64.zip
 .venv-build/
+# SadTalker (local dev clone + build artifact)
+SadTalker/
+sadtalker_src/

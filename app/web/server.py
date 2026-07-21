@@ -3691,6 +3691,89 @@ def create_app(config: Config | None = None,
             "label": label,
         }
 
+    # ── SadTalker one-click setup ───────────────────────────────────────────
+
+    @app.get("/api/sadtalker/status")
+    def api_sadtalker_status():
+        """Return current SadTalker setup status (model files, paths, etc.)."""
+        from app.video.sadtalker_setup import setup_status
+        return setup_status(config.data_dir)
+
+    @app.post("/api/sadtalker/setup")
+    def api_sadtalker_setup(mirror: bool = Form(True)):
+        """Download SadTalker models with resume + auto-configure paths.
+
+        Returns SSE stream of progress events, then a final JSON result.
+        """
+        from starlette.responses import StreamingResponse
+        import queue, json as _json, threading as _threading
+
+        from app.video.sadtalker_setup import run_setup, models_ready
+        from app.store import get_store as _gs
+
+        # Fast check: already installed?
+        if models_ready(config.data_dir):
+            st_dir_resolve = None
+            from app.video.sadtalker_setup import resolve_sadtalker_dir
+            st_dir_resolve = resolve_sadtalker_dir(config.data_dir)
+            return {
+                "ok": True,
+                "message": "数字人模型已就绪",
+                "sadtalker_dir": st_dir_resolve or "",
+                "sadtalker_python": "",
+            }
+
+        evt_q: queue.Queue = queue.Queue()
+
+        def _on_progress(msg: str, frac: float) -> None:
+            evt_q.put({"event": "progress", "data": _json.dumps(
+                {"message": msg, "fraction": round(frac, 3)},
+                ensure_ascii=False)})
+
+        cancel = _threading.Event()
+
+        def _worker() -> None:
+            try:
+                result = run_setup(
+                    config.data_dir,
+                    mirror=mirror,
+                    progress_cb=_on_progress,
+                    cancel_event=cancel,
+                )
+                # Auto-save paths to DB if setup succeeded
+                if result.get("ok"):
+                    try:
+                        _store = _gs()
+                        if result.get("sadtalker_dir"):
+                            _store.set_setting("sadtalker_dir", result["sadtalker_dir"])
+                        if result.get("sadtalker_python"):
+                            _store.set_setting("sadtalker_python", result["sadtalker_python"])
+                    except Exception:
+                        pass
+                evt_q.put({"event": "done",
+                            "data": _json.dumps(result, ensure_ascii=False)})
+            except Exception as exc:
+                evt_q.put({"event": "done",
+                            "data": _json.dumps({"ok": False, "message": str(exc)},
+                                                ensure_ascii=False)})
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
+        def _stream():
+            while True:
+                try:
+                    item = evt_q.get(timeout=0.3)
+                except queue.Empty:
+                    # Send heartbeat every 300ms while waiting
+                    yield f"event: heartbeat\ndata: {{}}\n\n"
+                    continue
+                yield f"{item['event']}: {item['data']}\n\n"
+                if item["event"] == "done":
+                    break
+
+        return StreamingResponse(_stream(), media_type="text/event-stream",
+                                 headers={"X-Accel-Buffering": "no"})
+
     # SPA catch-all: serve index.html for client-side deep links that aren't
     # explicit API/asset routes (registered last so real routes win).
     if _spa_enabled:

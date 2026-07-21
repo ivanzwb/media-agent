@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  App as AntApp, Button, Card, Divider, Form, Input, InputNumber, Select,
+  App as AntApp, Button, Card, Divider, Form, Input, InputNumber, Progress, Select,
   Space, Switch, Tag, Typography, List, Upload, Popconfirm, Tabs, Modal,
 } from "antd";
-import { UploadOutlined, AudioOutlined, StopOutlined, CheckOutlined, CloseOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { UploadOutlined, AudioOutlined, StopOutlined, CheckOutlined, CloseOutlined, ThunderboltOutlined, DownloadOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useState, useRef, useEffect } from "react";
 import { api, getJson, postForm } from "../api/client";
 
@@ -202,13 +202,7 @@ export default function Settings() {
                     { value: "still", label: "静态头像（无口型）" },
                   ]} />
                 </Form.Item>
-                <Form.Item name="sadtalker_dir" label="SadTalker 目录"
-                  tooltip="本地 SadTalker 代码目录（含 inference.py）；配置后启用口型同步，否则回退静态头像">
-                  <Input placeholder="如 C:\\Projects\\SadTalker" />
-                </Form.Item>
-                <Form.Item name="sadtalker_python" label="SadTalker Python（可选）">
-                  <Input placeholder="留空用 python" />
-                </Form.Item>
+                <SadTalkerSetup data={data} form={form} onSuccess={refetch} />
               </Card>
             ),
           },
@@ -590,4 +584,125 @@ function CliTestButton({ form }: { form: any }) {
   }
 
   return <Button icon={<ThunderboltOutlined />} loading={loading} onClick={testCli}>检测</Button>;
+}
+
+/** One-click SadTalker setup: status display + download with SSE progress. */
+function SadTalkerSetup({ data, form, onSuccess }: { data: SettingsData; form: any; onSuccess: () => void }) {
+  const { message } = AntApp.useApp();
+  const [downloading, setDownloading] = useState(false);
+  const [progress, setProgress] = useState<{ message: string; fraction: number } | null>(null);
+
+  const hasDir = !!(data.sadtalker_dir && String(data.sadtalker_dir).trim());
+
+  async function fetchStatus(): Promise<{ ready: boolean; models_dir: string }> {
+    const r = await getJson<{ ready: boolean; models_dir: string }>("/api/sadtalker/status");
+    return r;
+  }
+
+  async function startSetup() {
+    setDownloading(true);
+    setProgress({ message: "准备下载…", fraction: 0 });
+
+    try {
+      const fd = new FormData();
+      fd.append("mirror", "true");
+
+      // Use fetch + ReadableStream for SSE (axios doesn't support streaming well)
+      const resp = await fetch("/api/sadtalker/setup", { method: "POST", body: fd });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+      const reader = resp.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE events
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        let eventType = "";
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith("data: ") && eventType) {
+            try {
+              const payload = JSON.parse(line.slice(6));
+              if (eventType === "progress") {
+                setProgress({ message: payload.message, fraction: payload.fraction });
+              } else if (eventType === "done") {
+                setDownloading(false);
+                setProgress(null);
+                if (payload.ok) {
+                  message.success(payload.message || "数字人模型安装完成！");
+                  // Auto-fill paths into form
+                  if (payload.sadtalker_dir) form.setFieldsValue({ sadtalker_dir: payload.sadtalker_dir });
+                  if (payload.sadtalker_python) form.setFieldsValue({ sadtalker_python: payload.sadtalker_python });
+                  onSuccess();
+                } else {
+                  message.error(payload.message || "安装失败");
+                }
+                return;
+              }
+              eventType = "";
+            } catch { /* ignore non-JSON lines */ }
+          }
+        }
+      }
+      // If we exit the loop without a "done" event, something went wrong
+      setDownloading(false);
+      setProgress(null);
+      message.warning("下载连接中断，请重试");
+    } catch (e: any) {
+      setDownloading(false);
+      setProgress(null);
+      message.error("安装失败：" + (e?.message || e));
+    }
+  }
+
+  // Auto-fetch status on mount to check models
+  const [status, setStatus] = useState<{ ready: boolean; models_dir: string } | null>(null);
+  useEffect(() => { fetchStatus().then(setStatus).catch(() => {}); }, []);
+
+  return (
+    <Card size="small" title="数字人模型" style={{ marginTop: 8 }}
+      extra={status && <Tag color={status.ready ? "green" : "default"}>{status.ready ? "已安装" : "未安装"}</Tag>}>
+      {downloading && progress ? (
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Text>{progress.message}</Text>
+          <Progress percent={Math.max(1, Math.round(progress.fraction * 100))} status="active" />
+        </Space>
+      ) : (
+        <Space direction="vertical">
+          <Text type="secondary">
+            {status?.ready
+              ? "模型已就绪，可直接使用 SadTalker 口型同步。"
+              : "点击下载安装 SadTalker 模型（~200MB），安装后自动启用口型同步。支持断点续传。"}
+          </Text>
+          <Space>
+            {!status?.ready && (
+              <Button type="primary" icon={<DownloadOutlined />} onClick={startSetup}>
+                下载安装
+              </Button>
+            )}
+            {status?.ready && (
+              <Button icon={<ReloadOutlined />} onClick={async () => {
+                const s = await fetchStatus().catch(() => null);
+                if (s) setStatus(s);
+                onSuccess();
+              }}>检查更新</Button>
+            )}
+          </Space>
+          {hasDir && (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              SadTalker 目录：{String(data.sadtalker_dir)}
+            </Text>
+          )}
+        </Space>
+      )}
+    </Card>
+  );
 }

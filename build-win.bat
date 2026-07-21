@@ -48,6 +48,31 @@ if not exist "packaging\get-pip.py" (
 )
 echo Packaging files ready
 
+:: Prepare SadTalker source for bundled distribution
+echo Preparing SadTalker source bundle...
+if not exist "sadtalker_src" (
+    echo Cloning SadTalker from GitHub...
+    git clone --depth 1 https://github.com/OpenTalker/SadTalker.git sadtalker_tmp
+    if %errorlevel% equ 0 (
+        :: Copy only the files needed for inference (skip checkpoints, results, etc.)
+        mkdir sadtalker_src
+        mkdir sadtalker_src\src
+        copy /y sadtalker_tmp\inference.py sadtalker_src\inference.py >nul
+        xcopy /s /e /y /q sadtalker_tmp\src\* sadtalker_src\src\ >nul
+        :: Copy gfpgan wrapper (needed for face enhancement path)
+        if exist sadtalker_tmp\gfpgan (
+            xcopy /s /e /y /q sadtalker_tmp\gfpgan sadtalker_src\gfpgan\ >nul
+        )
+        rmdir /s /q sadtalker_tmp
+        echo SadTalker source bundled
+    ) else (
+        echo [WARN] Failed to clone SadTalker — bundle will be empty
+        echo        Users will need to configure sadtalker_dir manually
+    )
+) else (
+    echo SadTalker source already present
+)
+
 :: Build
 echo Building...
 python -m PyInstaller --onedir --noconfirm ^
@@ -58,6 +83,7 @@ python -m PyInstaller --onedir --noconfirm ^
     --add-data "app/licensing/public_key.b64;app/licensing" ^
     --add-data "packaging/python-embed-win64.zip;packaging" ^
     --add-data "packaging/get-pip.py;packaging" ^
+    --add-data "sadtalker_src;sadtalker_src" ^
     --exclude-module "torch" ^
     --exclude-module "zstandard" ^
     --exclude-module "torchvision" ^
