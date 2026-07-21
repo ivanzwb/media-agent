@@ -202,7 +202,7 @@ export default function Settings() {
                     { value: "still", label: "静态头像（无口型）" },
                   ]} />
                 </Form.Item>
-                <SadTalkerSetup data={data} form={form} onSuccess={refetch} />
+                <SadTalkerSetup data={data} onSuccess={refetch} />
               </Card>
             ),
           },
@@ -587,12 +587,10 @@ function CliTestButton({ form }: { form: any }) {
 }
 
 /** One-click SadTalker setup: status display + download with SSE progress. */
-function SadTalkerSetup({ data, form, onSuccess }: { data: SettingsData; form: any; onSuccess: () => void }) {
+function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: () => void }) {
   const { message } = AntApp.useApp();
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState<{ message: string; fraction: number } | null>(null);
-
-  const hasDir = !!(data.sadtalker_dir && String(data.sadtalker_dir).trim());
 
   async function fetchStatus(): Promise<{ ready: boolean; models_dir: string }> {
     const r = await getJson<{ ready: boolean; models_dir: string }>("/api/sadtalker/status");
@@ -696,11 +694,6 @@ function SadTalkerSetup({ data, form, onSuccess }: { data: SettingsData; form: a
               }}>检查更新</Button>
             )}
           </Space>
-          {hasDir && (
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              SadTalker 目录：{String(data.sadtalker_dir)}
-            </Text>
-          )}
         </Space>
       )}
     </Card>
