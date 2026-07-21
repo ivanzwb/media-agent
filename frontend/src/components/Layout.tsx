@@ -2,6 +2,7 @@ import { Layout as AntLayout, Menu, Button, Tag, Modal } from "antd";
 import { PlayCircleOutlined } from "@ant-design/icons";
 import { Link, useLocation, useNavigate, Outlet } from "react-router-dom";
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useLicense, useLocalState } from "../api/hooks";
 import { getJson, postForm } from "../api/client";
 import RunPanel from "./RunPanel";
@@ -25,8 +26,10 @@ function selectedKey(pathname: string): string {
 export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const { data: lic } = useLicense();
   const [runOpen, setRunOpen] = useLocalState<boolean>("layout-runOpen", false);
+  const [runNonce, setRunNonce] = useState(0);
   const [guideOpen, setGuideOpen] = useState(false);
 
   // On mount, if panel was open (from localStorage), check if run is still active
@@ -46,11 +49,14 @@ export default function Layout() {
   async function startRun() {
     setRunOpen(true);
     try {
-      const data = await postForm<{ started?: boolean; message?: string }>("/run");
-      if (data.started === false && data.message) {
-        // panel will reflect status via polling
-      }
+      await postForm<{ started?: boolean; message?: string }>("/run");
     } catch { /* poll reflects state */ }
+    // Restart polling AFTER the run is registered, so RunPanel resumes even if
+    // it was already open (e.g. still showing "运行完成" from a previous run),
+    // and force an immediate refresh so the running log box appears right away
+    // instead of waiting for an incidental refetch.
+    setRunNonce((n) => n + 1);
+    qc.invalidateQueries({ queryKey: ["run-status"] });
   }
 
   return (
@@ -78,7 +84,7 @@ export default function Layout() {
         </div>
       </Content>
 
-      <RunPanel open={runOpen} onClose={() => setRunOpen(false)} />
+      <RunPanel open={runOpen} trigger={runNonce} onClose={() => setRunOpen(false)} />
 
       <Modal open={guideOpen} onCancel={() => setGuideOpen(false)}
         title="升级 Pro 版，解锁全部功能"

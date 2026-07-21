@@ -8,8 +8,8 @@ import { postForm } from "../api/client";
 import { useEffect, useState } from "react";
 
 export default function RunPanel({
-  open, onClose,
-}: { open: boolean; onClose: () => void }) {
+  open, onClose, trigger,
+}: { open: boolean; onClose: () => void; trigger?: number }) {
   const [poll, setPoll] = useState(true);
   const [minimized, setMinimized] = useState(false);
   const { data } = useRunStatus(open && poll);
@@ -18,9 +18,12 @@ export default function RunPanel({
     if (data && !data.running) setPoll(false);
   }, [data]);
 
+  // Restart polling whenever the panel opens OR a new run is triggered — the
+  // panel may already be open (showing "运行完成"), so `open` alone won't
+  // re-fire this effect on a repeat click.
   useEffect(() => {
     if (open) setPoll(true);
-  }, [open]);
+  }, [open, trigger]);
 
   if (!open || !data) return null;
 
