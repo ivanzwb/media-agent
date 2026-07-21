@@ -3432,6 +3432,57 @@ def create_app(config: Config | None = None,
             "sadtalker": caps.sadtalker_capability(rc),
         }
 
+    # ---- one-click CosyVoice runtime install (download + progress) ----
+    cosy_install_lock = threading.Lock()
+    cosy_install = {"running": False, "logs": [], "error": None,
+                    "done": False, "pct": None}
+
+    @app.post("/api/cosyvoice/install")
+    def cosyvoice_install_start(model: bool = Form(True)):
+        from app import cosyvoice_install as inst
+        if not inst.is_supported():
+            return JSONResponse(
+                {"ok": False, "error": f"当前系统（{sys.platform}）暂无预编译 "
+                 "CosyVoice 运行时"}, status_code=400)
+        with cosy_install_lock:
+            if cosy_install["running"]:
+                return {"started": False, "running": True}
+            cosy_install.update(running=True, logs=[], error=None,
+                                done=False, pct=0)
+
+        def worker():
+            from app import capabilities as caps
+
+            def prog(msg, pct=None):
+                line = f"{datetime.now().strftime('%H:%M:%S')} {msg}"
+                with cosy_install_lock:
+                    cosy_install["logs"].append(line)
+                    if len(cosy_install["logs"]) > 300:
+                        del cosy_install["logs"][:-300]
+                    if pct is not None:
+                        cosy_install["pct"] = pct
+
+            try:
+                inst.install_runtime(prog, want_model=model)
+                caps.refresh()
+                with cosy_install_lock:
+                    cosy_install["done"] = True
+            except Exception as e:  # noqa: BLE001 - surface to UI
+                with cosy_install_lock:
+                    cosy_install["error"] = str(e)
+                prog(f"安装失败：{e}")
+            finally:
+                with cosy_install_lock:
+                    cosy_install["running"] = False
+
+        threading.Thread(target=worker, daemon=True).start()
+        return {"started": True, "running": True}
+
+    @app.get("/api/cosyvoice/install-status")
+    def cosyvoice_install_status():
+        with cosy_install_lock:
+            return dict(cosy_install)
+
     @app.get("/api/settings")
     def api_settings():
         store = get_store()

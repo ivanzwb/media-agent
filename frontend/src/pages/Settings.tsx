@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App as AntApp, Button, Card, Divider, Form, Input, InputNumber, Select,
   Space, Switch, Tag, Typography, List, Upload, Popconfirm, Tabs, Modal,
+  Progress, Checkbox,
 } from "antd";
 import { UploadOutlined, AudioOutlined, StopOutlined, CheckOutlined, CloseOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useState, useRef, useEffect } from "react";
@@ -162,11 +163,15 @@ export default function Settings() {
                   tooltip="仅 CosyVoice：用自然语言描述语气/情感，如「用亲切自然的语气」「热情激昂地讲解」">
                   <Input placeholder="例如：用亲切自然的语气讲解" />
                 </Form.Item>
-                <Form.Item name="cosyvoice_runtime_dir" label="CosyVoice 运行时目录"
-                  tooltip="预编译 CosyVoice 运行时（setup-optional 会下载解压到程序目录 _cosyvoice-runtime，自动识别，无需填写）；仅当放在别处时才需指定"
-                  extra={caps && !caps.cosyvoice.available
-                    ? `CosyVoice 在本机不可用：${caps.cosyvoice.reason}（运行 setup-optional 下载预编译运行时即可，无需编译）`
-                    : (caps ? `CosyVoice 状态：${caps.cosyvoice.reason}` : undefined)}>
+                <Form.Item label="CosyVoice 运行时"
+                  tooltip="点击安装即可下载预编译运行时（无需编译）。装好后自动识别，无需填写路径。">
+                  <CosyVoiceInstaller
+                    available={!!caps?.cosyvoice.available}
+                    reason={caps?.cosyvoice.reason}
+                    onDone={() => qc.invalidateQueries({ queryKey: ["capabilities"] })} />
+                </Form.Item>
+                <Form.Item name="cosyvoice_runtime_dir" label="运行时目录（可选）"
+                  tooltip="自定义预编译运行时位置；留空则自动识别程序目录下的 _cosyvoice-runtime">
                   <Input placeholder="留空自动识别（程序目录下 _cosyvoice-runtime）" />
                 </Form.Item>
                 <Form.Item name="tts_api_key" label={<>API Key {data.tts_api_key.set && <Tag color="green">已设置 {data.tts_api_key.masked}</Tag>}</>}>
@@ -356,6 +361,70 @@ function LicenseCard({ lic, labels, onChange }: { lic: any; labels: Record<strin
         </Space.Compact>
       )}
     </Card>
+  );
+}
+
+function CosyVoiceInstaller({ available, reason, onDone }:
+  { available: boolean; reason?: string; onDone: () => void; }) {
+  const { message } = AntApp.useApp();
+  const [running, setRunning] = useState(false);
+  const [pct, setPct] = useState<number>(0);
+  const [log, setLog] = useState<string>("");
+  const [withModel, setWithModel] = useState(true);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  function poll() {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const s = await getJson<{ running: boolean; logs: string[]; error: string | null; done: boolean; pct: number | null }>(
+          "/api/cosyvoice/install-status");
+        setPct(s.pct ?? 0);
+        setLog((s.logs || []).slice(-1)[0] || "");
+        if (!s.running) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null; setRunning(false);
+          if (s.error) message.error("安装失败：" + s.error);
+          else { message.success("CosyVoice 运行时安装完成"); onDone(); }
+        }
+      } catch { /* transient — keep polling */ }
+    }, 1500);
+  }
+
+  async function start() {
+    setRunning(true); setPct(0); setLog("正在启动安装…");
+    try {
+      const r = await postForm<{ started?: boolean; error?: string }>(
+        "/api/cosyvoice/install", { model: withModel ? "true" : "false" });
+      if (r.error) { message.error(r.error); setRunning(false); return; }
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || "启动安装失败"); setRunning(false); return;
+    }
+    poll();
+  }
+
+  if (available) {
+    return <Text type="success">运行时已就绪（{reason || "可用"}）</Text>;
+  }
+  return (
+    <Space direction="vertical" style={{ width: "100%" }}>
+      <Space wrap>
+        <Button type="primary" loading={running} onClick={start}>
+          {running ? "安装中…" : "下载安装（约 1GB，无需编译）"}
+        </Button>
+        <Checkbox checked={withModel} disabled={running}
+          onChange={(e) => setWithModel(e.target.checked)}>含模型（~1.5GB）</Checkbox>
+      </Space>
+      {!running && reason && <Text type="secondary">本机状态：{reason}</Text>}
+      {running && (
+        <>
+          <Progress percent={pct} status="active" />
+          <Text type="secondary" style={{ fontSize: 12 }}>{log}</Text>
+        </>
+      )}
+    </Space>
   );
 }
 
