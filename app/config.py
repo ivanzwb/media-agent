@@ -50,6 +50,7 @@ class Config:
     tts_instruct: str | None = None  # CosyVoice 语气/情感指令, e.g. "用亲切自然的语气"
     max_age_days: int | None = None
     max_per_source: int | None = None
+    max_drafts: int | None = None   # 每次运行最多改写/转写的文章篇数 (None → 默认 10)
     download_workers: int | None = None
     video_fit: str | None = None  # fit | crop | blur
     video_brand_name: str | None = None  # brand name for intro/outro
@@ -137,6 +138,7 @@ class Config:
             tts_instruct=os.environ.get("MEDIA_AGENT_TTS_INSTRUCT"),
             max_age_days=_int_env("MEDIA_AGENT_MAX_AGE_DAYS"),
             max_per_source=_int_env("MEDIA_AGENT_MAX_PER_SOURCE"),
+            max_drafts=_int_env("MEDIA_AGENT_MAX_DRAFTS"),
             download_workers=_int_env("MEDIA_AGENT_DOWNLOAD_WORKERS"),
             video_fit=os.environ.get("MEDIA_AGENT_VIDEO_FIT_MODE"),
             video_brand_name=os.environ.get("MEDIA_AGENT_VIDEO_BRAND_NAME"),
@@ -219,6 +221,12 @@ class Config:
             parsed = _int_str(per_src)
             if parsed is not None:
                 self.max_per_source = parsed
+
+        drafts = store.get_setting("max_drafts")
+        if drafts is not None:
+            parsed = _int_str(drafts)
+            if parsed is not None:
+                self.max_drafts = parsed
 
         workers = store.get_setting("download_workers")
         if workers is not None:

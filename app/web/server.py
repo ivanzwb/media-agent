@@ -304,7 +304,8 @@ def create_app(config: Config | None = None,
         style = rewrite_styles.resolve_style(run_config.rewrite_style, store)
         return run_pipeline(
             feeds_cfg, store, provider, image_provider=image_provider,
-            record=True, max_age_days=run_config.max_age_days,
+            record=True, max_drafts=run_config.max_drafts or 10,
+            max_age_days=run_config.max_age_days,
             max_per_source=run_config.max_per_source,
             download_images=run_config.download_images,
             download_videos=run_config.download_videos,
@@ -1442,8 +1443,8 @@ def create_app(config: Config | None = None,
         "llm_provider", "llm_model", "llm_api_base",
         "image_provider", "image_api_base", "image_model",
         "tts_provider", "tts_api_base", "tts_model", "tts_voice",
-        "max_age_days", "max_per_source", "download_workers", "video_fit",
-        "video_brand_name",
+        "max_age_days", "max_per_source", "max_drafts", "download_workers",
+        "video_fit", "video_brand_name",
         "sensitive_level", "sensitive_words",
         "promotion_footer",
         "schedule_cron", "schedule_enabled",
@@ -3448,6 +3449,7 @@ def create_app(config: Config | None = None,
             "data_dir": str(config.data_dir),
             "max_age_days": _get("max_age_days") or (str(config.max_age_days) if config.max_age_days else ""),
             "max_per_source": _get("max_per_source") or (str(config.max_per_source) if config.max_per_source else ""),
+            "max_drafts": _get("max_drafts") or (str(config.max_drafts) if config.max_drafts else ""),
             "download_workers": _get("download_workers") or (str(config.download_workers) if config.download_workers else ""),
             "default_workers": os.cpu_count() or 4,
             "video_fit": _get("video_fit") or (config.video_fit or "fit"),
@@ -3500,6 +3502,7 @@ def create_app(config: Config | None = None,
                       tts_instruct: str = Form(""),
                       max_age_days: str = Form(""),
                       max_per_source: str = Form(""),
+                      max_drafts: str = Form(""),
                       download_workers: str = Form(""),
                         video_fit: str = Form(""),
                         video_brand_name: str = Form(""),
@@ -3603,6 +3606,17 @@ def create_app(config: Config | None = None,
                     store.set_setting("max_per_source", max_per_source.strip())
                 else:
                     store.delete_setting("max_per_source")
+            except ValueError:
+                pass
+        # If empty, leave existing value unchanged
+
+        if max_drafts.strip():
+            try:
+                int_val = int(max_drafts.strip())
+                if int_val > 0:
+                    store.set_setting("max_drafts", max_drafts.strip())
+                else:
+                    store.delete_setting("max_drafts")
             except ValueError:
                 pass
         # If empty, leave existing value unchanged

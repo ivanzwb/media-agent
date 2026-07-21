@@ -35,7 +35,8 @@ def init():
 
 @app.command()
 def run(feeds: str = typer.Option("feeds.yaml", help="Path to feeds.yaml"),
-        max_drafts: int = typer.Option(10),
+        max_drafts: int = typer.Option(0, help="Max articles to rewrite per "
+                                       "run (0 = use setting, default 10)"),
         max_age_days: int = typer.Option(0, help="Only keep articles newer "
                                          "than N days (0 = unlimited)"),
         max_per_source: int = typer.Option(0, help="Cap articles per source "
@@ -60,7 +61,8 @@ def run(feeds: str = typer.Option("feeds.yaml", help="Path to feeds.yaml"),
                                             model=cfg.image_model,
                                             base_url=cfg.image_api_base or cfg.llm_api_base)
     stats = run_pipeline(
-        feeds_cfg, store, provider, max_drafts=max_drafts,
+        feeds_cfg, store, provider,
+        max_drafts=max_drafts or cfg.max_drafts or 10,
         image_provider=image_provider, record=True,
         max_age_days=max_age_days or cfg.max_age_days,
         max_per_source=max_per_source or cfg.max_per_source,
