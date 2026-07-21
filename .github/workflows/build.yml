@@ -52,6 +52,7 @@ jobs:
             --add-data "app/licensing/public_key.b64;app/licensing" `
             --add-data "packaging/python-embed-win64.zip;packaging" `
             --add-data "packaging/get-pip.py;packaging" `
+            --add-data "packaging/cosyvoice_worker.py;packaging" `
             --exclude-module "torch" `
             --exclude-module "zstandard" `
             --exclude-module "torchvision" `
@@ -199,6 +200,7 @@ jobs:
             --add-data "app/licensing/public_key.b64:app/licensing" \
             --add-data "packaging/python-embed-macos.tar.gz:packaging" \
             --add-data "packaging/get-pip.py:packaging" \
+            --add-data "packaging/cosyvoice_worker.py:packaging" \
             --exclude-module "torch" \
             --exclude-module "zstandard" \
             --exclude-module "torchvision" \
@@ -288,3 +290,83 @@ jobs:
             --title "media-agent $VERSION" \
             --notes "media-agent $VERSION 自动构建包（Windows / macOS Intel(x86_64) + Apple Silicon(arm64)）" 2>/dev/null || true
           gh release upload "$VERSION" "$file" --repo ivanzwb/release --clobber
+
+  # Prebuilt CosyVoice runtime: a fully self-contained, conda-pack'd Python env
+  # with ALL native deps prebuilt (torch/torchaudio/onnxruntime + pynini/openfst
+  # from conda-forge, so text normalization works WITHOUT the user compiling
+  # anything). Shipped as a separate release asset (large). The CosyVoice model
+  # itself is NOT bundled — it downloads on first use.
+  cosyvoice-runtime-win:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash -el {0}      # login shell so `conda activate` works
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: "3.10"     # CosyVoice's recommended runtime
+          miniconda-version: latest
+          auto-activate-base: false
+          activate-environment: cosy
+
+      - name: Install prebuilt native deps (conda-forge — no compilation)
+        run: |
+          set -e
+          # pynini/openfst are the ONLY compile-heavy deps; conda-forge ships
+          # prebuilt binaries so nothing is compiled here or on the user's box.
+          conda install -y -c conda-forge pynini openfst
+          # Matched, prebuilt CPU wheels for torch/torchaudio (the PyTorch CPU
+          # index keeps the pair in lockstep).
+          pip install torch==2.5.1 torchaudio==2.5.1 \
+            --index-url https://download.pytorch.org/whl/cpu
+          # Everything else as prebuilt wheels.
+          pip install "numpy<2" onnxruntime soundfile pydub openai-whisper \
+            huggingface_hub conda-pack \
+            conformer diffusers gdown hydra-core HyperPyYAML inflect librosa \
+            lightning matplotlib modelscope networkx omegaconf protobuf \
+            pydantic rich tensorboard transformers wget || true
+          # WeTextProcessing is pure-python; with conda's pynini already present
+          # it installs WITHOUT compiling. --no-deps prevents pip from pulling a
+          # source pynini and rebuilding.
+          pip install --no-deps WeTextProcessing || echo "WeTextProcessing optional; skipped"
+
+      - name: Vendor CosyVoice source into the env (relocatable)
+        run: |
+          set -e
+          PREFIX="$CONDA_PREFIX"
+          git clone --depth 1 https://github.com/FunAudioLLM/CosyVoice.git "$PREFIX/cosyvoice-src"
+          git clone --depth 1 https://github.com/shivammehta25/Matcha-TTS.git \
+            "$PREFIX/cosyvoice-src/third_party/Matcha-TTS" || true
+          # A .pth that resolves the vendored source via sys.prefix AT RUNTIME,
+          # so it keeps working after conda-pack relocates the env on the user's
+          # machine (absolute paths would break).
+          SP=$(python -c "import site,sys;print([p for p in site.getsitepackages() if p.endswith('site-packages')][0])")
+          cat > "$SP/_cosyvoice_repo.pth" <<'PTH'
+          import sys, os, site; site.addsitedir(os.path.join(sys.prefix, 'cosyvoice-src')); site.addsitedir(os.path.join(sys.prefix, 'cosyvoice-src', 'third_party', 'Matcha-TTS'))
+          PTH
+          # Sanity: the import chain must resolve inside the env.
+          python -c "import torch, torchaudio, onnxruntime; print('native ok')"
+          python -c "import cosyvoice.cli.cosyvoice as m; print('cosyvoice import ok')" || echo "WARN: cosyvoice import needs tuning"
+
+      - name: Pack runtime (conda-pack)
+        run: |
+          set -e
+          conda pack -n cosy -o cosyvoice-runtime-win64.tar.gz --compress-level 6
+          ls -lh cosyvoice-runtime-win64.tar.gz
+
+      - name: Publish runtime to release repo
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -e
+          gh release create "$VERSION" --repo ivanzwb/release \
+            --title "media-agent $VERSION" \
+            --notes "media-agent $VERSION" 2>/dev/null || true
+          gh release upload "$VERSION" cosyvoice-runtime-win64.tar.gz \
+            --repo ivanzwb/release --clobber

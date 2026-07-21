@@ -48,6 +48,7 @@ class Config:
     tts_rate: str | None = None    # 语速, e.g. "+0%" / "-10%" / "+20%" (ffmpeg atempo)
     tts_pitch: str | None = None   # 音调, e.g. "+0Hz" / "+15Hz" / "-10Hz" (ffmpeg pitch)
     tts_instruct: str | None = None  # CosyVoice 语气/情感指令, e.g. "用亲切自然的语气"
+    cosyvoice_runtime_dir: str | None = None  # prebuilt CosyVoice runtime (conda-pack env) dir
     max_age_days: int | None = None
     max_per_source: int | None = None
     max_drafts: int | None = None   # 每次运行最多改写/转写的文章篇数 (None → 默认 10)
@@ -136,6 +137,7 @@ class Config:
             tts_rate=os.environ.get("MEDIA_AGENT_TTS_RATE"),
             tts_pitch=os.environ.get("MEDIA_AGENT_TTS_PITCH"),
             tts_instruct=os.environ.get("MEDIA_AGENT_TTS_INSTRUCT"),
+            cosyvoice_runtime_dir=os.environ.get("MEDIA_AGENT_COSYVOICE_RUNTIME_DIR"),
             max_age_days=_int_env("MEDIA_AGENT_MAX_AGE_DAYS"),
             max_per_source=_int_env("MEDIA_AGENT_MAX_PER_SOURCE"),
             max_drafts=_int_env("MEDIA_AGENT_MAX_DRAFTS"),
@@ -186,6 +188,7 @@ class Config:
             "tts_pitch": "tts_pitch",
             "tts_instruct": "tts_instruct",
             "tts_voice": "tts_voice",
+            "cosyvoice_runtime_dir": "cosyvoice_runtime_dir",
             "video_fit": "video_fit",
             "video_brand_name": "video_brand_name",
             "avatar_image": "avatar_image",

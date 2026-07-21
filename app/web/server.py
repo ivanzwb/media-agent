@@ -1633,7 +1633,8 @@ def create_app(config: Config | None = None,
         if provider == "cosyvoice":
             sp = voice_sample_path(config, voice)
             return get_tts_provider("cosyvoice", voice=str(sp) if sp else None,
-                                    model=rc.tts_model, instruct=rc.tts_instruct)
+                                    model=rc.tts_model, instruct=rc.tts_instruct,
+                                    cosyvoice_runtime_dir=rc.cosyvoice_runtime_dir)
         return get_tts_provider(
             provider, base_url=rc.tts_api_base,
             api_key=rc.tts_api_key, model=rc.tts_model, voice=voice,
@@ -3427,7 +3428,7 @@ def create_app(config: Config | None = None,
             caps.refresh()
         rc = Config.load(store=get_store())
         return {
-            "cosyvoice": caps.cosyvoice_capability(),
+            "cosyvoice": caps.cosyvoice_capability(rc.cosyvoice_runtime_dir),
             "sadtalker": caps.sadtalker_capability(rc),
         }
 
@@ -3458,6 +3459,7 @@ def create_app(config: Config | None = None,
             "tts_rate": _get("tts_rate") or (config.tts_rate or ""),
             "tts_pitch": _get("tts_pitch") or (config.tts_pitch or ""),
             "tts_instruct": _get("tts_instruct") or (config.tts_instruct or ""),
+            "cosyvoice_runtime_dir": _get("cosyvoice_runtime_dir") or (config.cosyvoice_runtime_dir or ""),
             "voices": list_voices(config),
             "data_dir": str(config.data_dir),
             "max_age_days": _get("max_age_days") or (str(config.max_age_days) if config.max_age_days else ""),
@@ -3513,6 +3515,7 @@ def create_app(config: Config | None = None,
                       tts_rate: str = Form(""),
                       tts_pitch: str = Form(""),
                       tts_instruct: str = Form(""),
+                      cosyvoice_runtime_dir: str = Form(""),
                       max_age_days: str = Form(""),
                       max_per_source: str = Form(""),
                       max_drafts: str = Form(""),
@@ -3557,6 +3560,7 @@ def create_app(config: Config | None = None,
             "tts_rate": tts_rate.strip(),
             "tts_pitch": tts_pitch.strip(),
             "tts_instruct": tts_instruct.strip(),
+            "cosyvoice_runtime_dir": cosyvoice_runtime_dir.strip(),
             "video_fit": video_fit.strip(),
             "video_brand_name": video_brand_name.strip(),
             "avatar_image": avatar_image.strip(),

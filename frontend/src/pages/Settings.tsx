@@ -67,6 +67,7 @@ export default function Settings() {
         rewrite_priority: data.rewrite_priority,
         tts_provider: data.tts_provider || "kitten", tts_api_base: data.tts_api_base, tts_model: data.tts_model, tts_voice: data.tts_voice,
         tts_rate: data.tts_rate, tts_pitch: data.tts_pitch, tts_instruct: data.tts_instruct,
+        cosyvoice_runtime_dir: data.cosyvoice_runtime_dir,
         max_age_days: data.max_age_days, max_per_source: data.max_per_source, max_drafts: data.max_drafts, download_workers: data.download_workers,
         video_fit: data.video_fit, video_brand_name: data.video_brand_name,
         avatar_enabled: data.avatar_enabled, avatar_image: data.avatar_image,
@@ -160,6 +161,13 @@ export default function Settings() {
                 <Form.Item name="tts_instruct" label="语气 / 情感（CosyVoice）"
                   tooltip="仅 CosyVoice：用自然语言描述语气/情感，如「用亲切自然的语气」「热情激昂地讲解」">
                   <Input placeholder="例如：用亲切自然的语气讲解" />
+                </Form.Item>
+                <Form.Item name="cosyvoice_runtime_dir" label="CosyVoice 运行时目录"
+                  tooltip="预编译 CosyVoice 运行时（setup-optional 会下载解压到程序目录 _cosyvoice-runtime，自动识别，无需填写）；仅当放在别处时才需指定"
+                  extra={caps && !caps.cosyvoice.available
+                    ? `CosyVoice 在本机不可用：${caps.cosyvoice.reason}（运行 setup-optional 下载预编译运行时即可，无需编译）`
+                    : (caps ? `CosyVoice 状态：${caps.cosyvoice.reason}` : undefined)}>
+                  <Input placeholder="留空自动识别（程序目录下 _cosyvoice-runtime）" />
                 </Form.Item>
                 <Form.Item name="tts_api_key" label={<>API Key {data.tts_api_key.set && <Tag color="green">已设置 {data.tts_api_key.masked}</Tag>}</>}>
                   <Input.Password placeholder={data.tts_api_key.set ? "留空则保持不变" : "输入 API Key"} />

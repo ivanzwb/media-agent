@@ -41,28 +41,50 @@ print(json.dumps({"ok": True, "reason": "可用"}, ensure_ascii=False))
 """
 
 
-@functools.lru_cache(maxsize=1)
-def cosyvoice_capability() -> dict:
-    """Best-effort: can CosyVoice TTS run in this environment?
+def _probe_with(py_exe: str) -> dict:
+    """Run the CosyVoice import probe with a specific python executable."""
+    proc = subprocess.run([py_exe, "-c", _COSY_PROBE],
+                          capture_output=True, text=True, timeout=180)
+    lines = (proc.stdout or "").strip().splitlines()
+    if lines:
+        data = json.loads(lines[-1])
+        return {"available": bool(data.get("ok")),
+                "reason": data.get("reason") or "",
+                "detail": data.get("detail", "")}
+    return {"available": False, "reason": "探测 CosyVoice 依赖失败",
+            "detail": (proc.stderr or "")[:200]}
 
-    Returns ``{"available": bool, "reason": str, "detail": str}``. Cached for
-    the process lifetime (deps don't change without a restart); call
+
+@functools.lru_cache(maxsize=8)
+def cosyvoice_capability(runtime_dir: str | None = None) -> dict:
+    """Best-effort: can CosyVoice TTS run on this machine?
+
+    Prefers the prebuilt runtime (conda-pack env shipped with the release):
+    probes inside that env's python. Otherwise falls back to probing the
+    current interpreter's environment. Cached per runtime_dir; call
     :func:`refresh` to re-probe.
     """
+    # 1) Prebuilt runtime (the "download & use" path) — probe inside it.
+    try:
+        from app.tts.providers.cosyvoice_runtime import (
+            runtime_available, runtime_python)
+        if runtime_available(runtime_dir):
+            py = runtime_python(runtime_dir)
+            res = _probe_with(str(py))
+            if res.get("available"):
+                return {"available": True, "reason": "可用（预编译运行时）",
+                        "detail": ""}
+            return {"available": False,
+                    "reason": f"预编译运行时不完整：{res.get('reason')}",
+                    "detail": res.get("detail", "")}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("cosyvoice runtime probe failed: %s", e)
+
+    # 2) Fall back to the current environment (dev / manual install).
     try:
         if getattr(sys, "frozen", False):
             return _cosyvoice_capability_frozen()
-        proc = subprocess.run(
-            [sys.executable, "-c", _COSY_PROBE],
-            capture_output=True, text=True, timeout=180)
-        lines = (proc.stdout or "").strip().splitlines()
-        if lines:
-            data = json.loads(lines[-1])
-            return {"available": bool(data.get("ok")),
-                    "reason": data.get("reason") or "",
-                    "detail": data.get("detail", "")}
-        return {"available": False, "reason": "探测 CosyVoice 依赖失败",
-                "detail": (proc.stderr or "")[:200]}
+        return _probe_with(sys.executable)
     except Exception as e:  # noqa: BLE001 - never let a probe crash the caller
         logger.warning("cosyvoice capability probe failed: %s", e)
         return {"available": False, "reason": f"探测失败：{e}", "detail": ""}

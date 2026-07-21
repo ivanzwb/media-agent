@@ -58,6 +58,7 @@ python -m PyInstaller --onedir --noconfirm ^
     --add-data "app/licensing/public_key.b64;app/licensing" ^
     --add-data "packaging/python-embed-win64.zip;packaging" ^
     --add-data "packaging/get-pip.py;packaging" ^
+    --add-data "packaging/cosyvoice_worker.py;packaging" ^
     --exclude-module "torch" ^
     --exclude-module "zstandard" ^
     --exclude-module "torchvision" ^

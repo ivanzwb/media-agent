@@ -92,114 +92,55 @@ if %errorlevel% equ 0 (
 echo.
 goto :cosyvoice
 
-:: ===== 3. CosyVoice (embedded Python sidecar) =======================
+:: ===== 3. CosyVoice (prebuilt runtime — NO compilation) =============
 :cosyvoice
-echo [3/4] CosyVoice (local voice cloning)...
+echo [3/4] CosyVoice (local voice cloning — prebuilt runtime)...
 
-:: --- Skip if already set up -----------------------------------------
-if exist "%COSYVOICE_DIR%python.exe" (
-    echo   [OK] Embedded Python already set up
+set "RUNTIME_DIR=%BUNDLE_DIR%_cosyvoice-runtime"
+set "RUNTIME_PY=%RUNTIME_DIR%\python.exe"
+
+:: --- Skip if the prebuilt runtime is already extracted --------------
+if exist "%RUNTIME_PY%" (
+    echo   [OK] CosyVoice runtime already installed
     goto :cosyvoice_model
 )
 
-:: --- Find the embeddable Python zip bundled in _internal\packaging\ --
-:: PyInstaller 6.x puts --add-data files in root, not _internal/.
-:: Check both locations, then fall back to downloading on-the-fly.
-set "EMBED_ZIP="
-set "GET_PIP="
-
-if exist "%INTERNAL_DIR%packaging\python-embed-win64.zip" (
-    set "EMBED_ZIP=%INTERNAL_DIR%packaging\python-embed-win64.zip"
-    set "GET_PIP=%INTERNAL_DIR%packaging\get-pip.py"
-) else if exist "%BUNDLE_DIR%packaging\python-embed-win64.zip" (
-    set "EMBED_ZIP=%BUNDLE_DIR%packaging\python-embed-win64.zip"
-    set "GET_PIP=%BUNDLE_DIR%packaging\get-pip.py"
-)
-
-:: --- Download on-the-fly if not bundled --------------------------------
-if not defined EMBED_ZIP (
-    echo   Embeddable Python not bundled — downloading now...
-    if not exist "%BUNDLE_DIR%packaging" mkdir "%BUNDLE_DIR%packaging"
-    powershell -Command "Invoke-WebRequest -Uri 'https://mirrors.tuna.tsinghua.edu.cn/python/3.11.9/python-3.11.9-embed-amd64.zip' -OutFile '%BUNDLE_DIR%packaging\python-embed-win64.zip'"
+:: --- Download the prebuilt, self-contained runtime -------------------
+:: This is a conda-pack'd environment with torch/torchaudio/onnxruntime +
+:: pynini/openfst ALL prebuilt — nothing is compiled on this machine.
+set "RUNTIME_TGZ=%BUNDLE_DIR%cosyvoice-runtime-win64.tar.gz"
+if not exist "%RUNTIME_TGZ%" (
+    echo   Downloading prebuilt CosyVoice runtime ^(~1GB, first time only^)...
+    powershell -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri 'https://github.com/ivanzwb/release/releases/latest/download/cosyvoice-runtime-win64.tar.gz' -OutFile '%RUNTIME_TGZ%'"
     if %errorlevel% neq 0 (
-        echo   [FAIL] Failed to download embeddable Python
+        echo   [FAIL] Failed to download CosyVoice runtime
         goto :cosyvoice_end
     )
-    powershell -Command "Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile '%BUNDLE_DIR%packaging\get-pip.py'"
-    if %errorlevel% neq 0 (
-        echo   [FAIL] Failed to download get-pip.py
-        goto :cosyvoice_end
-    )
-    set "EMBED_ZIP=%BUNDLE_DIR%packaging\python-embed-win64.zip"
-    set "GET_PIP=%BUNDLE_DIR%packaging\get-pip.py"
-    echo   [OK] Downloaded
 )
 
-if not exist "%EMBED_ZIP%" (
-    echo   [FAIL] Embeddable Python zip not found at:
-    echo          %EMBED_ZIP%
-    echo   CosyVoice setup cannot continue.
-    echo.
+:: --- Extract (tar ships with Windows 10+) ---------------------------
+echo   Extracting runtime...
+if not exist "%RUNTIME_DIR%" mkdir "%RUNTIME_DIR%"
+tar -xzf "%RUNTIME_TGZ%" -C "%RUNTIME_DIR%"
+if not exist "%RUNTIME_PY%" (
+    echo   [FAIL] Failed to extract runtime
     goto :cosyvoice_end
 )
 
-:: --- Extract embeddable Python --------------------------------------
-echo   Extracting embedded Python...
-if not exist "%COSYVOICE_DIR%" mkdir "%COSYVOICE_DIR%"
-powershell -Command "Expand-Archive -Path '%EMBED_ZIP%' -DestinationPath '%COSYVOICE_DIR%' -Force"
-if not exist "%COSYVOICE_DIR%python.exe" (
-    echo   [FAIL] Failed to extract embeddable Python
-    goto :cosyvoice_end
+:: --- Finalize conda-pack relocation (rewrites absolute paths) --------
+echo   Finalizing runtime...
+if exist "%RUNTIME_DIR%\Scripts\conda-unpack.exe" (
+    "%RUNTIME_DIR%\Scripts\conda-unpack.exe"
+) else (
+    "%RUNTIME_PY%" -m conda_pack.scripts.conda_unpack 2>nul
 )
-echo   [OK] Python extracted
-
-:: --- Remove python*._pth to enable site-packages + pip ---------------
-:: The embeddable zip ships a version-named file (e.g. python311._pth), NOT
-:: python._pth — a wildcard is required, otherwise site-packages stays
-:: disabled and `python -m pip` fails with "No module named pip".
-if exist "%COSYVOICE_DIR%python*._pth" (
-    del "%COSYVOICE_DIR%python*._pth"
-    echo   [OK] python*._pth removed (enables pip)
-)
-
-:: --- Install pip ----------------------------------------------------
-echo   Installing pip...
-"%COSYVOICE_DIR%python.exe" "%GET_PIP%" --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple
-if %errorlevel% neq 0 (
-    echo   [FAIL] pip install failed
-    goto :cosyvoice_end
-)
-echo   [OK] pip installed
-
-:: --- Install setuptools + wheel (needed for building packages) --------
-echo   Installing setuptools + wheel...
-"%COSYVOICE_DIR%python.exe" -m pip install setuptools wheel --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple
-if %errorlevel% neq 0 (
-    echo   [FAIL] setuptools install failed
-    goto :cosyvoice_end
-)
-echo   [OK] setuptools + wheel installed
-
-:: --- Install PyTorch (CPU) + CosyVoice ------------------------------
-echo   Installing PyTorch (CPU) + CosyVoice (this may take a few minutes)...
-"%COSYVOICE_DIR%python.exe" -m pip install torch torchvision torchaudio ^
-    --index-url https://mirrors.aliyun.com/pytorch-wheels/cpu/ --quiet
-if %errorlevel% neq 0 (
-    echo   [FAIL] PyTorch install failed
-    goto :cosyvoice_end
-)
-echo   [OK] PyTorch installed
-
-"%COSYVOICE_DIR%python.exe" -m pip install cosyvoice --quiet --no-build-isolation -i https://pypi.tuna.tsinghua.edu.cn/simple
-if %errorlevel% neq 0 (
-    echo   [FAIL] CosyVoice install failed
-    goto :cosyvoice_end
-)
-echo   [OK] CosyVoice installed
+del "%RUNTIME_TGZ%" 2>nul
+echo   [OK] CosyVoice runtime ready: %RUNTIME_DIR%
 
 :: --- Download model -------------------------------------------------
 :cosyvoice_model
 echo   Checking CosyVoice model...
+set "RUNTIME_PY=%BUNDLE_DIR%_cosyvoice-runtime\python.exe"
 set "MODEL_DIR=%BUNDLE_DIR%pretrained_models\CosyVoice2-0.5B"
 if exist "%MODEL_DIR%\model.pt" (
     echo   [OK] Model already downloaded
@@ -210,10 +151,7 @@ echo   Downloading CosyVoice2-0.5B model (~1.5 GB, first time only)...
 echo   This may take a while depending on your internet speed...
 if not exist "%MODEL_DIR%" mkdir "%MODEL_DIR%"
 
-:: Use huggingface_hub.snapshot_download to download the model.
-:: Note: `huggingface_hub[cli]` extra no longer exists in >=1.23.0,
-:: and `-m huggingface_hub.cli download` fails because cli is a package.
-"%COSYVOICE_DIR%python.exe" -m pip install huggingface_hub --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple
+:: huggingface_hub ships inside the prebuilt runtime, so no install needed.
 set "HF_ENDPOINT=https://hf-mirror.com"
 :: Disable the Xet backend — its CAS server (cas-server.xethub.hf.co) is not
 :: served by the mirror and returns 401, breaking the download. Falling back
@@ -227,7 +165,7 @@ set "HF_HUB_DOWNLOAD_TIMEOUT=60"
 set _dl_tries=0
 :cosyvoice_dl
 set /a _dl_tries+=1
-"%COSYVOICE_DIR%python.exe" -c ^
+"%RUNTIME_PY%" -c ^
 "from huggingface_hub import snapshot_download; snapshot_download('FunAudioLLM/CosyVoice2-0.5B', local_dir=r'%MODEL_DIR%', max_workers=2)"
 if %errorlevel% equ 0 goto :cosyvoice_dl_ok
 if %_dl_tries% lss 8 (
@@ -279,7 +217,7 @@ if %errorlevel% neq 0 (
     echo   [SKIP] git not found — install Git, then re-run.
     goto :finish
 )
-set "SPY=%COSYVOICE_DIR%python.exe"
+set "SPY=%BUNDLE_DIR%_cosyvoice-runtime\python.exe"
 if not exist "%SPY%" set "SPY=python"
 echo   Cloning SadTalker...
 if not exist "%SADTALKER_DIR%\.git" git clone --depth 1 https://github.com/OpenTalker/SadTalker.git "%SADTALKER_DIR%"

@@ -23,6 +23,7 @@ pyinstaller --onedir \
     --add-data "frontend/dist:frontend/dist" \
     --add-data "app/web/static:app/web/static" \
     --add-data "app/licensing/public_key.b64:app/licensing" \
+    --add-data "packaging/cosyvoice_worker.py:packaging" \
     --exclude-module "torch" \
     --exclude-module "zstandard" \
     --exclude-module "torchvision" \

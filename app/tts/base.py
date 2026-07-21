@@ -105,7 +105,8 @@ def get_tts_provider(name: str | None, base_url: str | None = None,
                      api_key: str | None = None, model: str | None = None,
                      voice: str | None = None, rate: str | None = None,
                      pitch: str | None = None,
-                     instruct: str | None = None) -> TTSProvider:
+                     instruct: str | None = None,
+                     cosyvoice_runtime_dir: str | None = None) -> TTSProvider:
     # Default: in-process Kitten (edge-tts) — no external service needed.
     if name in (None, "", "kitten", "local"):
         from app.tts.providers.local_kitten import LocalKittenTTS
@@ -120,6 +121,16 @@ def get_tts_provider(name: str | None, base_url: str | None = None,
     elif name == "cosyvoice":
         # voice = speaker reference wav path (resolved by caller);
         # model = CosyVoice2 model name/path (HuggingFace ID or local dir).
+        # Prefer the prebuilt runtime (conda-pack env shipped with the release):
+        # runs CosyVoice in a separate process with all native deps prebuilt, so
+        # the user never compiles anything and media-agent's own env stays clean.
+        from app.tts.providers.cosyvoice_runtime import (
+            CosyVoiceRuntimeTTS, runtime_available)
+        if runtime_available(cosyvoice_runtime_dir):
+            inner = CosyVoiceRuntimeTTS(
+                runtime_dir=cosyvoice_runtime_dir, speaker_wav=voice,
+                model=model, instruct=instruct)
+            return AdjustableTTS(inner, rate=rate, pitch=pitch) if (rate or pitch) else inner
         try:
             from app.tts.providers.cosyvoice import CosyVoiceTTS
         except ImportError as exc:
