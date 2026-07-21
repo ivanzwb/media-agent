@@ -3418,6 +3418,19 @@ def create_app(config: Config | None = None,
     def settings_page():
         return _serve_spa()
 
+    @app.get("/api/capabilities")
+    def api_capabilities(refresh: bool = False):
+        """Report whether env-heavy optional features work on this machine, so
+        the UI can gray out options the machine can't actually use."""
+        from app import capabilities as caps
+        if refresh:
+            caps.refresh()
+        rc = Config.load(store=get_store())
+        return {
+            "cosyvoice": caps.cosyvoice_capability(),
+            "sadtalker": caps.sadtalker_capability(rc),
+        }
+
     @app.get("/api/settings")
     def api_settings():
         store = get_store()

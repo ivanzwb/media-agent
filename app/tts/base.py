@@ -128,6 +128,14 @@ def get_tts_provider(name: str | None, base_url: str | None = None,
                 f"当前环境缺少：{exc.name or exc}。请运行 setup-optional 安装这些依赖，"
                 "或在「设置 → 语音」里把 TTS Provider 改为 Kitten（本地 edge-tts，"
                 "无需额外依赖）或 OpenAI 兼容（云端 API）。") from exc
+        except OSError as exc:
+            # Native DLL init failure (WinError 1114) while importing torch etc.
+            raise RuntimeError(
+                "CosyVoice 的本地依赖加载失败（原生 DLL 初始化失败）："
+                f"{exc}。通常是缺少 Microsoft Visual C++ 2015-2022 "
+                "Redistributable (x64)，或 torch/onnxruntime 依赖损坏；"
+                "可安装该运行库后重启，或在「设置 → 语音」改用 Kitten"
+                "（本地 edge-tts，无需额外依赖）。") from exc
         inner = CosyVoiceTTS(speaker_wav=voice, model=model, instruct=instruct)
     else:
         raise ValueError(f"Unknown TTS provider: {name}")
