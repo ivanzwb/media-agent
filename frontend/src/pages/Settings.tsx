@@ -10,6 +10,8 @@ import { api, getJson, postForm } from "../api/client";
 const { Title, Text, Paragraph } = Typography;
 
 interface MaskField { set: boolean; masked: string; }
+interface Capability { available: boolean; reason: string; detail?: string; }
+interface Capabilities { cosyvoice: Capability; sadtalker: Capability; }
 interface StylePub { id: string; name: string; description: string; prompt: string; instruction: string; is_builtin: boolean; is_default: boolean; }
 interface Voice { id: string; name?: string; }
 interface SettingsData {
@@ -26,6 +28,7 @@ export default function Settings() {
   const [form] = Form.useForm();
   const [saving, setSaving] = useState(false);
   const { data } = useQuery({ queryKey: ["settings"], queryFn: () => getJson<SettingsData>("/api/settings") });
+  const { data: caps } = useQuery({ queryKey: ["capabilities"], queryFn: () => getJson<Capabilities>("/api/capabilities"), staleTime: 60_000 });
 
   if (!data) return null;
 
@@ -127,10 +130,16 @@ export default function Settings() {
           {
             key: "voice", label: "语音", forceRender: true, children: (
               <Card title="TTS 与声音库" size="small">
-                <Form.Item name="tts_provider" label="Provider">
+                <Form.Item name="tts_provider" label="Provider"
+                  extra={caps && !caps.cosyvoice.available
+                    ? `CosyVoice 在本机不可用：${caps.cosyvoice.reason}` : undefined}>
                   <Select options={[
                     { value: "kitten", label: "Kitten（本地 edge-tts，默认）" },
-                    { value: "cosyvoice", label: "CosyVoice（本地 GPU 声音复刻）" },
+                    { value: "cosyvoice",
+                      label: caps && !caps.cosyvoice.available
+                        ? "CosyVoice（本地 GPU 声音复刻）— 本机不可用"
+                        : "CosyVoice（本地 GPU 声音复刻）",
+                      disabled: !!caps && !caps.cosyvoice.available },
                     { value: "openai_compatible", label: "OpenAI 兼容（云端 API）" },
                     { value: "mock", label: "Mock（测试）" },
                   ]} />
@@ -196,9 +205,15 @@ export default function Settings() {
                     { value: "full", label: "全屏主播" },
                   ]} />
                 </Form.Item>
-                <Form.Item name="avatar_provider" label="生成方式">
+                <Form.Item name="avatar_provider" label="生成方式"
+                  extra={caps && !caps.sadtalker.available
+                    ? `SadTalker 口型同步在本机不可用：${caps.sadtalker.reason}（可先用静态头像）` : undefined}>
                   <Select style={{ width: 280 }} options={[
-                    { value: "sadtalker", label: "SadTalker 口型同步（本地 GPU）" },
+                    { value: "sadtalker",
+                      label: caps && !caps.sadtalker.available
+                        ? "SadTalker 口型同步（本地 GPU）— 本机不可用"
+                        : "SadTalker 口型同步（本地 GPU）",
+                      disabled: !!caps && !caps.sadtalker.available },
                     { value: "still", label: "静态头像（无口型）" },
                   ]} />
                 </Form.Item>

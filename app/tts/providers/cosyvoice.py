@@ -235,6 +235,22 @@ class CosyVoiceTTS:
                     load_trt=False,
                     fp16=fp16,
                 )
+            except OSError as e:
+                # OSError [WinError 1114] → a native dependency (torch c10.dll /
+                # onnxruntime) failed to initialize. Almost always a missing
+                # Microsoft Visual C++ Redistributable, or a broken/mismatched
+                # CosyVoice env (torch/torchaudio/onnxruntime/numpy).
+                raise RuntimeError(
+                    "CosyVoice 的本地依赖加载失败（原生 DLL 初始化失败）：\n"
+                    f"  {e}\n\n"
+                    "常见原因与解决办法：\n"
+                    "1) 缺少 Microsoft Visual C++ 运行库——安装「Microsoft Visual "
+                    "C++ 2015-2022 Redistributable (x64)」后重启应用；\n"
+                    "2) CosyVoice 依赖不完整或版本冲突（torch、torchaudio、"
+                    "onnxruntime、numpy）——重新运行 setup-optional 重装；\n"
+                    "3) 想先跑通流程：在「设置 → 语音」把 TTS Provider 改为 "
+                    "Kitten（本地 edge-tts，无需额外依赖）。"
+                ) from e
             except ImportError as e:
                 raise RuntimeError(
                     "未安装 CosyVoice：请 `pip install cosyvoice`，"
