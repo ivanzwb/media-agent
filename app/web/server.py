@@ -1094,11 +1094,14 @@ def create_app(config: Config | None = None,
             # Sync DB
             _parsed_titles = _parsed.metadata.get("title_candidates", []) or []
             _parsed_body = _parsed.content
-            preserved_cn = (
-                original_body
-                if not _parsed.metadata.get("title_cn")
-                else _parsed.metadata.get("title_cn")
-            )
+            # Keep the article's Chinese title: use the rewritten front-matter's
+            # title_cn if present, else the draft's EXISTING title_cn. Never fall
+            # back to the body (that dumped the whole article into the title).
+            try:
+                existing_cn = (row["title_cn"] if row else "") or ""
+            except (KeyError, IndexError, TypeError):
+                existing_cn = ""
+            preserved_cn = _parsed.metadata.get("title_cn") or existing_cn
             store.update_draft_body(
                 draft_id,
                 title_candidates=_parsed_titles,
