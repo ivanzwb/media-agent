@@ -78,6 +78,15 @@ interface DraftData {
   wechat_themes: { id: string; name: string }[];
 }
 
+interface WeChatPublishStatus {
+  running: boolean;
+  done: boolean;
+  ok: boolean;
+  mode: "draft" | "publish" | null;
+  error: string | null;
+  result?: Record<string, unknown> | null;
+}
+
 export default function DraftEdit() {
   const { id } = useParams();
   const draftId = Number(id);
@@ -170,6 +179,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   const [locLog, setLocLog] = useState<string[]>([]);
   const [locClosed, setLocClosed] = useState(false);
   const [tplApplying, setTplApplying] = useState(false);
+  const [wechatPublishing, setWechatPublishing] = useState<"draft" | "publish" | null>(null);
   const [coverCollapsed, setCoverCollapsed] = useLocalState<boolean>("draftedit-coverCollapsed", false);
   const TOUTIAO_URL = "https://mp.toutiao.com/profile_v4/graphic/publish";
 
@@ -177,11 +187,15 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   const rewritePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const locPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tplPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wxPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wxSubmittingRef = useRef(false);
   useEffect(() => {
     return () => {
       if (rewritePollRef.current) clearInterval(rewritePollRef.current);
       if (locPollRef.current) clearInterval(locPollRef.current);
       if (tplPollRef.current) clearInterval(tplPollRef.current);
+      if (wxPollRef.current) clearTimeout(wxPollRef.current);
+      wxSubmittingRef.current = false;
     };
   }, []);
 
@@ -219,6 +233,20 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
         pollLocalize(false);
       })
       .catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
+  }, [data.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-attach to a backend publish workflow after a tab switch/page reload.
+  useEffect(() => {
+    let cancelled = false;
+    getJson<WeChatPublishStatus>(
+      `/api/draft/${data.id}/publish/wechat/status`)
+      .then((s) => {
+        if (!cancelled && s.running && (s.mode === "draft" || s.mode === "publish")) {
+          startWeChatPolling(s.mode);
+        }
+      })
+      .catch(() => { /* no prior workflow is a normal state */ });
     return () => { cancelled = true; };
   }, [data.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -380,12 +408,77 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     else message.error({ content: r.error || "失败", key: "cover" });
   }
 
+  function finishWeChatPolling() {
+    if (wxPollRef.current) clearTimeout(wxPollRef.current);
+    wxPollRef.current = null;
+    wxSubmittingRef.current = false;
+    setWechatPublishing(null);
+  }
+
+  function startWeChatPolling(mode: "draft" | "publish") {
+    if (wxPollRef.current) clearTimeout(wxPollRef.current);
+    wxSubmittingRef.current = true;
+    setWechatPublishing(mode);
+    message.loading({
+      content: mode === "draft" ? "正在上传并创建微信草稿…" : "正在上传并等待微信确认发布…",
+      key: "wx", duration: 0,
+    });
+
+    const poll = async () => {
+      try {
+        const s = await getJson<WeChatPublishStatus>(
+          `/api/draft/${data.id}/publish/wechat/status`);
+        if (s.done) {
+          finishWeChatPolling();
+          if (s.ok) {
+            message.success({
+              content: mode === "draft" ? "已推送到草稿箱" : "微信已确认发布成功",
+              key: "wx",
+            });
+            qc.invalidateQueries({ queryKey: ["draft", data.id] });
+          } else {
+            message.error({
+              content: s.error || (mode === "draft" ? "推送草稿箱失败" : "微信发布失败"),
+              key: "wx", duration: 8,
+            });
+          }
+          return;
+        }
+        wxPollRef.current = setTimeout(poll, 1200);
+      } catch (e: any) {
+        // The backend workflow may still be running. Keep both actions locked
+        // and retry status rather than risking a duplicate submission.
+        message.warning({
+          content: e?.response?.data?.error || e?.message || "暂时无法查询微信发布状态，正在重试",
+          key: "wx-status", duration: 4,
+        });
+        wxPollRef.current = setTimeout(poll, 2000);
+      }
+    };
+    void poll();
+  }
+
   async function publishWeChat(mode: "draft" | "publish") {
-    await onSave();
-    message.loading({ content: "推送公众号中…", key: "wx" });
-    const r = await postForm<{ ok: boolean; error?: string }>(`/drafts/${data.id}/publish/wechat`, { mode, kind: "article", theme: "default" });
-    if (r.ok) message.success({ content: mode === "draft" ? "已推送到草稿箱" : "已发布", key: "wx" });
-    else message.error({ content: r.error || "推送失败", key: "wx" });
+    // A ref closes the same-render double-click window before React state
+    // updates; the backend independently coalesces concurrent requests.
+    if (wxSubmittingRef.current) return;
+    wxSubmittingRef.current = true;
+    setWechatPublishing(mode);
+    message.loading({ content: "正在保存并准备微信推送…", key: "wx", duration: 0 });
+    try {
+      await onSave();
+      const r = await postForm<{ ok: boolean; running: boolean; mode: "draft" | "publish"; error?: string }>(
+        `/drafts/${data.id}/publish/wechat`,
+        { mode, kind: "article", theme: "default" });
+      if (!r.ok) throw new Error(r.error || "微信推送启动失败");
+      startWeChatPolling(r.mode || mode);
+    } catch (e: any) {
+      finishWeChatPolling();
+      message.error({
+        content: e?.response?.data?.error || e?.message || "微信推送请求失败",
+        key: "wx", duration: 8,
+      });
+    }
   }
 
   // theme selector removed on trunk — the component system replaces it.
@@ -417,11 +510,11 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   }
 
   // Per-platform dynamic action buttons (mirrors trunk _platformActions).
-  function platformActionsFor(pid: string): { label: string; primary?: boolean; title?: string; onClick: () => void }[] {
+  function platformActionsFor(pid: string): { label: string; primary?: boolean; title?: string; mode?: "draft" | "publish"; onClick: () => void }[] {
     switch (pid) {
       case "wechat": return [
-        { label: "推送草稿箱", primary: true, title: "先保存草稿，再推送图文到公众号草稿箱", onClick: () => publishWeChat("draft") },
-        { label: "直接发布", title: "创建草稿并直接发布（不可撤回）", onClick: () => publishWeChat("publish") },
+        { label: "推送草稿箱", primary: true, mode: "draft", title: "先保存草稿，再推送图文到公众号草稿箱", onClick: () => publishWeChat("draft") },
+        { label: "直接发布", mode: "publish", title: "创建草稿并直接发布（不可撤回）", onClick: () => publishWeChat("publish") },
       ];
       case "toutiao": return [
         { label: "复制并打开头条", primary: true, title: "复制美化 HTML 并打开头条图文发布页", onClick: () => copyStyledHtml("toutiao", TOUTIAO_URL) },
@@ -664,7 +757,10 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
                 options={data.platforms.map((p: any) => ({ value: p.id, label: p.label }))} />
               {platformActions.map((a, i) => (
                 <Button key={i} size="small" className="pro-feature"
-                  type={a.primary ? "primary" : "default"} title={a.title} onClick={a.onClick}>{a.label}</Button>
+                  type={a.primary ? "primary" : "default"} title={a.title}
+                  disabled={platform === "wechat" && wechatPublishing !== null}
+                  loading={platform === "wechat" && wechatPublishing === a.mode}
+                  onClick={a.onClick}>{a.label}</Button>
               ))}
               {platform && <Button size="small" onClick={onCopyHtml} title="复制当前平台美化 HTML 到剪贴板">复制HTML</Button>}
             </Space>

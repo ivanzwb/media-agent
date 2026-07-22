@@ -166,6 +166,22 @@ def test_safe_extract_rejects_path_traversal(tmp_path: Path):
         raise AssertionError("path traversal archive was accepted")
 
 
+def test_safe_extract_rejects_escaping_symlink(tmp_path: Path):
+    archive = tmp_path / "runtime-link.tar.gz"
+    with tarfile.open(archive, "w:gz") as bundle:
+        info = tarfile.TarInfo("bin/python")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "../../outside"
+        bundle.addfile(info)
+
+    try:
+        st._safe_extract(archive, tmp_path / "runtime")
+    except RuntimeError as exc:
+        assert "不安全链接" in str(exc)
+    else:
+        raise AssertionError("escaping symlink was accepted")
+
+
 def test_local_archive_installs_to_release_managed_layout(tmp_path: Path):
     payload = tmp_path / "payload"
     (payload / "sadtalker-src").mkdir(parents=True)
@@ -297,3 +313,36 @@ def test_run_setup_stops_before_download_without_nvidia(tmp_path: Path,
     assert result["ok"] is False
     assert "NVIDIA" in result["message"]
     assert called == []
+
+
+def test_macos_runtime_targets_cover_arm_and_intel():
+    arm = st.runtime_target("Darwin", "arm64")
+    intel = st.runtime_target("Darwin", "x86_64")
+
+    assert arm and arm.key == "macos-arm64-cpu"
+    assert intel and intel.key == "macos-x64-cpu"
+    assert arm.python_relpath == Path("bin/python")
+    assert intel.requires_gpu is False
+    assert st._runtime_asset(arm) == (
+        "sadtalker-runtime-macos-arm64-cpu.tar.gz")
+    assert st._runtime_asset(intel) == (
+        "sadtalker-runtime-macos-x64-cpu.tar.gz")
+
+
+def test_macos_cpu_status_does_not_probe_nvidia(tmp_path: Path, monkeypatch):
+    target = st.runtime_target("Darwin", "arm64")
+    assert target is not None
+    monkeypatch.setattr(st, "runtime_target", lambda *_a, **_k: target)
+    monkeypatch.setattr(
+        st, "gpu_status",
+        lambda: (_ for _ in ()).throw(AssertionError("unexpected GPU probe")))
+
+    status = st.setup_status(tmp_path)
+
+    assert status["supported"] is True
+    assert status["installable"] is True
+    assert status["accelerator"] == "CPU"
+    assert status["gpu_ok"] is False
+    assert "CPU" in status["performance_warning"]
+    assert st.runtime_python(tmp_path) == (
+        tmp_path / "runtimes" / "sadtalker" / "bin" / "python")

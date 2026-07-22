@@ -1,4 +1,4 @@
-"""Pack and split the shared Windows SadTalker runtime.
+"""Pack and split a platform-specific SadTalker runtime.
 
 CI and local development both call this module so archive naming, compression,
 release-part sizing, and the manifest format cannot drift.
@@ -26,10 +26,11 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def pack_runtime(prefix: Path, output_dir: Path,
-                 *, keep_archive: bool = False) -> tuple[Path, list[Path]]:
+def pack_runtime(prefix: Path, output_dir: Path, *,
+                 asset_name: str = ASSET_NAME,
+                 keep_archive: bool = False) -> tuple[Path, list[Path]]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    archive = output_dir / ASSET_NAME
+    archive = output_dir / asset_name
     conda_pack.pack(
         prefix=str(prefix.resolve()),
         output=str(archive.resolve()),
@@ -46,7 +47,7 @@ def pack_runtime(prefix: Path, output_dir: Path,
     with archive.open("rb") as source:
         index = 1
         while True:
-            part = output_dir / f"{ASSET_NAME}.part{index:03d}"
+            part = output_dir / f"{asset_name}.part{index:03d}"
             written = 0
             digest = hashlib.sha256()
             with part.open("wb") as destination:
@@ -70,12 +71,13 @@ def pack_runtime(prefix: Path, output_dir: Path,
 
     manifest = {
         "version": 1,
-        "archive": ASSET_NAME,
+        "archive": asset_name,
         "archive_size": archive.stat().st_size,
         "archive_sha256": _sha256(archive),
         "parts": parts,
     }
-    manifest_path = output_dir / MANIFEST_NAME
+    manifest_name = asset_name.removesuffix(".tar.gz") + ".manifest.json"
+    manifest_path = output_dir / manifest_name
     manifest_path.write_text(
         json.dumps(manifest, indent=2), encoding="utf-8")
     if not keep_archive:
@@ -88,9 +90,11 @@ def main() -> int:
     parser.add_argument("--prefix", required=True, type=Path)
     parser.add_argument("--output-dir", default=Path.cwd(), type=Path)
     parser.add_argument("--keep-archive", action="store_true")
+    parser.add_argument("--asset-name", default=ASSET_NAME)
     args = parser.parse_args()
     manifest, parts = pack_runtime(
-        args.prefix, args.output_dir, keep_archive=args.keep_archive)
+        args.prefix, args.output_dir, asset_name=args.asset_name,
+        keep_archive=args.keep_archive)
     print(manifest)
     for part in parts:
         print(part)

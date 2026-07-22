@@ -124,13 +124,19 @@ def generate_talking_head(audio: Path, spec: AvatarSpec,
                "--checkpoint_dir", str(spec.checkpoint_dir),
                "--result_dir", str(result_dir),
                "--still", "--preprocess", "full"]
+        from app.video.sadtalker_setup import runtime_target
+        target = runtime_target()
+        if target is not None and target.device == "cpu":
+            cmd.extend(["--device", "cpu"])
         # The managed base install intentionally excludes the optional GFPGAN
         # weights. SadTalker's default (no enhancer flag) is reliable for both
         # PiP and full-frame modes and avoids a false "installed" state.
         logger.info("avatar: running SadTalker for scene #%d (enhancer=none) …",
                      idx + 1)
-        proc = subprocess.run(cmd, cwd=spec.sadtalker_dir,
-                              capture_output=True, text=True, timeout=900)
+        proc = subprocess.run(
+            cmd, cwd=spec.sadtalker_dir, capture_output=True, text=True,
+            timeout=3600 if target is not None
+            and getattr(target, "slow", False) else 900)
         if proc.returncode != 0:
             logger.warning("avatar: SadTalker 失败（回退到静态头像）：%s",
                            (proc.stderr or "")[-400:])

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import shutil
 import subprocess
 import tarfile
@@ -19,6 +20,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 import httpx
+
+from app.runtime_platform import (
+    RuntimePlatform, detect_runtime_platform, prepare_runtime_tree,
+    runtime_asset, runtime_manifest)
 
 RUNTIME_TAG = "cosyvoice-runtime-v1"
 RUNTIME_ASSET = "cosyvoice-runtime-win64-cuda121.tar.gz"
@@ -36,12 +41,26 @@ Progress = Callable[[str, float], None]
 _SMOKE_CACHE: dict[tuple[str, int, bool], tuple[bool, str]] = {}
 
 
+def runtime_target(system: str | None = None,
+                   machine: str | None = None) -> RuntimePlatform | None:
+    return detect_runtime_platform(
+        system or platform.system(), machine or platform.machine())
+
+
+def _unsupported_reason(target: RuntimePlatform | None = None) -> str:
+    return (
+        f"当前平台没有可用的 CosyVoice managed runtime 资产"
+        f"（{platform.system()} {platform.machine()}）")
+
+
 def runtime_dir(data_dir: Path) -> Path:
     return Path(data_dir) / "runtimes" / "cosyvoice"
 
 
 def runtime_python(data_dir: Path) -> Path:
-    return runtime_dir(data_dir) / "python.exe"
+    target = runtime_target()
+    relative = target.python_relpath if target else Path("python.exe")
+    return runtime_dir(data_dir) / relative
 
 
 def runtime_worker(data_dir: Path) -> Path:
@@ -65,13 +84,17 @@ def _smoke_path(data_dir: Path) -> Path:
 
 
 def _archive_path(data_dir: Path) -> Path:
-    return Path(data_dir) / "downloads" / RUNTIME_ASSET
+    target = runtime_target()
+    asset = runtime_asset("cosyvoice", target) if target else RUNTIME_ASSET
+    return Path(data_dir) / "downloads" / asset
 
 
 def _manifest_url() -> str:
+    target = runtime_target()
+    manifest = runtime_manifest("cosyvoice", target) if target else RUNTIME_MANIFEST
     return os.environ.get(
         "MEDIA_AGENT_COSYVOICE_RUNTIME_MANIFEST_URL",
-        f"{RUNTIME_RELEASE_BASE}/{RUNTIME_MANIFEST}")
+        f"{RUNTIME_RELEASE_BASE}/{manifest}")
 
 
 def _sha256(path: Path) -> str:
@@ -83,12 +106,15 @@ def _sha256(path: Path) -> str:
 
 
 def runtime_files_ready(data_dir: Path) -> bool:
+    target = runtime_target()
+    expected_asset = (
+        runtime_asset("cosyvoice", target) if target else RUNTIME_ASSET)
     try:
         version = _version_path(data_dir).read_text(encoding="utf-8").strip()
     except OSError:
         return False
     return (
-        version == RUNTIME_ASSET
+        version == expected_asset
         and runtime_python(data_dir).is_file()
         and runtime_worker(data_dir).is_file()
         and (runtime_source(data_dir) / "cosyvoice" / "cli" /
@@ -124,8 +150,10 @@ def models_ready(data_dir: Path) -> bool:
 
 
 def _fingerprint(data_dir: Path) -> dict[str, Any]:
+    target = runtime_target()
     return {
-        "runtime": RUNTIME_ASSET,
+        "runtime": (
+            runtime_asset("cosyvoice", target) if target else RUNTIME_ASSET),
         "model_repo": MODEL_REPO,
         "files": {
             name: (model_dir(data_dir) / name).stat().st_size
@@ -163,6 +191,10 @@ def runtime_smoke(data_dir: Path, *, deep: bool = False,
         command.append("--deep")
     env = os.environ.copy()
     env["PYTHONPATH"] = str(runtime_source(data_dir))
+    target = runtime_target()
+    if target is not None and not target.requires_gpu:
+        env["MEDIA_AGENT_TORCH_DEVICE"] = "cpu"
+        timeout = max(timeout, 3600)
     try:
         proc = subprocess.run(
             command, cwd=str(runtime_dir(data_dir)), env=env,
@@ -185,12 +217,20 @@ def runtime_smoke(data_dir: Path, *, deep: bool = False,
 def setup_status(data_dir: Path) -> dict[str, Any]:
     from app.video.sadtalker_setup import gpu_status
 
+    target = runtime_target()
     runtime_ok = runtime_files_ready(data_dir)
     models_ok = models_ready(data_dir)
-    gpu = gpu_status()
-    smoke_ok = bool(runtime_ok and models_ok and gpu["ok"] and
-                    _deep_smoke_ready(data_dir))
-    if not gpu["ok"]:
+    gpu = gpu_status() if target is not None and target.requires_gpu else {
+        "ok": False, "name": "", "reason": ""}
+    hardware_ok = bool(
+        target is not None and (not target.requires_gpu or gpu["ok"]))
+    asset_available = target is not None
+    installable = bool(asset_available and hardware_ok)
+    smoke_ok = bool(
+        runtime_ok and models_ok and hardware_ok and _deep_smoke_ready(data_dir))
+    if target is None or (not asset_available and not runtime_ok):
+        reason = _unsupported_reason(target)
+    elif not hardware_ok:
         reason = gpu["reason"]
     elif not runtime_ok:
         reason = "尚未安装 CosyVoice runtime"
@@ -201,7 +241,18 @@ def setup_status(data_dir: Path) -> dict[str, Any]:
     else:
         reason = ""
     return {
-        "ready": bool(runtime_ok and models_ok and gpu["ok"] and smoke_ok),
+        "ready": bool(runtime_ok and models_ok and hardware_ok and smoke_ok),
+        "supported": target is not None,
+        "asset_available": asset_available,
+        "installable": installable,
+        "platform": target.key if target is not None else "unsupported",
+        "accelerator": target.accelerator if target is not None else "",
+        "device_ok": hardware_ok,
+        "device_name": gpu["name"] if target is not None and target.requires_gpu
+        else (platform.machine() if target is not None else ""),
+        "performance_warning": (
+            "macOS 使用 CPU 推理，声音合成速度可能较慢"
+            if target is not None and target.accelerator == "CPU" else ""),
         "gpu_ok": bool(gpu["ok"]),
         "gpu_name": gpu["name"],
         "runtime_ok": runtime_ok,
@@ -364,9 +415,12 @@ def install_runtime_archive(data_dir: Path, archive: Path, *,
     backup = target.with_name(target.name + ".previous")
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True)
-    _emit(progress_cb, "解压 CosyVoice CUDA runtime…", .99)
+    _emit(progress_cb, "解压 CosyVoice runtime…", .99)
     _safe_extract(archive, staging)
-    required = (staging / "python.exe", staging / "cosyvoice-worker.py")
+    target_spec = runtime_target()
+    python_relative = (
+        target_spec.python_relpath if target_spec else Path("python.exe"))
+    required = (staging / python_relative, staging / "cosyvoice-worker.py")
     if not all(path.is_file() for path in required):
         shutil.rmtree(staging, ignore_errors=True)
         raise RuntimeError("runtime 压缩包无效")
@@ -375,8 +429,15 @@ def install_runtime_archive(data_dir: Path, archive: Path, *,
         _replace(target, backup)
     _replace(staging, target)
     try:
-        _version_path(data_dir).write_text(RUNTIME_ASSET, encoding="utf-8")
-        unpack = target / "Scripts" / "conda-unpack.exe"
+        asset = (
+            runtime_asset("cosyvoice", target_spec)
+            if target_spec else RUNTIME_ASSET)
+        _version_path(data_dir).write_text(asset, encoding="utf-8")
+        unpack = target / (
+            target_spec.conda_unpack_relpath
+            if target_spec else Path("Scripts/conda-unpack.exe"))
+        if target_spec:
+            prepare_runtime_tree(target, target_spec)
         if unpack.is_file():
             proc = subprocess.run(
                 [str(unpack)], cwd=str(target), capture_output=True, text=True,
@@ -390,7 +451,7 @@ def install_runtime_archive(data_dir: Path, archive: Path, *,
         shutil.rmtree(backup, ignore_errors=True)
         if cleanup_archive:
             archive.unlink(missing_ok=True)
-            for part in archive.parent.glob(f"{RUNTIME_ASSET}.part*"):
+            for part in archive.parent.glob(f"{asset}.part*"):
                 part.unlink(missing_ok=True)
         _SMOKE_CACHE.clear()
     except Exception:
@@ -472,12 +533,9 @@ def download_models(data_dir: Path, *, proxy: str | None = None,
 def run_setup(data_dir: Path, *, proxy: str | None = None,
               progress_cb: Progress | None = None,
               cancel_event: threading.Event | None = None) -> dict[str, Any]:
-    from app.video.sadtalker_setup import gpu_status
-
-    gpu = gpu_status()
-    if not gpu["ok"]:
-        return {"ok": False, "message": gpu["reason"],
-                **setup_status(data_dir)}
+    current = setup_status(data_dir)
+    if not current["installable"]:
+        return {"ok": False, "message": current["reason"], **current}
     try:
         _install_runtime(
             data_dir, proxy=proxy,
@@ -501,7 +559,8 @@ def run_setup(data_dir: Path, *, proxy: str | None = None,
             cancel_event=cancel_event):
         return {"ok": False, "message": "CosyVoice2 模型下载失败",
                 **setup_status(data_dir)}
-    _emit(progress_cb, "加载模型并验证 CUDA（首次可能需要数分钟）…", .95)
+    accelerator = current["accelerator"] or "runtime"
+    _emit(progress_cb, f"加载模型并验证 {accelerator}（首次可能需要数分钟）…", .95)
     _SMOKE_CACHE.clear()
     ok, reason = runtime_smoke(data_dir, deep=True)
     if not ok:

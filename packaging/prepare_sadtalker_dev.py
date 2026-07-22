@@ -11,7 +11,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from app.video.sadtalker_setup import (
     download_models,
-    gpu_status,
     install_runtime_archive,
     runtime_files_ready,
     runtime_smoke,
@@ -37,19 +36,15 @@ def main() -> int:
             data_dir, args.archive, progress_cb=_progress,
             cleanup_archive=False)
     else:
-        print("SadTalker CUDA runtime 已安装，跳过解压。", flush=True)
+        print("SadTalker runtime 已安装，跳过解压。", flush=True)
     if not download_models(
         data_dir, proxy=args.proxy or None, progress_cb=_progress):
         raise SystemExit("SadTalker 模型下载失败")
 
-    gpu = gpu_status()
-    if gpu["ok"]:
-        print("运行真实 GPU 推理验证…", flush=True)
-        ok, reason = runtime_smoke(data_dir, deep=True)
-        if not ok:
-            raise SystemExit(f"SadTalker 推理验证失败：{reason}")
-    else:
-        print(f"跳过 GPU 推理验证：{gpu['reason']}", flush=True)
+    print("运行真实推理验证…", flush=True)
+    ok, reason = runtime_smoke(data_dir, deep=True)
+    if not ok:
+        raise SystemExit(f"SadTalker 推理验证失败：{reason}")
 
     print(json.dumps(setup_status(data_dir), ensure_ascii=False, indent=2))
     return 0

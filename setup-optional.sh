@@ -9,8 +9,8 @@ echo "This script auto-detects and installs missing optional components."
 echo ""
 echo "  [1] Playwright + Chromium (for JS-rendered page scraping)"
 echo "  [2] ffmpeg (video compositing — install manually)"
-echo "  [3] CosyVoice (managed runtime; Windows installer in Settings)"
-echo "  [4] SadTalker (digital-human presenter lip-sync — optional, GPU)"
+echo "  [3] CosyVoice (managed runtime; install in Settings)"
+echo "  [4] SadTalker (managed lip-sync runtime; optional)"
 echo ""
 echo "============================================"
 echo ""
@@ -84,148 +84,15 @@ echo ""
 
 # ── 3. CosyVoice (managed runtime) ────────────
 echo "[3/4] CosyVoice (local voice cloning)..."
-echo "  The managed prebuilt CosyVoice runtime is currently available on Windows."
+echo "  Managed runtimes are available on Windows and macOS (Intel/Apple Silicon)."
 echo "  Install it from Settings -> Voice and Video; no Python/source paths are used."
-echo ""
-
-# Legacy sidecar bootstrap is disabled; keep the block for old extracted
-# bundles but never enter it in current releases.
-if true; then
-    echo "  [SKIP] No sidecar installation is required."
-elif [ -f "$COSYVOICE_DIR/bin/python3" ]; then
-    echo "  [OK] Embedded Python already set up"
-    PYTHON="$COSYVOICE_DIR/bin/python3"
-else
-    # Find the embeddable Python archive in _internal/packaging/
-    EMBED_ARC="$INTERNAL_DIR/packaging/python-embed-macos.tar.gz"
-    GET_PIP="$INTERNAL_DIR/packaging/get-pip.py"
-
-    if [ ! -f "$EMBED_ARC" ]; then
-        echo "  [FAIL] Embeddable Python archive not found at:"
-        echo "         $EMBED_ARC"
-        echo ""
-        return 2>/dev/null || exit 1
-    fi
-
-    # Extract embeddable Python
-    echo "  Extracting embedded Python..."
-    mkdir -p "$COSYVOICE_DIR"
-    tar xzf "$EMBED_ARC" -C "$COSYVOICE_DIR" --strip-components=1 2>/dev/null || \
-        tar xzf "$EMBED_ARC" -C "$COSYVOICE_DIR"
-
-    # Find python binary
-    PYTHON=""
-    for candidate in "$COSYVOICE_DIR/bin/python3" "$COSYVOICE_DIR/python3" "$COSYVOICE_DIR/bin/python"; do
-        if [ -x "$candidate" ]; then
-            PYTHON="$candidate"
-            break
-        fi
-    done
-
-    if [ -z "$PYTHON" ]; then
-        echo "  [FAIL] Failed to extract embeddable Python"
-        return 2>/dev/null || exit 1
-    fi
-    echo "  [OK] Python extracted: $PYTHON"
-
-    # Install pip
-    echo "  Installing pip..."
-    "$PYTHON" "$GET_PIP" --quiet
-    echo "  [OK] pip installed"
-
-    # Install PyTorch (CPU) + CosyVoice
-    echo "  Installing PyTorch (CPU) + CosyVoice (may take a few minutes)..."
-    "$PYTHON" -m pip install torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cpu --quiet
-    echo "  [OK] PyTorch installed"
-
-    "$PYTHON" -m pip install cosyvoice --quiet
-    echo "  [OK] CosyVoice installed"
-fi
-
-# Download model
-if false; then
-echo "  Checking CosyVoice model..."
-MODEL_DIR="$BUNDLE_DIR/pretrained_models/CosyVoice2-0.5B"
-if [ -f "$MODEL_DIR/model.pt" ]; then
-    echo "  [OK] Model already downloaded"
-else
-    echo "  Downloading CosyVoice2-0.5B model (~1.5 GB, first time only)..."
-    mkdir -p "$MODEL_DIR"
-    # Note: `huggingface_hub[cli]` extra no longer exists in >=1.23.0,
-    # and `-m huggingface_hub.cli download` fails because cli is a package.
-    "$PYTHON" -m pip install huggingface_hub --quiet
-    # Disable the Xet backend — its CAS server (cas-server.xethub.hf.co) can
-    # return 401 and isn't served by mirrors; classic HTTP download is reliable.
-    export HF_HUB_DISABLE_XET=1
-    export HF_XET_DISABLE=1
-    export HF_HUB_DOWNLOAD_TIMEOUT=60
-    # Retry loop — snapshot_download resumes partial files, so re-running
-    # continues from where a timeout/drop left off.
-    _dl_n=0
-    until "$PYTHON" -c "from huggingface_hub import snapshot_download; snapshot_download('FunAudioLLM/CosyVoice2-0.5B', local_dir='$MODEL_DIR', max_workers=2)"; do
-        _dl_n=$((_dl_n + 1))
-        if [ "$_dl_n" -ge 8 ]; then
-            echo "  [FAIL] Model download failed — re-run this script to resume."
-            break
-        fi
-        echo "  下载中断，第 $_dl_n/8 次重试（断点续传）..."
-        sleep 3
-    done
-    [ "$_dl_n" -lt 8 ] && echo "  [OK] Model downloaded"
-fi
-fi
-
-echo ""
-echo "  Use the Settings installer on supported Windows systems."
+echo "  Use the Settings installer; macOS uses CPU and may be slow."
 echo ""
 
 # ── 4. SadTalker (digital-human presenter lip-sync, optional) ──
 echo "[4/4] SadTalker (数字人主播口型同步, 可选)..."
-SADTALKER_DIR="$BUNDLE_DIR/SadTalker"
-if [ -f "$SADTALKER_DIR/inference.py" ] && [ -d "$SADTALKER_DIR/checkpoints" ]; then
-    echo "  [OK] SadTalker 已就绪：$SADTALKER_DIR"
-    echo "  在「设置 → 视频 → 数字人主播」把 SadTalker 目录设为上面的路径。"
-else
-    echo "  SadTalker 为数字人提供口型同步，体积大（模型 ~5GB）且需要 NVIDIA GPU；"
-    echo "  不安装时数字人会用静态头像叠加（仍可用）。"
-    printf "  现在安装 SadTalker？[y/N] "
-    read -r _ans || _ans=""
-    if [ "$_ans" = "y" ] || [ "$_ans" = "Y" ] || [ "$_ans" = "yes" ]; then
-        if ! command -v git >/dev/null 2>&1; then
-            echo "  [SKIP] 未找到 git，请先安装 git 再重跑本脚本。"
-        else
-            SPY="${PYTHON:-}"
-            if [ ! -x "$SPY" ]; then SPY="$(command -v python3 || command -v python || true)"; fi
-            if [ -z "$SPY" ]; then
-                echo "  [SKIP] 未找到可用的 Python。"
-            else
-                echo "  克隆 SadTalker…"
-                [ -d "$SADTALKER_DIR/.git" ] || git clone --depth 1 \
-                    https://github.com/OpenTalker/SadTalker.git "$SADTALKER_DIR" \
-                    || echo "  [WARN] 克隆失败，请检查网络/git。"
-                if [ -f "$SADTALKER_DIR/requirements.txt" ]; then
-                    echo "  安装 SadTalker 依赖（建议使用匹配 GPU 的 torch）…"
-                    "$SPY" -m pip install -r "$SADTALKER_DIR/requirements.txt" \
-                        || echo "  [WARN] 依赖未完全安装，请按 SadTalker README 手动补齐（尤其匹配 CUDA 的 torch）。"
-                fi
-                echo "  下载模型（~5GB，首次）…"
-                if [ -f "$SADTALKER_DIR/scripts/download_models.sh" ]; then
-                    ( cd "$SADTALKER_DIR" && bash scripts/download_models.sh ) \
-                        || echo "  [WARN] 模型下载未完成，可重跑本脚本或手动执行 scripts/download_models.sh。"
-                fi
-                if [ -d "$SADTALKER_DIR/checkpoints" ]; then
-                    echo "  [OK] SadTalker 就绪：$SADTALKER_DIR"
-                    echo "  在「设置 → 视频 → 数字人主播」设置该目录并开启数字人。"
-                else
-                    echo "  [WARN] 缺少 checkpoints，参见 https://github.com/OpenTalker/SadTalker"
-                fi
-            fi
-        fi
-    else
-        echo "  [SKIP] 跳过 SadTalker（数字人将用静态头像）。"
-    fi
-fi
+echo "  Use the Settings installer; macOS uses CPU and may be slow."
+echo "  If omitted, video generation automatically uses a static avatar."
 echo ""
 
 echo "============================================"

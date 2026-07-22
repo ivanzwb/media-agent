@@ -26,9 +26,9 @@
 ### 讲解视频
 - **脚本 + 配音**：从草稿自动生成口播分镜脚本（LLM）→ 逐段 TTS 配音；分镜可在草稿页**编辑**（旁白/画面/重选背景素材、增删/排序），并**只对改动的分镜重配**。
 - **合成**：ffmpeg 合成「图片轮播 / 原视频片段 + 中文字幕 + 配音」的 mp4；中文字幕用 PIL 生成画面帧/叠层（规避 ffmpeg 中文字体问题）；画面适配可选 `fit`（完整+黑边）/`crop`/`blur`。同一视频被连续分镜引用时**续播**、放完**冻结最后一帧**。
-- **TTS**：默认内置 `kitten`（中文走 edge-tts，免 key）；可选 **本地声音复刻 `cosyvoice`**（CosyVoice2-0.5B，设置内一键安装托管 CUDA Runtime 与模型，上传干声即可克隆音色）；也支持 OpenAI 兼容 TTS。
+- **TTS**：默认内置 `kitten`（中文走 edge-tts，免 key）；可选 **本地声音复刻 `cosyvoice`**（CosyVoice2-0.5B，设置内一键安装托管 Runtime 与模型；Windows 使用 CUDA，macOS Intel/Apple Silicon 使用 CPU）；也支持 OpenAI 兼容 TTS。
 - **更像人的语气**：edge-tts 可调 **语速 / 音调**（`tts_rate` / `tts_pitch`）；CosyVoice 可给 **语气/情感指令**（`tts_instruct`，如「用亲切自然的语气」）。多分镜配音**并行**合成，速度更快。
-- **数字人主播（可选）**：在讲解视频中叠加一个口播主播——**画中画（角落）**或**全屏主播**，可按分镜切换。口型同步使用独立的 **SadTalker CUDA Runtime**；在设置中一键断点续传 Runtime 与模型，不需要克隆源码或配置 Python。不可用时自动回退为**静态头像**叠加。
+- **数字人主播（可选）**：在讲解视频中叠加一个口播主播——**画中画（角落）**或**全屏主播**，可按分镜切换。口型同步使用独立的 **SadTalker Runtime**；Windows 使用 CUDA，macOS Intel/Apple Silicon 使用 CPU。不可用时自动回退为**静态头像**叠加。
 - 合成需本地 **ffmpeg**；原视频/HLS 下载需 **yt-dlp**；数字人口型同步需 **SadTalker**（可选）。
 
 ### 运行与平台
@@ -99,8 +99,8 @@ macOS:    media-agent/media-agent serve
 |---|---|---|
 | playwright 库 | ✅ 已内置 | 需额外下载 Chromium（脚本一键完成） |
 | ffmpeg | ❌ 需单独装 | 视频合成必需，[下载](https://ffmpeg.org)后加入 PATH |
-| CosyVoice | ✅ 设置内一键安装（Windows/NVIDIA） | 自动断点续传独立 CUDA Runtime 与 CosyVoice2 模型，无需 Python、源码或模型路径 |
-| SadTalker | ✅ 设置内一键安装（可选） | 数字人主播口型同步用；自动检测 NVIDIA GPU，并断点续传托管 CUDA Runtime 与模型，无需源码目录或 Python 配置 |
+| CosyVoice | ✅ 设置内一键安装（Windows/macOS） | Windows CUDA；macOS Intel/Apple Silicon CPU（速度较慢）；自动断点续传 |
+| SadTalker | ✅ 设置内一键安装（Windows/macOS，可选） | Windows CUDA；macOS Intel/Apple Silicon CPU（速度较慢）；无需源码或 Python 配置 |
 
 ### 本地构建
 
@@ -128,6 +128,15 @@ Windows 本地开发需要 CosyVoice 时，运行：
 ```
 
 它与 CosyVoice Runtime CI 共用固定依赖清单、源码提交和打包器，生成发布兼容的分片/manifest，安装到 `data/runtimes/cosyvoice/`，并把模型预下载到 `data/models/cosyvoice/CosyVoice2-0.5B/`。
+
+macOS 本地开发（Intel 与 Apple Silicon）分别运行：
+
+```bash
+bash ./prepare-sadtalker-dev.sh
+bash ./prepare-cosyvoice-dev.sh
+```
+
+脚本会构建与 Release 相同架构的 CPU Runtime、预下载模型并执行真实推理验证。CPU 生成速度显著慢于 Windows CUDA。
 
 ## 配置
 
@@ -169,7 +178,7 @@ sources:
 | `MEDIA_AGENT_LLM_API_KEY` | 大模型 API Key | 无 |
 | `MEDIA_AGENT_LLM_MODEL` | 模型名（如 `gpt-4o-mini`） | provider 默认 |
 | `MEDIA_AGENT_IMAGE_PROVIDER` | `mock` \| `openai` | `mock` |
-| `MEDIA_AGENT_TTS_PROVIDER` | `kitten`（内置，中文走 edge-tts）\| `cosyvoice`（本地声音复刻/克隆，CosyVoice2-0.5B，需 Python\<3.13 + GPU）\| `mock` \| `openai`（兼容） | `kitten` |
+| `MEDIA_AGENT_TTS_PROVIDER` | `kitten`（内置）\| `cosyvoice`（托管 Runtime；Windows CUDA/macOS CPU）\| `mock` \| `openai`（兼容） | `kitten` |
 | `MEDIA_AGENT_TTS_API_BASE` | 外部 TTS 服务地址（仅 `openai` 需要） | 无 |
 | `MEDIA_AGENT_TTS_API_KEY` | TTS API Key（内置/本地服务可留空） | 无 |
 | `MEDIA_AGENT_TTS_MODEL` | TTS 模型名（openai 兼容用） | `tts-1` |

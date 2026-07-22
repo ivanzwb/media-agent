@@ -79,12 +79,16 @@ def test_talking_head_uses_managed_python_and_checkpoint_dir(tmp_path,
         return Result()
 
     monkeypatch.setattr(av.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        "app.video.sadtalker_setup.runtime_target",
+        lambda: type("Target", (), {"device": "cpu", "slow": False})())
     result = av.generate_talking_head(audio, spec, tmp_path, 0)
 
     assert result and result.name == "talking.mp4"
     cmd, kwargs = calls[0]
     assert cmd[0] == str(python)
     assert cmd[cmd.index("--checkpoint_dir") + 1] == str(checkpoints)
+    assert cmd[cmd.index("--device") + 1] == "cpu"
     assert kwargs["cwd"] == str(source)
 
 

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import time
 
 from fastapi.testclient import TestClient
 
@@ -103,9 +104,50 @@ def test_publish_wechat_article_happy_path(tmp_path, monkeypatch):
                             "title": "原标题", "mode": mode})
     r = client.post(f"/drafts/{draft.id}/publish/wechat",
                     data={"mode": "draft", "kind": "article"})
-    assert r.status_code == 200
+    assert r.status_code == 202
     assert r.json()["ok"] is True
-    assert r.json()["draft_media_id"] == "DRAFT1"
+    status = {}
+    for _ in range(100):
+        status = client.get(
+            f"/api/draft/{draft.id}/publish/wechat/status").json()
+        if status["done"]:
+            break
+        time.sleep(0.01)
+    assert status["ok"] is True
+    assert status["result"]["draft_media_id"] == "DRAFT1"
+
+
+def test_publish_wechat_waits_for_terminal_failure(tmp_path, monkeypatch):
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    store.set_setting("wechat_appid", "wx123")
+    store.set_setting("wechat_appsecret", "secret")
+
+    class FakeClient:
+        def freepublish_get(self, publish_id):
+            return {"publish_status": 4, "errmsg": "content rejected",
+                    "fail_idx": [0]}
+
+    monkeypatch.setattr("app.wechat.get_wechat_client",
+                        lambda cfg: FakeClient())
+    monkeypatch.setattr("app.wechat.publish.publish_article",
+                        lambda cli, cfg, meta, mode="draft", **kw: {
+                            "ok": True, "draft_media_id": "DRAFT1",
+                            "publish_id": "PUB1", "title": "原标题",
+                            "mode": mode})
+    r = client.post(f"/drafts/{draft.id}/publish/wechat",
+                    data={"mode": "publish", "kind": "article"})
+    assert r.status_code == 202
+    status = {}
+    for _ in range(100):
+        status = client.get(
+            f"/api/draft/{draft.id}/publish/wechat/status").json()
+        if status["done"]:
+            break
+        time.sleep(0.01)
+    assert status["ok"] is False
+    assert "content rejected" in status["error"]
+    assert "PUB1" in status["error"]
 
 
 def test_channels_prepare_returns_caption(tmp_path):
@@ -811,3 +853,28 @@ def test_cosyvoice_setup_stream_and_status(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert "event: progress\ndata: " in response.text
     assert "event: done\ndata: " in response.text
+
+
+def test_capabilities_uses_managed_runtime_contract(tmp_path, monkeypatch):
+    from app import cosyvoice_install as cv
+    from app.video import sadtalker_setup as st
+
+    client, _, _ = make_client(tmp_path)
+    cosyvoice = {
+        "ready": False, "supported": True, "asset_available": True,
+        "installable": True, "platform": "windows-cuda",
+        "accelerator": "CUDA", "reason": "尚未安装 CosyVoice runtime",
+    }
+    sadtalker = {"ready": False, "reason": "尚未安装 SadTalker runtime"}
+    monkeypatch.setattr(cv, "setup_status", lambda _: cosyvoice)
+    monkeypatch.setattr(st, "setup_status", lambda _: sadtalker)
+
+    response = client.get("/api/capabilities?refresh=true")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cosyvoice"] == {
+        **cosyvoice, "available": False, "warning": ""}
+    assert payload["sadtalker"] == {
+        **sadtalker, "available": False, "warning": ""}
+    assert payload["ffmpeg"] == {"ready": payload["ffmpeg"]["ready"]}

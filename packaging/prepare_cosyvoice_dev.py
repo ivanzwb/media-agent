@@ -14,7 +14,6 @@ from app.cosyvoice_install import (  # noqa: E402
     download_models, install_runtime_archive, runtime_files_ready,
     runtime_smoke, setup_status,
 )
-from app.video.sadtalker_setup import gpu_status  # noqa: E402
 
 
 def progress(message: str, fraction: float) -> None:
@@ -36,13 +35,9 @@ def main() -> int:
     if not download_models(
             data_dir, proxy=args.proxy or None, progress_cb=progress):
         raise SystemExit("CosyVoice2 模型下载失败")
-    gpu = gpu_status()
-    if gpu["ok"]:
-        ok, reason = runtime_smoke(data_dir, deep=True)
-        if not ok:
-            raise SystemExit(f"CosyVoice 模型加载验证失败：{reason}")
-    else:
-        print(f"跳过 GPU 模型加载验证：{gpu['reason']}", flush=True)
+    ok, reason = runtime_smoke(data_dir, deep=True)
+    if not ok:
+        raise SystemExit(f"CosyVoice 模型加载验证失败：{reason}")
     print(json.dumps(setup_status(data_dir), ensure_ascii=False, indent=2))
     return 0
 

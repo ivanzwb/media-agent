@@ -115,3 +115,65 @@ def test_status_requires_deep_smoke_marker(tmp_path: Path, monkeypatch):
     cv._smoke_path(tmp_path).write_text(
         json.dumps(cv._fingerprint(tmp_path)), encoding="utf-8")
     assert cv.setup_status(tmp_path)["ready"]
+
+
+def test_macos_arm64_cpu_target_is_installable_without_gpu(
+        tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(cv.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(cv.platform, "machine", lambda: "arm64")
+    monkeypatch.delenv(
+        "MEDIA_AGENT_COSYVOICE_RUNTIME_MANIFEST_URL", raising=False)
+    monkeypatch.setattr(
+        "app.video.sadtalker_setup.gpu_status",
+        lambda: (_ for _ in ()).throw(AssertionError("GPU probe not expected")))
+
+    status = cv.setup_status(tmp_path)
+
+    assert status["platform"] == "macos-arm64-cpu"
+    assert status["accelerator"] == "CPU"
+    assert status["supported"] is True
+    assert status["asset_available"] is True
+    assert status["installable"] is True
+    assert status["device_ok"] is True
+    assert status["gpu_ok"] is False
+    assert "CPU" in status["performance_warning"]
+
+
+def test_macos_cpu_target_becomes_installable_with_manifest_override(
+        tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(cv.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(cv.platform, "machine", lambda: "arm64")
+    monkeypatch.setenv(
+        "MEDIA_AGENT_COSYVOICE_RUNTIME_MANIFEST_URL",
+        "https://example.invalid/cosyvoice-macos.manifest.json")
+
+    status = cv.setup_status(tmp_path)
+
+    assert status["asset_available"] is True
+    assert status["installable"] is True
+    assert status["device_ok"] is True
+    assert status["gpu_ok"] is False
+
+
+def test_macos_intel_cpu_target_is_installable(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(cv.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(cv.platform, "machine", lambda: "x86_64")
+
+    status = cv.setup_status(tmp_path)
+
+    assert status["platform"] == "macos-x64-cpu"
+    assert status["asset_available"] is True
+    assert status["installable"] is True
+    assert cv.runtime_python(tmp_path) == (
+        tmp_path / "runtimes" / "cosyvoice" / "bin" / "python")
+
+
+def test_unsupported_platform_has_actionable_reason(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(cv.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(cv.platform, "machine", lambda: "x86_64")
+
+    status = cv.setup_status(tmp_path)
+
+    assert status["supported"] is False
+    assert status["installable"] is False
+    assert "Linux x86_64" in status["reason"]

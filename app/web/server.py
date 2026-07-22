@@ -3223,6 +3223,24 @@ def create_app(config: Config | None = None,
             logger.warning("[publish-localize] failed (continuing): %s", exc)
         return meta
 
+    # WeChat publishing includes media localization/uploads and, for direct
+    # publish, an asynchronous WeChat review task.  Keep one workflow per
+    # draft so clients can poll through the true terminal state and retries
+    # cannot create duplicate drafts/publish jobs.
+    wechat_publish_main_lock = threading.Lock()
+    wechat_publish_states: dict[int, dict] = {}
+    wechat_publish_locks: dict[int, threading.Lock] = {}
+
+    def _wechat_publish_state(draft_id: int) -> dict:
+        with wechat_publish_main_lock:
+            if draft_id not in wechat_publish_states:
+                wechat_publish_states[draft_id] = {
+                    "running": False, "done": False, "ok": False,
+                    "mode": None, "error": None, "result": None,
+                }
+                wechat_publish_locks[draft_id] = threading.Lock()
+            return wechat_publish_states[draft_id]
+
     @app.post("/drafts/{draft_id}/publish/wechat")
     def draft_publish_wechat(draft_id: int, mode: str = Form("draft"),
                              kind: str = Form("article"),
@@ -3236,46 +3254,97 @@ def create_app(config: Config | None = None,
         err = LG.require(license_mgr, LF.PLATFORM_SYNC)
         if err:
             return err
+        if mode not in ("draft", "publish"):
+            return JSONResponse(
+                {"ok": False, "error": f"不支持的微信发布模式：{mode}"},
+                status_code=400)
+        if kind not in ("article", "video"):
+            return JSONResponse(
+                {"ok": False, "error": f"不支持的微信内容类型：{kind}"},
+                status_code=400)
         store = get_store()
         meta = store.read_draft_body(draft_id)
         if not meta:
-            return JSONResponse({"error": "draft not found"}, status_code=404)
+            return JSONResponse(
+                {"ok": False, "error": "draft not found"}, status_code=404)
         run_config = Config.load(store=store)
-        from app.wechat import get_wechat_client, WeChatError
-        from app.wechat.publish import publish_article, upload_video
+        from app.wechat import get_wechat_client
         client = get_wechat_client(run_config)
         if client is None:
             return JSONResponse(
                 {"ok": False,
                  "error": "未配置公众号 AppID/AppSecret，请到「设置」页填写。"},
                 status_code=400)
-        try:
-            if kind == "video":
-                result = upload_video(client, run_config, draft_id, meta)
-            else:
-                # Localize media FIRST: download remote images/videos with the
-                # robust multi-strategy downloader and rewrite the draft body to
-                # local /media/ paths, then push. This makes the WeChat upload
-                # reliable (protected/Cloudflare images that publish's plain GET
-                # would miss) and keeps the draft's links updated. Idempotent for
-                # media that is already local; failures don't block the push.
-                meta = _localize_before_publish(draft_id, meta, run_config, store)
-                result = publish_article(client, run_config, meta, mode=mode,
-                                         theme=theme)
-        except WeChatError as exc:
-            return JSONResponse(
-                {"ok": False,
-                 "error": f"微信接口错误 {exc.errcode}: {exc.errmsg}"},
-                status_code=502)
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"ok": False, "error": str(exc)},
-                                status_code=500)
-        if result.get("ok") and result.get("mode") == "publish":
+
+        state = _wechat_publish_state(draft_id)
+        lock = wechat_publish_locks[draft_id]
+        with lock:
+            if state["running"]:
+                return JSONResponse({
+                    "ok": True, "running": True, "done": False,
+                    "mode": state["mode"], "already_running": True,
+                }, status_code=202)
+            state.update(running=True, done=False, ok=False, mode=mode,
+                         error=None, result=None)
+
+        def worker():
+            from app.wechat import WeChatError
+            from app.wechat.publish import (
+                publish_article, upload_video, wait_for_publish)
+            worker_store = get_store()
             try:
-                store.set_draft_status(draft_id, "published")
-            except Exception:                       # noqa: BLE001
-                pass
-        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+                worker_meta = worker_store.read_draft_body(draft_id)
+                if not worker_meta:
+                    raise RuntimeError("draft not found")
+                if kind == "video":
+                    result = upload_video(
+                        client, run_config, draft_id, worker_meta)
+                else:
+                    # This localization and every media upload are part of the
+                    # tracked workflow; the UI remains pending throughout.
+                    worker_meta = _localize_before_publish(
+                        draft_id, worker_meta, run_config, worker_store)
+                    result = publish_article(
+                        client, run_config, worker_meta, mode=mode, theme=theme)
+                    if result.get("ok") and mode == "publish":
+                        publish_id = result.get("publish_id")
+                        if not publish_id:
+                            raise RuntimeError(
+                                "微信已接收发布请求，但未返回 publish_id")
+                        result["publish_detail"] = wait_for_publish(
+                            client, str(publish_id), timeout=1800.0)
+                if not result.get("ok"):
+                    raise RuntimeError(result.get("error") or "微信推送失败")
+                if result.get("mode") == "publish":
+                    worker_store.set_draft_status(draft_id, "published")
+                with lock:
+                    state.update(ok=True, result=result)
+            except WeChatError as exc:
+                with lock:
+                    state["error"] = (
+                        f"微信接口错误 {exc.errcode}: {exc.errmsg}")
+            except Exception as exc:  # noqa: BLE001 - surface exact failure
+                with lock:
+                    state["error"] = str(exc)
+            finally:
+                with lock:
+                    state.update(running=False, done=True)
+
+        threading.Thread(target=worker, daemon=True).start()
+        return JSONResponse(
+            {"ok": True, "running": True, "done": False, "mode": mode},
+            status_code=202)
+
+    @app.get("/api/draft/{draft_id}/publish/wechat/status")
+    def draft_publish_wechat_status(draft_id: int):
+        state = _wechat_publish_state(draft_id)
+        lock = wechat_publish_locks[draft_id]
+        with lock:
+            return {
+                "running": state["running"], "done": state["done"],
+                "ok": state["ok"], "mode": state["mode"],
+                "error": state["error"], "result": state["result"],
+            }
 
     @app.post("/drafts/{draft_id}/styled-html")
     def draft_styled_html(draft_id: int, platform: str = Form("wechat"),
@@ -3418,19 +3487,6 @@ def create_app(config: Config | None = None,
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page():
         return _serve_spa()
-
-    @app.get("/api/capabilities")
-    def api_capabilities(refresh: bool = False):
-        """Report whether env-heavy optional features work on this machine, so
-        the UI can gray out options the machine can't actually use."""
-        from app import capabilities as caps
-        if refresh:
-            caps.refresh()
-        rc = Config.load(store=get_store())
-        return {
-            "cosyvoice": caps.cosyvoice_capability(),
-            "sadtalker": caps.sadtalker_capability(rc),
-        }
 
     @app.get("/api/settings")
     def api_settings():
@@ -3705,7 +3761,9 @@ def create_app(config: Config | None = None,
 
     # ── Managed optional runtimes ───────────────────────────────────────────
     @app.get("/api/capabilities")
-    def api_capabilities():
+    def api_capabilities(refresh: bool = False):
+        # `refresh` is accepted for compatibility with older frontends. The
+        # managed status functions inspect disk state on every call.
         from app.capabilities import get_capabilities
         return get_capabilities(config.data_dir)
 

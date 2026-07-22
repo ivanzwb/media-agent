@@ -10,8 +10,19 @@ import { api, getJson, postForm } from "../api/client";
 const { Title, Text, Paragraph } = Typography;
 
 interface MaskField { set: boolean; masked: string; }
-interface Capability { available: boolean; reason: string; detail?: string; }
-interface Capabilities { cosyvoice: Capability; sadtalker: Capability; }
+interface ManagedCapability {
+  ready: boolean;
+  available?: boolean;
+  reason: string;
+  supported?: boolean;
+  asset_available?: boolean;
+  installable?: boolean;
+  platform?: string;
+  accelerator?: string;
+  warning?: string;
+  performance_warning?: string;
+}
+interface Capabilities { cosyvoice: ManagedCapability; sadtalker: ManagedCapability; }
 interface StylePub { id: string; name: string; description: string; prompt: string; instruction: string; is_builtin: boolean; is_default: boolean; }
 interface Voice { id: string; name?: string; }
 interface SettingsData {
@@ -133,7 +144,7 @@ export default function Settings() {
                 <Form.Item name="tts_provider" label="Provider">
                   <Select onChange={() => form.setFieldValue("tts_voice", undefined)} options={[
                     { value: "kitten", label: "Kitten（本地 edge-tts，默认）" },
-                    { value: "cosyvoice", label: "CosyVoice（本地 GPU 声音复刻）" },
+                    { value: "cosyvoice", label: `CosyVoice（本地 ${caps?.cosyvoice.accelerator === "CPU" ? "CPU" : "GPU"} 声音复刻）` },
                     { value: "openai_compatible", label: "OpenAI 兼容（云端 API）" },
                     { value: "mock", label: "Mock（测试）" },
                   ]} />
@@ -242,14 +253,14 @@ export default function Settings() {
                   ]} />
                 </Form.Item>
                 <Form.Item name="avatar_provider" label="生成方式"
-                  extra={caps && !caps.sadtalker.available
+                  extra={caps && !caps.sadtalker.ready
                     ? `SadTalker 口型同步在本机不可用：${caps.sadtalker.reason}（可先用静态头像）` : undefined}>
                   <Select style={{ width: 280 }} options={[
                     { value: "sadtalker",
-                      label: caps && !caps.sadtalker.available
-                        ? "SadTalker 口型同步（本地 GPU）— 本机不可用"
-                        : "SadTalker 口型同步（本地 GPU）",
-                      disabled: !!caps && !caps.sadtalker.available },
+                      label: caps && !caps.sadtalker.ready
+                        ? `SadTalker 口型同步（本地 ${caps.sadtalker.accelerator || "Runtime"}）— 尚未就绪`
+                        : `SadTalker 口型同步（本地 ${caps?.sadtalker.accelerator || "Runtime"}）`,
+                      disabled: !!caps && !caps.sadtalker.ready },
                     { value: "still", label: "静态头像（无口型）" },
                   ]} />
                 </Form.Item>
@@ -643,6 +654,14 @@ function CliTestButton({ form }: { form: any }) {
 
 type ManagedRuntimeStatus = {
   ready: boolean;
+  supported?: boolean;
+  asset_available?: boolean;
+  installable?: boolean;
+  platform?: string;
+  accelerator?: string;
+  device_ok?: boolean;
+  device_name?: string;
+  performance_warning?: string;
   gpu_ok: boolean;
   gpu_name: string;
   runtime_ok: boolean;
@@ -658,13 +677,20 @@ function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
   const { message } = AntApp.useApp();
   const qc = useQueryClient();
   const [status, setStatus] = useState<ManagedRuntimeStatus | null>(null);
+  const [statusError, setStatusError] = useState("");
   const [installing, setInstalling] = useState(false);
   const [progress, setProgress] = useState<{ message: string; fraction: number } | null>(null);
 
   const refresh = async () => {
-    const value = await getJson<ManagedRuntimeStatus>("/api/cosyvoice/status");
-    setStatus(value);
-    await qc.invalidateQueries({ queryKey: ["capabilities"] });
+    try {
+      const value = await getJson<ManagedRuntimeStatus>("/api/cosyvoice/status");
+      setStatus(value);
+      setStatusError("");
+      await qc.refetchQueries({ queryKey: ["capabilities"], type: "active" });
+    } catch (error: any) {
+      setStatusError(error?.response?.data?.detail || error?.message || "无法获取 runtime 状态");
+      throw error;
+    }
   };
   useEffect(() => { refresh().catch(() => {}); }, []);
 
@@ -729,22 +755,34 @@ function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
         </Space>
       ) : (
         <Space direction="vertical">
-          {status && <Space wrap>
-            <Tag color={status.gpu_ok ? "green" : "red"}>NVIDIA GPU</Tag>
-            <Tag color={status.runtime_ok ? "green" : "default"}>CUDA Runtime</Tag>
-            <Tag color={status.models_ok ? "green" : "default"}>CosyVoice2 模型</Tag>
-            <Tag color={status.smoke_ok ? "green" : "default"}>模型加载验证</Tag>
-          </Space>}
+          {status && (status.supported === false ? (
+            <Tag color="red">当前平台无 runtime 资产</Tag>
+          ) : (
+            <Space wrap>
+              <Tag color={(status.device_ok ?? status.gpu_ok) ? "green" : "red"}>
+                {status.accelerator === "CPU" ? "CPU" : "NVIDIA GPU"}
+              </Tag>
+              <Tag color={status.runtime_ok ? "green" : "default"}>
+                {status.accelerator === "CPU" ? "CPU Runtime" : "CUDA Runtime"}
+              </Tag>
+              <Tag color={status.models_ok ? "green" : "default"}>CosyVoice2 模型</Tag>
+              <Tag color={status.smoke_ok ? "green" : "default"}>模型加载验证</Tag>
+            </Space>
+          ))}
+          {statusError && <Text type="danger">状态读取失败：{statusError}。请刷新页面或检查服务日志。</Text>}
           <Text type="secondary">
             {status?.ready
-              ? `CosyVoice 已通过运行验证${status.gpu_name ? `（${status.gpu_name}）` : ""}。`
-              : "下载安装独立 CUDA Runtime 与 CosyVoice2 模型；无需配置 Python、源码或模型路径，支持断点续传。"}
+              ? `CosyVoice 已通过运行验证${status.device_name || status.gpu_name ? `（${status.device_name || status.gpu_name}）` : ""}。`
+              : status?.asset_available === false
+                ? "当前没有适配此平台的可下载 runtime 资产；模型与 API 字段无需手动配置。"
+                : `下载安装独立${status?.accelerator === "CPU" ? " CPU" : " CUDA"} Runtime 与 CosyVoice2 模型；无需配置 Python、源码或模型路径，支持断点续传。`}
           </Text>
           {!status?.ready && status?.reason && <Text type="danger">{status.reason}</Text>}
+          {status?.performance_warning && <Text type="warning">{status.performance_warning}</Text>}
           <Space>
             {!status?.ready && <Button type="primary" icon={<DownloadOutlined />}
-              disabled={!!status && !status.gpu_ok} onClick={install}>
-              下载安装 Runtime 与模型
+              disabled={!status || !(status.installable ?? status.gpu_ok)} onClick={install}>
+              下载安装 CosyVoice runtime 和模型
             </Button>}
             <Button icon={<ReloadOutlined />} onClick={() => refresh().catch(() => {})}>刷新状态</Button>
           </Space>
@@ -760,17 +798,7 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState<{ message: string; fraction: number } | null>(null);
 
-  type SadTalkerStatus = {
-    ready: boolean;
-    gpu_ok: boolean;
-    gpu_name: string;
-    runtime_ok: boolean;
-    models_ok: boolean;
-    smoke_ok: boolean;
-    reason: string;
-    runtime_dir: string;
-    models_dir: string;
-  };
+  type SadTalkerStatus = ManagedRuntimeStatus;
 
   async function fetchStatus(): Promise<SadTalkerStatus> {
     const r = await getJson<SadTalkerStatus>("/api/sadtalker/status");
@@ -875,24 +903,33 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
         </Space>
       ) : (
         <Space direction="vertical">
-          {status && (
+          {status && (status.supported === false ? (
+            <Tag color="red">当前平台无 runtime 资产</Tag>
+          ) : (
             <Space wrap>
-              <Tag color={status.gpu_ok ? "green" : "red"}>NVIDIA GPU</Tag>
-              <Tag color={status.runtime_ok ? "green" : "default"}>CUDA Runtime</Tag>
+              <Tag color={(status.device_ok ?? status.gpu_ok) ? "green" : "red"}>
+                {status.accelerator === "CPU" ? "CPU" : "NVIDIA GPU"}
+              </Tag>
+              <Tag color={status.runtime_ok ? "green" : "default"}>
+                {status.accelerator === "CPU" ? "CPU Runtime" : "CUDA Runtime"}
+              </Tag>
               <Tag color={status.models_ok ? "green" : "default"}>模型文件</Tag>
               <Tag color={status.smoke_ok ? "green" : "default"}>运行验证</Tag>
             </Space>
-          )}
+          ))}
           <Text type="secondary">
             {status?.ready
-              ? `SadTalker 已通过运行验证${status.gpu_name ? `（${status.gpu_name}）` : ""}，可直接使用口型同步。`
-              : "安装将下载独立的 NVIDIA CUDA Runtime 与约 1GB 模型，无需安装或配置 SadTalker 源码。支持断点续传与自动修复。"}
+              ? `SadTalker 已通过运行验证${status.device_name || status.gpu_name ? `（${status.device_name || status.gpu_name}）` : ""}，可直接使用口型同步。`
+              : status?.supported === false
+                ? "当前平台没有适配的 SadTalker runtime。"
+                : `安装将下载独立的${status?.accelerator === "CPU" ? " CPU" : " NVIDIA CUDA"} Runtime 与约 1GB 模型，无需配置源码。支持断点续传与自动修复。`}
           </Text>
           {!status?.ready && status?.reason && <Text type="danger">{status.reason}</Text>}
+          {status?.performance_warning && <Text type="warning">{status.performance_warning}</Text>}
           <Space>
             {!status?.ready && (
               <Button type="primary" icon={<DownloadOutlined />} onClick={startSetup}
-                disabled={!!status && !status.gpu_ok}>
+                disabled={!status || !(status.installable ?? status.gpu_ok)}>
                 下载安装 Runtime 与模型
               </Button>
             )}

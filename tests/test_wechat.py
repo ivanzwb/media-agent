@@ -175,6 +175,38 @@ def test_publish_article_draft_and_publish(tmp_path):
     assert res2["publish_id"] == "PUB1"
 
 
+def test_wait_for_publish_requires_terminal_success():
+    class Client:
+        statuses = iter([
+            {"publish_status": 1},
+            {"publish_status": 0, "article_id": "ARTICLE1"},
+        ])
+
+        def freepublish_get(self, publish_id):
+            assert publish_id == "PUB1"
+            return next(self.statuses)
+
+    detail = P.wait_for_publish(Client(), "PUB1", poll_interval=0)
+    assert detail["article_id"] == "ARTICLE1"
+
+
+def test_wait_for_publish_surfaces_terminal_detail():
+    class Client:
+        def freepublish_get(self, publish_id):
+            return {"publish_status": 4, "errmsg": "sensitive content",
+                    "fail_idx": [0]}
+
+    try:
+        P.wait_for_publish(Client(), "PUB9", poll_interval=0)
+    except RuntimeError as exc:
+        message = str(exc)
+        assert "sensitive content" in message
+        assert "PUB9" in message
+        assert "[0]" in message
+    else:
+        raise AssertionError("expected terminal publish failure")
+
+
 def test_publish_article_errors_without_cover(tmp_path):
     cfg = _cfg(tmp_path)
     meta = {"title_candidates": ["t"], "body_md": "no images here",

@@ -16,6 +16,7 @@ import json
 import hashlib
 import logging
 import os
+import platform
 import shutil
 import subprocess
 import tarfile
@@ -26,6 +27,10 @@ from typing import Any, Callable
 
 import httpx
 
+from app.runtime_platform import (
+    RuntimePlatform, detect_runtime_platform, prepare_runtime_tree,
+    runtime_asset)
+
 logger = logging.getLogger(__name__)
 
 RUNTIME_TAG = "sadtalker-runtime-v1"
@@ -34,6 +39,21 @@ RUNTIME_MANIFEST = "sadtalker-runtime-win64-cuda118.manifest.json"
 RUNTIME_RELEASE_BASE = (
     f"https://github.com/ivanzwb/release/releases/download/{RUNTIME_TAG}"
 )
+
+
+def runtime_target(
+    system: str | None = None, machine: str | None = None,
+) -> RuntimePlatform | None:
+    return detect_runtime_platform(system, machine)
+
+
+def _runtime_asset(target: RuntimePlatform | None = None) -> str:
+    target = target or runtime_target()
+    return runtime_asset("sadtalker", target) if target else RUNTIME_ASSET
+
+
+def _runtime_manifest(target: RuntimePlatform | None = None) -> str:
+    return _runtime_asset(target).removesuffix(".tar.gz") + ".manifest.json"
 
 # ── Official release model manifest ──────────────────────────────────────
 
@@ -94,7 +114,9 @@ def runtime_dir(data_dir: Path) -> Path:
 
 
 def runtime_python(data_dir: Path) -> Path:
-    return runtime_dir(data_dir) / "python.exe"
+    target = runtime_target()
+    relative = target.python_relpath if target else Path("python.exe")
+    return runtime_dir(data_dir) / relative
 
 
 def runtime_source(data_dir: Path) -> Path:
@@ -110,13 +132,13 @@ def checkpoint_dir(data_dir: Path) -> Path:
 
 
 def _runtime_archive(data_dir: Path) -> Path:
-    return data_dir / "downloads" / RUNTIME_ASSET
+    return data_dir / "downloads" / _runtime_asset()
 
 
 def _runtime_url() -> str:
     return os.environ.get(
         "MEDIA_AGENT_SADTALKER_RUNTIME_MANIFEST_URL",
-        f"{RUNTIME_RELEASE_BASE}/{RUNTIME_MANIFEST}",
+        f"{RUNTIME_RELEASE_BASE}/{_runtime_manifest()}",
     )
 
 
@@ -210,13 +232,35 @@ def gpu_status() -> dict[str, Any]:
         return {"ok": False, "name": "", "reason": str(exc)}
 
 
+def accelerator_status(
+    target: RuntimePlatform | None = None,
+) -> dict[str, Any]:
+    target = target or runtime_target()
+    if target is None:
+        return {
+            "ok": False, "name": "", "accelerator": "",
+            "reason": (
+                f"当前平台没有可用的 managed runtime"
+                f"（{platform.system()} {platform.machine()}）"),
+        }
+    if target.requires_gpu:
+        status = gpu_status()
+        return {**status, "accelerator": target.accelerator}
+    return {
+        "ok": True,
+        "name": f"{platform.machine()} CPU",
+        "accelerator": "CPU",
+        "reason": "",
+    }
+
+
 def runtime_files_ready(data_dir: Path) -> bool:
     py = runtime_python(data_dir)
     src = runtime_source(data_dir)
     try:
         version_ok = (
             _runtime_version_path(data_dir).read_text(encoding="utf-8").strip()
-            == RUNTIME_ASSET)
+            == _runtime_asset())
     except OSError:
         version_ok = False
     return py.is_file() and (src / "inference.py").is_file() and version_ok
@@ -236,7 +280,7 @@ def _smoke_marker(data_dir: Path) -> Path:
 def _smoke_fingerprint(data_dir: Path) -> dict[str, Any]:
     py = runtime_python(data_dir)
     return {
-        "runtime": RUNTIME_ASSET,
+        "runtime": _runtime_asset(),
         "python_size": py.stat().st_size if py.is_file() else 0,
         "models": {
             rel: (checkpoint_dir(data_dir) / Path(rel).name).stat().st_size
@@ -255,9 +299,9 @@ def _deep_smoke_ready(data_dir: Path) -> bool:
 
 
 def runtime_smoke(
-    data_dir: Path, *, require_gpu: bool = True, deep: bool = False,
+    data_dir: Path, *, require_gpu: bool | None = None, deep: bool = False,
 ) -> tuple[bool, str]:
-    """Verify imports/CUDA and optionally complete one real inference."""
+    """Verify imports/accelerator and optionally complete one real inference."""
     data_dir = Path(data_dir).resolve()
     if not runtime_files_ready(data_dir):
         return False, "SadTalker runtime 文件不完整"
@@ -265,6 +309,11 @@ def runtime_smoke(
         return True, ""
     py = runtime_python(data_dir)
     source = runtime_source(data_dir)
+    target = runtime_target()
+    if target is None:
+        return False, "当前平台不支持 SadTalker managed runtime"
+    if require_gpu is None:
+        require_gpu = target.requires_gpu
     stat = py.stat()
     key = (str(py), stat.st_size, stat.st_mtime_ns, require_gpu, deep)
     if key in _SMOKE_CACHE:
@@ -306,17 +355,20 @@ def runtime_smoke(
                 else:
                     result_dir = runtime_dir(data_dir) / ".smoke-result"
                     shutil.rmtree(result_dir, ignore_errors=True)
-                    infer = subprocess.run(
-                        [
+                    command = [
                             str(py), str(source / "inference.py"),
                             "--driven_audio", str(audio),
                             "--source_image", str(face),
                             "--checkpoint_dir", str(checkpoint_dir(data_dir)),
                             "--result_dir", str(result_dir),
                             "--still", "--preprocess", "full",
-                        ],
+                        ]
+                    if target.device == "cpu":
+                        command.extend(["--device", "cpu"])
+                    infer = subprocess.run(
+                        command,
                         cwd=str(source), env=env, capture_output=True, text=True,
-                        timeout=1200, check=False,
+                        timeout=3600 if target.slow else 1200, check=False,
                     )
                     videos = list(result_dir.rglob("*.mp4"))
                     if infer.returncode == 0 and videos:
@@ -342,11 +394,14 @@ def setup_status(data_dir: Path) -> dict[str, Any]:
     d = _models_dir(data_dir)
     models_ok = models_ready(data_dir)
     runtime_ok = runtime_files_ready(data_dir)
-    gpu = gpu_status()
+    target = runtime_target()
+    device = accelerator_status(target)
     smoke_ok = False
     smoke_reason = ""
-    if not gpu["ok"]:
-        smoke_reason = gpu["reason"]
+    if target is None:
+        smoke_reason = device["reason"]
+    elif not device["ok"]:
+        smoke_reason = device["reason"]
     elif runtime_ok and models_ok and _deep_smoke_ready(data_dir):
         smoke_ok, smoke_reason = runtime_smoke(data_dir)
     elif runtime_ok and models_ok:
@@ -355,7 +410,7 @@ def setup_status(data_dir: Path) -> dict[str, Any]:
         smoke_reason = "尚未安装 SadTalker runtime"
     else:
         smoke_reason = "SadTalker 模型文件不完整"
-    ready = bool(models_ok and runtime_ok and gpu["ok"] and smoke_ok)
+    ready = bool(models_ok and runtime_ok and device["ok"] and smoke_ok)
     files_info: list[dict[str, Any]] = []
     for f, expected in ALL_FILES:
         fp = d / f
@@ -375,8 +430,19 @@ def setup_status(data_dir: Path) -> dict[str, Any]:
         })
     return {
         "ready": ready,
-        "gpu_ok": gpu["ok"],
-        "gpu_name": gpu["name"],
+        "supported": target is not None,
+        "asset_available": target is not None,
+        "installable": bool(target is not None and device["ok"]),
+        "platform": target.key if target else "unsupported",
+        "accelerator": target.accelerator if target else "",
+        "device_ok": device["ok"],
+        "device_name": device["name"],
+        "performance_warning": (
+            "macOS 使用 CPU 推理，生成速度可能较慢"
+            if target is not None and target.slow else ""),
+        "gpu_ok": bool(device["ok"] and target is not None
+                       and target.requires_gpu),
+        "gpu_name": device["name"] if target and target.requires_gpu else "",
         "runtime_ok": runtime_ok,
         "models_ok": models_ok,
         "smoke_ok": smoke_ok,
@@ -839,7 +905,7 @@ def _download_runtime_part(
                             overall = (completed_bytes + written) / max(
                                 total_bytes, 1)
                             emit(
-                                "下载 CUDA runtime："
+                                "下载 SadTalker runtime："
                                 f"{(completed_bytes + written) / 1048576:.1f}"
                                 f"/{total_bytes / 1048576:.1f} MB · "
                                 f"{speed / 1048576:.2f} MB/s",
@@ -936,6 +1002,13 @@ def _safe_extract(archive: Path, target: Path) -> None:
             except ValueError as exc:
                 raise RuntimeError(
                     f"runtime 压缩包包含不安全路径：{member.name}") from exc
+            if member.issym() or member.islnk():
+                link = Path(member.name).parent / member.linkname
+                try:
+                    (target / link).resolve().relative_to(target_abs)
+                except ValueError as exc:
+                    raise RuntimeError(
+                        f"runtime 压缩包包含不安全链接：{member.name}") from exc
         bundle.extractall(target)
 
 
@@ -963,11 +1036,11 @@ def install_runtime_archive(
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir(parents=True, exist_ok=True)
         if progress_cb:
-            progress_cb("解压 SadTalker CUDA runtime（可能需要数分钟）…", 0.90)
+            progress_cb("解压 SadTalker runtime（可能需要数分钟）…", 0.90)
         _safe_extract(archive, staging)
     if not _runtime_payload_ready(staging):
         shutil.rmtree(staging, ignore_errors=True)
-        raise RuntimeError("runtime 压缩包无效：缺少 python.exe 或 inference.py")
+        raise RuntimeError("runtime 压缩包无效：缺少 Python 或 inference.py")
     if progress_cb:
         progress_cb("runtime 解压完成，切换到正式目录…", 0.97)
 
@@ -982,7 +1055,7 @@ def install_runtime_archive(
         shutil.rmtree(backup, ignore_errors=True)
         if cleanup_archive:
             archive.unlink(missing_ok=True)
-            for part in archive.parent.glob(f"{RUNTIME_ASSET}.part*"):
+            for part in archive.parent.glob(f"{_runtime_asset()}.part*"):
                 part.unlink(missing_ok=True)
         _clear_smoke_cache()
     except Exception:
@@ -993,8 +1066,10 @@ def install_runtime_archive(
 
 
 def _runtime_payload_ready(path: Path) -> bool:
+    target = runtime_target()
+    python_relative = target.python_relpath if target else Path("python.exe")
     return (
-        (path / "python.exe").is_file()
+        (path / python_relative).is_file()
         and (path / "sadtalker-src" / "inference.py").is_file()
     )
 
@@ -1004,7 +1079,13 @@ def _finish_runtime_install(
     target: Path,
     progress_cb: Callable[[str, float], None] | None,
 ) -> None:
-    unpack = target / "Scripts" / "conda-unpack.exe"
+    target_spec = runtime_target()
+    unpack_relative = (
+        target_spec.conda_unpack_relpath if target_spec
+        else Path("Scripts/conda-unpack.exe"))
+    unpack = target / unpack_relative
+    if target_spec:
+        prepare_runtime_tree(target, target_spec)
     if unpack.is_file():
         if progress_cb:
             progress_cb("激活 SadTalker runtime（可能需要数分钟）…", 0.98)
@@ -1016,7 +1097,7 @@ def _finish_runtime_install(
                 "conda-unpack 失败：" +
                 (proc.stderr or proc.stdout or "")[-800:])
     _runtime_version_path(data_dir).write_text(
-        RUNTIME_ASSET, encoding="utf-8")
+        _runtime_asset(), encoding="utf-8")
     if not runtime_files_ready(data_dir):
         _runtime_version_path(data_dir).unlink(missing_ok=True)
         raise RuntimeError("runtime 激活后文件不完整")
@@ -1100,10 +1181,13 @@ def run_setup(
             except Exception:
                 pass
 
-    _emit("检查 NVIDIA GPU…", 0.0)
-    gpu = gpu_status()
-    if not gpu["ok"]:
-        return {"ok": False, "message": gpu["reason"], **setup_status(data_dir)}
+    target = runtime_target()
+    device = accelerator_status(target)
+    _emit(
+        f"检查 {target.accelerator if target else 'runtime'} 运行环境…", 0.0)
+    if target is None or not device["ok"]:
+        return {
+            "ok": False, "message": device["reason"], **setup_status(data_dir)}
 
     # Runtime is deliberately separate from the ~1 GB model payload so either
     # can be resumed/repaired without re-downloading the other.
@@ -1130,7 +1214,11 @@ def run_setup(
         return {"ok": False, "message": "模型下载失败，请检查网络后重试",
                 **setup_status(data_dir)}
 
-    _emit("运行 SadTalker 实际推理验证（首次安装可能需要数分钟）…", 0.97)
+    _emit(
+        "运行 SadTalker 实际推理验证"
+        + ("（CPU 首次运行可能需要较长时间）…" if target.slow
+           else "（首次安装可能需要数分钟）…"),
+        0.97)
     _clear_smoke_cache()
     smoke_ok, reason = runtime_smoke(data_dir, deep=True)
     if not smoke_ok:

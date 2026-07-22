@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import re
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -23,6 +24,47 @@ logger = logging.getLogger(__name__)
 _UPLOADIMG_MAX = 1_000_000      # media/uploadimg hard limit (<1MB)
 _MATERIAL_IMG_MAX = 10_000_000  # add_material image limit (10MB)
 _MATERIAL_VIDEO_MAX = 10_000_000  # add_material video limit (10MB, MP4)
+
+_PUBLISH_STATUS_ERRORS = {
+    2: "原创校验失败",
+    3: "常规发布失败",
+    4: "平台审核不通过",
+    5: "发布成功后被用户删除",
+    6: "发布成功后被平台封禁",
+}
+
+
+def wait_for_publish(client: WeChatClient, publish_id: str, *,
+                     timeout: float = 300.0,
+                     poll_interval: float = 2.0) -> dict:
+    """Wait until WeChat's asynchronous free-publish task is terminal.
+
+    ``freepublish/submit`` only acknowledges that the task was queued.  A
+    publish is successful only after ``freepublish/get`` reports status 0.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        detail = client.freepublish_get(publish_id)
+        try:
+            status = int(detail["publish_status"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"微信发布状态响应无效（publish_id={publish_id}）：{detail}") from exc
+        if status == 0:
+            return detail
+        if status != 1:
+            reason = (detail.get("errmsg") or detail.get("message")
+                      or _PUBLISH_STATUS_ERRORS.get(status, "未知发布失败"))
+            fail_idx = detail.get("fail_idx")
+            suffix = f"，失败文章序号：{fail_idx}" if fail_idx is not None else ""
+            raise RuntimeError(
+                f"微信发布失败（状态 {status}：{reason}{suffix}，"
+                f"publish_id={publish_id}）")
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"微信发布等待超时（publish_id={publish_id}）。任务可能仍在微信处理中，"
+                "请稍后重试以继续查询，勿重复创建发布任务。")
+        time.sleep(poll_interval)
 
 
 def _absolutize_media(url: str) -> str:

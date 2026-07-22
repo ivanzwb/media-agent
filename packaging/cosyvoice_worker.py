@@ -53,12 +53,16 @@ class Engine:
         import torch
         from cosyvoice.cli.cosyvoice import CosyVoice2
 
-        if not torch.cuda.is_available():
+        requested = os.environ.get("MEDIA_AGENT_TORCH_DEVICE", "").lower()
+        if requested == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("CUDA unavailable in CosyVoice runtime")
+        self.device = "cuda" if torch.cuda.is_available() and requested != "cpu" \
+            else "cpu"
         _install_meta_patch()
         self.torch = torch
         self.model = CosyVoice2(
-            str(model_dir), load_jit=False, load_trt=False, fp16=True)
+            str(model_dir), load_jit=False, load_trt=False,
+            fp16=self.device == "cuda")
         self.whisper = None
 
     def transcribe(self, wav: str) -> str:
@@ -174,24 +178,31 @@ def smoke(model_dir: Path, deep: bool = False) -> int:
     from cosyvoice.cli.cosyvoice import CosyVoice2
 
     del onnxruntime, soundfile, whisper, CosyVoice2
-    if not torch.cuda.is_available():
+    requested = os.environ.get("MEDIA_AGENT_TORCH_DEVICE", "").lower()
+    if requested == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA unavailable in CosyVoice runtime")
+    device = "cuda" if torch.cuda.is_available() and requested != "cpu" \
+        else "cpu"
     synthesized = False
     if deep:
         engine = Engine(model_dir)
         sample = Path(__file__).resolve().parent / "cosyvoice-src" / "asset" / \
             "zero_shot_prompt.wav"
-        if sample.is_file():
-            with tempfile.TemporaryDirectory() as directory:
-                output = Path(directory) / "smoke.wav"
-                engine.synthesize({
-                    "text": "你好，这是声音合成运行验证。",
-                    "prompt_wav": str(sample),
-                    "prompt_text": "希望你以后能够做的比我还好呦。",
-                    "output": str(output),
-                })
-                synthesized = output.stat().st_size > 44
-    _emit({"ok": True, "gpu": torch.cuda.get_device_name(0), "deep": deep,
+        if not sample.is_file():
+            raise RuntimeError("CosyVoice runtime 缺少真实合成验证音频")
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "smoke.wav"
+            engine.synthesize({
+                "text": "你好，这是声音合成运行验证。",
+                "prompt_wav": str(sample),
+                "prompt_text": "希望你以后能够做的比我还好呦。",
+                "output": str(output),
+            })
+            synthesized = output.stat().st_size > 44
+        if not synthesized:
+            raise RuntimeError("CosyVoice 真实合成验证未生成有效音频")
+    device_name = torch.cuda.get_device_name(0) if device == "cuda" else "CPU"
+    _emit({"ok": True, "device": device_name, "deep": deep,
            "synthesized": synthesized})
     return 0
 
