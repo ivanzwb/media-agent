@@ -86,8 +86,10 @@ class LicenseManager:
             return
         # valid
         self.edition = str(payload.get("edition", "pro"))
+        # Merge with PRO_FEATURES so older activation codes (signed before
+        # new features were added) automatically grant the latest set.
         feats = payload.get("features") or list(F.PRO_FEATURES)
-        self.features = set(feats)
+        self.features = set(feats) | set(F.PRO_FEATURES)
         self.expires_at = exp
         self.key = str(payload.get("key", ""))
         self.reason = "已激活"
