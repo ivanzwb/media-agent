@@ -167,9 +167,7 @@ export default function Settings() {
 
                     if (provider === "cosyvoice") return (
                       <>
-                        <Form.Item name="tts_model" label="模型">
-                          <Input placeholder="模型名称或本地路径" />
-                        </Form.Item>
+                        <CosyVoiceSetup onSuccess={refetch} />
                         <Form.Item name="tts_voice" label="复刻声音">
                           <Select allowClear showSearch placeholder="选择声音库中的样本"
                             options={(data.voices || []).map((v) => ({ value: v.id, label: v.name || v.id }))} />
@@ -632,6 +630,119 @@ function CliTestButton({ form }: { form: any }) {
   }
 
   return <Button icon={<ThunderboltOutlined />} loading={loading} onClick={testCli}>检测</Button>;
+}
+
+type ManagedRuntimeStatus = {
+  ready: boolean;
+  gpu_ok: boolean;
+  gpu_name: string;
+  runtime_ok: boolean;
+  models_ok: boolean;
+  smoke_ok: boolean;
+  reason: string;
+  runtime_dir: string;
+  models_dir: string;
+};
+
+/** One-click managed CosyVoice runtime/model installation. */
+function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
+  const { message } = AntApp.useApp();
+  const qc = useQueryClient();
+  const [status, setStatus] = useState<ManagedRuntimeStatus | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [progress, setProgress] = useState<{ message: string; fraction: number } | null>(null);
+
+  const refresh = async () => {
+    const value = await getJson<ManagedRuntimeStatus>("/api/cosyvoice/status");
+    setStatus(value);
+    await qc.invalidateQueries({ queryKey: ["capabilities"] });
+  };
+  useEffect(() => { refresh().catch(() => {}); }, []);
+
+  async function install() {
+    setInstalling(true);
+    setProgress({ message: "准备安装…", fraction: 0 });
+    try {
+      const response = await fetch("/api/cosyvoice/setup", { method: "POST" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if ((response.headers.get("content-type") || "").includes("application/json")) {
+        const payload = await response.json();
+        if (!payload.ok) throw new Error(payload.message || "安装失败");
+        message.success(payload.message || "CosyVoice 已就绪");
+        await refresh(); onSuccess(); return;
+      }
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finished = false;
+      const handle = async (block: string) => {
+        const event = block.split("\n").find((line) => line.startsWith("event:"))?.slice(6).trim();
+        const raw = block.split("\n").filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart()).join("\n");
+        if (!event || !raw || event === "heartbeat") return;
+        const payload = JSON.parse(raw);
+        if (event === "progress") setProgress(payload);
+        if (event === "done") {
+          finished = true;
+          if (!payload.ok) throw new Error(payload.message || "安装失败");
+          message.success(payload.message || "CosyVoice 安装完成");
+          await refresh(); onSuccess();
+        }
+      };
+      while (!finished) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, "\n");
+        let boundary: number;
+        while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+          const block = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          await handle(block);
+          if (finished) break;
+        }
+        if (done) break;
+      }
+      if (!finished) throw new Error("安装连接中断，请重试（已下载内容会续传）");
+    } catch (error: any) {
+      message.error("CosyVoice 安装失败：" + (error?.message || error));
+    } finally {
+      setInstalling(false);
+      setProgress(null);
+    }
+  }
+
+  return (
+    <Card size="small" title="CosyVoice Runtime 与模型" style={{ marginBottom: 16 }}
+      extra={status && <Tag color={status.ready ? "green" : "default"}>{status.ready ? "已就绪" : "未就绪"}</Tag>}>
+      {installing && progress ? (
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Text>{progress.message}</Text>
+          <Progress percent={Math.max(1, Math.round(Math.max(0, progress.fraction) * 100))} status="active" />
+        </Space>
+      ) : (
+        <Space direction="vertical">
+          {status && <Space wrap>
+            <Tag color={status.gpu_ok ? "green" : "red"}>NVIDIA GPU</Tag>
+            <Tag color={status.runtime_ok ? "green" : "default"}>CUDA Runtime</Tag>
+            <Tag color={status.models_ok ? "green" : "default"}>CosyVoice2 模型</Tag>
+            <Tag color={status.smoke_ok ? "green" : "default"}>模型加载验证</Tag>
+          </Space>}
+          <Text type="secondary">
+            {status?.ready
+              ? `CosyVoice 已通过运行验证${status.gpu_name ? `（${status.gpu_name}）` : ""}。`
+              : "下载安装独立 CUDA Runtime 与 CosyVoice2 模型；无需配置 Python、源码或模型路径，支持断点续传。"}
+          </Text>
+          {!status?.ready && status?.reason && <Text type="danger">{status.reason}</Text>}
+          <Space>
+            {!status?.ready && <Button type="primary" icon={<DownloadOutlined />}
+              disabled={!!status && !status.gpu_ok} onClick={install}>
+              下载安装 Runtime 与模型
+            </Button>}
+            <Button icon={<ReloadOutlined />} onClick={() => refresh().catch(() => {})}>刷新状态</Button>
+          </Space>
+        </Space>
+      )}
+    </Card>
+  );
 }
 
 /** One-click SadTalker setup: status display + download with SSE progress. */

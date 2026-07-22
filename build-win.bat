@@ -43,17 +43,6 @@ if %errorlevel% neq 0 (
     pause & exit /b 1
 )
 
-:: Download embeddable Python for CosyVoice sidecar
-echo Downloading embeddable Python + get-pip.py...
-if not exist "packaging" mkdir packaging
-if not exist "packaging\python-embed-win64.zip" (
-    powershell -Command "Invoke-WebRequest -Uri 'https://mirrors.tuna.tsinghua.edu.cn/python/3.11.9/python-3.11.9-embed-amd64.zip' -OutFile 'packaging\python-embed-win64.zip'"
-)
-if not exist "packaging\get-pip.py" (
-    powershell -Command "Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile 'packaging\get-pip.py'"
-)
-echo Packaging files ready
-
 :: Build
 echo Building...
 %PY% -m PyInstaller --onedir --noconfirm ^
@@ -62,8 +51,6 @@ echo Building...
     --add-data "frontend/dist;frontend/dist" ^
     --add-data "app/web/static;app/web/static" ^
     --add-data "app/licensing/public_key.b64;app/licensing" ^
-    --add-data "packaging/python-embed-win64.zip;packaging" ^
-    --add-data "packaging/get-pip.py;packaging" ^
     --exclude-module "torch" ^
     --exclude-module "zstandard" ^
     --exclude-module "torchvision" ^

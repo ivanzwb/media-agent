@@ -26,7 +26,7 @@
 ### 讲解视频
 - **脚本 + 配音**：从草稿自动生成口播分镜脚本（LLM）→ 逐段 TTS 配音；分镜可在草稿页**编辑**（旁白/画面/重选背景素材、增删/排序），并**只对改动的分镜重配**。
 - **合成**：ffmpeg 合成「图片轮播 / 原视频片段 + 中文字幕 + 配音」的 mp4；中文字幕用 PIL 生成画面帧/叠层（规避 ffmpeg 中文字体问题）；画面适配可选 `fit`（完整+黑边）/`crop`/`blur`。同一视频被连续分镜引用时**续播**、放完**冻结最后一帧**。
-- **TTS**：默认内置 `kitten`（中文走 edge-tts，免 key）；可选 **本地声音复刻 `cosyvoice`**（CosyVoice2-0.5B，上传干声本地克隆音色，最佳中文 TTS 自然度，需 Python < 3.13 + NVIDIA GPU）；也支持 OpenAI 兼容 TTS。
+- **TTS**：默认内置 `kitten`（中文走 edge-tts，免 key）；可选 **本地声音复刻 `cosyvoice`**（CosyVoice2-0.5B，设置内一键安装托管 CUDA Runtime 与模型，上传干声即可克隆音色）；也支持 OpenAI 兼容 TTS。
 - **更像人的语气**：edge-tts 可调 **语速 / 音调**（`tts_rate` / `tts_pitch`）；CosyVoice 可给 **语气/情感指令**（`tts_instruct`，如「用亲切自然的语气」）。多分镜配音**并行**合成，速度更快。
 - **数字人主播（可选）**：在讲解视频中叠加一个口播主播——**画中画（角落）**或**全屏主播**，可按分镜切换。口型同步使用独立的 **SadTalker CUDA Runtime**；在设置中一键断点续传 Runtime 与模型，不需要克隆源码或配置 Python。不可用时自动回退为**静态头像**叠加。
 - 合成需本地 **ffmpeg**；原视频/HLS 下载需 **yt-dlp**；数字人口型同步需 **SadTalker**（可选）。
@@ -99,7 +99,7 @@ macOS:    media-agent/media-agent serve
 |---|---|---|
 | playwright 库 | ✅ 已内置 | 需额外下载 Chromium（脚本一键完成） |
 | ffmpeg | ❌ 需单独装 | 视频合成必需，[下载](https://ffmpeg.org)后加入 PATH |
-| CosyVoice | ✅ 嵌入式 Python 侧边部署 | 脚本自动部署嵌入式 Python + 安装 PyTorch + 下载模型，一键完成 |
+| CosyVoice | ✅ 设置内一键安装（Windows/NVIDIA） | 自动断点续传独立 CUDA Runtime 与 CosyVoice2 模型，无需 Python、源码或模型路径 |
 | SadTalker | ✅ 设置内一键安装（可选） | 数字人主播口型同步用；自动检测 NVIDIA GPU，并断点续传托管 CUDA Runtime 与模型，无需源码目录或 Python 配置 |
 
 ### 本地构建
@@ -112,6 +112,22 @@ macOS:    media-agent/media-agent serve
 开发时也可用 `start.bat` / `start.sh` 一键构建前端并启动服务（见「一键启动」）。
 
 CI 自动构建：推送带 `v*` 的 tag 即触发 GitHub Actions，同时输出 Win + Mac 两版到 Release。
+
+Windows 本地开发需要 SadTalker 时，运行：
+
+```powershell
+.\prepare-sadtalker-dev.bat
+```
+
+脚本与 CI 共用同一依赖清单和打包器，预先构建 CUDA Runtime、生成发布版相同的分片/manifest，并安装到 `data/runtimes/sadtalker/`；模型下载到 `data/models/sadtalker/`。可用 `-Force` 重建，或通过 `-Proxy http://127.0.0.1:7890` 指定下载代理。
+
+Windows 本地开发需要 CosyVoice 时，运行：
+
+```powershell
+.\prepare-cosyvoice-dev.bat
+```
+
+它与 CosyVoice Runtime CI 共用固定依赖清单、源码提交和打包器，生成发布兼容的分片/manifest，安装到 `data/runtimes/cosyvoice/`，并把模型预下载到 `data/models/cosyvoice/CosyVoice2-0.5B/`。
 
 ## 配置
 

@@ -15,7 +15,8 @@ def test_model_urls_use_official_release_assets():
     )
 
 
-def test_models_ready_rejects_partial_files(tmp_path: Path):
+def test_models_ready_rejects_partial_files(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(st, "REQUIRED_HASHES", {})
     model_dir = tmp_path / "models" / "sadtalker"
     for rel, expected in st.REQUIRED_FILES:
         p = model_dir / rel
@@ -61,6 +62,7 @@ def test_run_setup_threads_mirror_to_downloader(tmp_path: Path, monkeypatch):
 
 def test_status_does_not_report_ready_for_models_only(tmp_path: Path,
                                                        monkeypatch):
+    monkeypatch.setattr(st, "REQUIRED_HASHES", {})
     model_dir = tmp_path / "models" / "sadtalker"
     for rel, expected in st.REQUIRED_FILES:
         path = model_dir / rel
@@ -97,6 +99,7 @@ def test_managed_runtime_resolution_never_uses_external_checkout(tmp_path: Path)
 
 def test_status_requires_successful_real_inference_marker(tmp_path: Path,
                                                           monkeypatch):
+    monkeypatch.setattr(st, "REQUIRED_HASHES", {})
     source = st.runtime_source(tmp_path)
     source.mkdir(parents=True)
     (source / "inference.py").write_text("", encoding="utf-8")
@@ -122,6 +125,31 @@ def test_status_requires_successful_real_inference_marker(tmp_path: Path,
     assert status["ready"] is True
 
 
+def test_models_ready_rejects_wrong_hash_at_exact_size(
+        tmp_path: Path, monkeypatch):
+    rel = "checkpoints/model.bin"
+    payload = b"bad"
+    path = st._models_dir(tmp_path) / rel
+    path.parent.mkdir(parents=True)
+    path.write_bytes(payload)
+    monkeypatch.setattr(st, "REQUIRED_FILES", [(rel, len(payload))])
+    monkeypatch.setattr(st, "REQUIRED_HASHES", {
+        rel: hashlib.sha256(b"good").hexdigest(),
+    })
+
+    assert not st.models_ready(tmp_path)
+
+
+def test_model_urls_prefer_author_mirror_then_official():
+    urls = st._model_urls("checkpoints/model.bin", mirror=True)
+
+    assert urls[0] == (
+        "https://hf-mirror.com/vinthony/SadTalker-V002rc/"
+        "resolve/main/model.bin"
+    )
+    assert st._model_url("checkpoints/model.bin", mirror=False) in urls
+
+
 def test_safe_extract_rejects_path_traversal(tmp_path: Path):
     archive = tmp_path / "runtime.tar.gz"
     with tarfile.open(archive, "w:gz") as bundle:
@@ -136,6 +164,79 @@ def test_safe_extract_rejects_path_traversal(tmp_path: Path):
         assert "不安全路径" in str(exc)
     else:
         raise AssertionError("path traversal archive was accepted")
+
+
+def test_local_archive_installs_to_release_managed_layout(tmp_path: Path):
+    payload = tmp_path / "payload"
+    (payload / "sadtalker-src").mkdir(parents=True)
+    (payload / "python.exe").write_bytes(b"python")
+    (payload / "sadtalker-src" / "inference.py").write_text(
+        "", encoding="utf-8")
+    archive = tmp_path / st.RUNTIME_ASSET
+    with tarfile.open(archive, "w:gz") as bundle:
+        bundle.add(payload / "python.exe", arcname="python.exe")
+        bundle.add(payload / "sadtalker-src",
+                   arcname="sadtalker-src")
+
+    data_dir = tmp_path / "data"
+    st.install_runtime_archive(data_dir, archive)
+
+    assert st.runtime_files_ready(data_dir)
+    assert st.resolve_sadtalker_python(data_dir) == str(
+        data_dir / "runtimes" / "sadtalker" / "python.exe")
+    assert st.resolve_sadtalker_dir(data_dir) == str(
+        data_dir / "runtimes" / "sadtalker" / "sadtalker-src")
+    assert archive.exists()  # local build artifact is reusable
+
+
+def test_local_archive_recovers_already_extracted_runtime(tmp_path: Path):
+    data_dir = tmp_path / "data"
+    target = st.runtime_dir(data_dir)
+    (target / "sadtalker-src").mkdir(parents=True)
+    (target / "python.exe").write_bytes(b"python")
+    (target / "sadtalker-src" / "inference.py").write_text(
+        "", encoding="utf-8")
+    archive = tmp_path / st.RUNTIME_ASSET
+    archive.write_bytes(b"already extracted")
+    messages = []
+
+    st.install_runtime_archive(
+        data_dir, archive,
+        progress_cb=lambda message, _fraction: messages.append(message))
+
+    assert st.runtime_files_ready(data_dir)
+    assert any("继续完成激活" in message for message in messages)
+
+
+def test_runtime_marker_not_written_when_conda_unpack_fails(
+        tmp_path: Path, monkeypatch):
+    data_dir = tmp_path / "data"
+    target = st.runtime_dir(data_dir)
+    (target / "sadtalker-src").mkdir(parents=True)
+    (target / "Scripts").mkdir()
+    (target / "python.exe").write_bytes(b"python")
+    (target / "sadtalker-src" / "inference.py").write_text(
+        "", encoding="utf-8")
+    (target / "Scripts" / "conda-unpack.exe").write_bytes(b"unpack")
+    archive = tmp_path / st.RUNTIME_ASSET
+    archive.write_bytes(b"already extracted")
+
+    class Result:
+        returncode = 1
+        stderr = "relocation failed"
+        stdout = ""
+
+    monkeypatch.setattr(st.subprocess, "run", lambda *_a, **_k: Result())
+
+    try:
+        st.install_runtime_archive(data_dir, archive)
+    except RuntimeError as exc:
+        assert "relocation failed" in str(exc)
+    else:
+        raise AssertionError("failed conda-unpack was accepted")
+
+    assert not st._runtime_version_path(data_dir).exists()
+    assert not st.runtime_files_ready(data_dir)
 
 
 def test_runtime_part_download_resumes_with_http_range(tmp_path: Path):

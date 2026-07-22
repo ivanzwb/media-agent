@@ -1633,7 +1633,8 @@ def create_app(config: Config | None = None,
         if provider == "cosyvoice":
             sp = voice_sample_path(config, voice)
             return get_tts_provider("cosyvoice", voice=str(sp) if sp else None,
-                                    model=rc.tts_model, instruct=rc.tts_instruct)
+                                    instruct=rc.tts_instruct,
+                                    data_dir=config.data_dir)
         return get_tts_provider(
             provider, base_url=rc.tts_api_base,
             api_key=rc.tts_api_key, model=rc.tts_model, voice=voice,
@@ -3688,6 +3689,76 @@ def create_app(config: Config | None = None,
             "version": version or "(版本信息不可用)",
             "label": label,
         }
+
+    # ── Managed optional runtimes ───────────────────────────────────────────
+    @app.get("/api/capabilities")
+    def api_capabilities():
+        from app.capabilities import get_capabilities
+        return get_capabilities(config.data_dir)
+
+    cosyvoice_install_lock = threading.Lock()
+
+    @app.get("/api/cosyvoice/status")
+    def api_cosyvoice_status():
+        from app.cosyvoice_install import setup_status
+        return setup_status(config.data_dir)
+
+    @app.post("/api/cosyvoice/setup")
+    def api_cosyvoice_setup():
+        """Install the managed runtime/model payload with SSE progress."""
+        import json as _json
+        import queue
+        import threading as _threading
+        from starlette.responses import StreamingResponse
+        from app.cosyvoice_install import run_setup, setup_status
+
+        current = setup_status(config.data_dir)
+        if current["ready"]:
+            return {**current, "ok": True,
+                    "message": "CosyVoice runtime 与模型已就绪"}
+        if not cosyvoice_install_lock.acquire(blocking=False):
+            return {**current, "ok": False, "installing": True,
+                    "message": "CosyVoice 正在安装，请等待当前任务完成"}
+
+        evt_q: queue.Queue = queue.Queue()
+        setup_config = Config.load(store=get_store())
+
+        def on_progress(message: str, fraction: float) -> None:
+            evt_q.put({"event": "progress", "data": _json.dumps(
+                {"message": message, "fraction": round(fraction, 3)},
+                ensure_ascii=False)})
+
+        cancel = _threading.Event()
+
+        def worker() -> None:
+            try:
+                result = run_setup(
+                    config.data_dir, proxy=setup_config.fetch_proxy,
+                    progress_cb=on_progress, cancel_event=cancel)
+                evt_q.put({"event": "done", "data": _json.dumps(
+                    result, ensure_ascii=False)})
+            except Exception as exc:
+                evt_q.put({"event": "done", "data": _json.dumps(
+                    {"ok": False, "message": str(exc)}, ensure_ascii=False)})
+            finally:
+                cosyvoice_install_lock.release()
+
+        _threading.Thread(target=worker, daemon=True).start()
+
+        def stream():
+            while True:
+                try:
+                    item = evt_q.get(timeout=.3)
+                except queue.Empty:
+                    yield "event: heartbeat\ndata: {}\n\n"
+                    continue
+                yield f"event: {item['event']}\ndata: {item['data']}\n\n"
+                if item["event"] == "done":
+                    break
+
+        return StreamingResponse(
+            stream(), media_type="text/event-stream",
+            headers={"X-Accel-Buffering": "no"})
 
     # ── SadTalker one-click setup ───────────────────────────────────────────
     sadtalker_install_lock = threading.Lock()

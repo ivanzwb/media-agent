@@ -12,7 +12,7 @@ echo  This script auto-detects and installs missing optional components.
 echo.
 echo  [1] Playwright + Chromium (for JS-rendered page scraping)
 echo  [2] ffmpeg (video compositing — install manually)
-echo  [3] CosyVoice (local voice cloning via embedded Python)
+echo  [3] CosyVoice (managed runtime, install from Settings)
 echo  [4] SadTalker (digital-human presenter lip-sync — optional, GPU)
 echo.
 echo ============================================
@@ -92,9 +92,13 @@ if %errorlevel% equ 0 (
 echo.
 goto :cosyvoice
 
-:: ===== 3. CosyVoice (embedded Python sidecar) =======================
+:: ===== 3. CosyVoice (managed runtime) ===============================
 :cosyvoice
 echo [3/4] CosyVoice (local voice cloning)...
+echo   CosyVoice now uses a managed CUDA runtime. Open:
+echo   Settings -^> Voice and Video -^> CosyVoice Runtime and Models
+echo   No Python, source checkout, or model path configuration is needed.
+goto :cosyvoice_end
 
 :: --- Skip if already set up -----------------------------------------
 if exist "%COSYVOICE_DIR%python.exe" (

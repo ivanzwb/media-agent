@@ -39,3 +39,5 @@ packaging/python-embed-win64.zip
 # SadTalker (local dev clone + build artifact)
 SadTalker/
 sadtalker_src/
+.runtime-build/
+prepare-*-dev.log

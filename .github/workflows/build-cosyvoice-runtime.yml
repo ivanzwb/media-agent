@@ -1,0 +1,68 @@
+name: Build CosyVoice Runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      runtime_tag:
+        description: Release tag used for the downloadable runtime
+        required: true
+        default: cosyvoice-runtime-v1
+
+jobs:
+  windows-cuda:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: "3.10"
+          miniconda-version: "py310_24.7.1-0"
+          auto-activate-base: false
+          activate-environment: cosyvoice
+
+      - name: Install shared runtime dependencies
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade "pip<25" "setuptools<81" wheel
+          python -m pip install torch==2.3.1 torchaudio==2.3.1 \
+            --index-url https://download.pytorch.org/whl/cu121
+          python -m pip install \
+            -r packaging/cosyvoice-runtime-requirements.txt
+
+      - name: Vendor pinned CosyVoice source
+        run: |
+          set -euxo pipefail
+          git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git \
+            "$CONDA_PREFIX/cosyvoice-src"
+          git -C "$CONDA_PREFIX/cosyvoice-src" checkout \
+            074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc
+          git -C "$CONDA_PREFIX/cosyvoice-src" submodule update --init --recursive
+          rm -rf "$CONDA_PREFIX/cosyvoice-src/.git"
+          SP=$(python -c "import site; print(site.getsitepackages()[0])")
+          printf '%s\n' "$CONDA_PREFIX/cosyvoice-src" > "$SP/cosyvoice-source.pth"
+          python -c "import torch, onnxruntime, whisper; from cosyvoice.cli.cosyvoice import CosyVoice2; assert torch.version.cuda"
+
+      - name: Pack relocatable runtime
+        run: |
+          set -euxo pipefail
+          python packaging/pack_cosyvoice_runtime.py \
+            --prefix "$CONDA_PREFIX" --output-dir .
+
+      - name: Publish runtime
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          RUNTIME_TAG: ${{ inputs.runtime_tag }}
+        run: |
+          set -euxo pipefail
+          gh release create "$RUNTIME_TAG" --repo ivanzwb/release \
+            --title "CosyVoice Windows CUDA Runtime" \
+            --notes "Pinned Windows x64 CosyVoice runtime for media-agent. NVIDIA CUDA 12.1; CosyVoice2 model downloads separately." \
+            2>/dev/null || true
+          gh release upload "$RUNTIME_TAG" \
+            cosyvoice-runtime-win64-cuda121.manifest.json \
+            cosyvoice-runtime-win64-cuda121.tar.gz.part* \
+            --repo ivanzwb/release --clobber

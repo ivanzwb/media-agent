@@ -50,6 +50,16 @@ REQUIRED_FILES: list[tuple[str, int | None]] = [
     ("checkpoints/SadTalker_V0.0.2_256.safetensors", 725_066_984),
 ]
 
+REQUIRED_HASHES = {
+    "checkpoints/mapping_00109-model.pth.tar":
+        "84a8642468a3fcfdd9ab6be955267043116c2bec2284686a5262f1eaf017f64c",
+    "checkpoints/mapping_00229-model.pth.tar":
+        "62a1e06006cc963220f6477438518ed86e9788226c62ae382ddc42fbcefb83f1",
+    "checkpoints/SadTalker_V0.0.2_256.safetensors":
+        "c211f5d6de003516bf1bbda9f47049a4c9c99133b1ab565c6961e5af16477bff",
+}
+_MODEL_HASH_CACHE: dict[tuple[str, int, int, str], bool] = {}
+
 OPTIONAL_FILES: list[tuple[str, int | None]] = [
     ("gfpgan/weights/GFPGANv1.4.pth", None),
     ("gfpgan/weights/detection_Resnet50_Final.pth", None),
@@ -127,18 +137,36 @@ def _save_progress(data_dir: Path, prog: dict[str, int]) -> None:
 
 
 def models_ready(data_dir: Path) -> bool:
-    """True if every required model file has its exact expected size.
+    """True if every required model file has its exact size and checksum.
 
     A non-empty check is unsafe for resumable downloads: a truncated checkpoint
     (or even a tiny HTTP error body from the old, invalid URL) was previously
     treated as fully installed.
     """
     d = _models_dir(data_dir)
-    return all(
-        (d / f).is_file()
-        and (d / f).stat().st_size >= (expected or 1)
-        for f, expected in REQUIRED_FILES
-    )
+    return all(_model_file_valid(d / rel, rel, expected)
+               for rel, expected in REQUIRED_FILES)
+
+
+def _model_file_valid(path: Path, rel: str, expected: int | None) -> bool:
+    try:
+        stat = path.stat()
+    except OSError:
+        return False
+    if expected is not None and stat.st_size != expected:
+        return False
+    if expected is None and stat.st_size <= 0:
+        return False
+    expected_hash = REQUIRED_HASHES.get(rel)
+    if not expected_hash:
+        return True
+    key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns, expected_hash)
+    cached = _MODEL_HASH_CACHE.get(key)
+    if cached is not None:
+        return cached
+    valid = _sha256(path).lower() == expected_hash.lower()
+    _MODEL_HASH_CACHE[key] = valid
+    return valid
 
 
 def _nvidia_smi() -> str | None:
@@ -230,6 +258,7 @@ def runtime_smoke(
     data_dir: Path, *, require_gpu: bool = True, deep: bool = False,
 ) -> tuple[bool, str]:
     """Verify imports/CUDA and optionally complete one real inference."""
+    data_dir = Path(data_dir).resolve()
     if not runtime_files_ready(data_dir):
         return False, "SadTalker runtime 文件不完整"
     if deep and _deep_smoke_ready(data_dir):
@@ -337,7 +366,12 @@ def setup_status(data_dir: Path) -> dict[str, Any]:
             "exists": exists,
             "size": size,
             "expected": expected,
-            "ok": exists and (expected is None or size >= expected),
+            "ok": (
+                _model_file_valid(fp, f, expected)
+                if (f, expected) in REQUIRED_FILES
+                else exists and (expected is None or size > 0)
+            ),
+            "sha256": REQUIRED_HASHES.get(f),
         })
     return {
         "ready": ready,
@@ -368,6 +402,161 @@ def _model_url(path: str, mirror: bool = True) -> str:
     return f"{_RELEASE_BASE}/{Path(path).name}"
 
 
+def _model_urls(path: str, mirror: bool = True) -> list[str]:
+    official = _model_url(path, mirror=False)
+    urls: list[str] = []
+    configured = os.environ.get("MEDIA_AGENT_SADTALKER_MODEL_MIRROR", "").strip()
+    if configured:
+        urls.append(configured.format(
+            filename=Path(path).name, url=official, path=path))
+    elif mirror:
+        # Maintained by SadTalker's author and substantially faster in China.
+        urls.append(
+            "https://hf-mirror.com/vinthony/SadTalker-V002rc/"
+            f"resolve/main/{Path(path).name}"
+        )
+    urls.append(official)
+    if mirror:
+        urls.append(f"https://ghproxy.net/{official}")
+    return list(dict.fromkeys(urls))
+
+
+def _download_models_with_curl(
+    curl: str,
+    data_dir: Path,
+    *,
+    mirror: bool,
+    proxy: str | None,
+    progress_cb: Callable[[str, float], None] | None,
+    cancel_event: threading.Event | None,
+) -> bool:
+    dest = _models_dir(data_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    prog = _load_progress(data_dir)
+    total_bytes = sum(size for _, size in REQUIRED_FILES if size)
+    completed = 0
+
+    def emit(message: str, fraction: float) -> None:
+        if progress_cb:
+            try:
+                progress_cb(message, fraction)
+            except Exception:
+                pass
+
+    emit("使用 curl 下载 SadTalker 模型（支持断点续传）…", 0.0)
+    for rel, expected in REQUIRED_FILES:
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        current = target.stat().st_size if target.is_file() else 0
+        if _model_file_valid(target, rel, expected):
+            completed += expected
+            continue
+        if expected and current == expected:
+            emit(f"{Path(rel).name} 校验失败，重新下载…",
+                 completed / max(total_bytes, 1))
+            target.unlink()
+            current = 0
+        if expected and current > expected:
+            target.unlink()
+            current = 0
+
+        urls = _model_urls(rel, mirror=mirror)
+        official_url = _model_url(rel, mirror=False)
+        success = False
+        for attempt in range(1, 9):
+            if cancel_event and cancel_event.is_set():
+                emit("下载已取消", -1)
+                return False
+            current = target.stat().st_size if target.is_file() else 0
+            url = urls[(attempt - 1) % len(urls)]
+            route = "官方源" if url == official_url else "备用镜像"
+            emit(
+                f"{route}下载 {Path(rel).name}"
+                f"（第 {attempt}/8 次，从 {current / 1048576:.1f} MB 续传）…",
+                completed / max(total_bytes, 1),
+            )
+            command = [
+                curl, "--location", "--fail", "--silent", "--show-error",
+                "--connect-timeout", "15", "--speed-limit", "1024",
+                "--speed-time", "60", "--continue-at", "-",
+                "--output", str(target), url,
+            ]
+            if proxy:
+                command[1:1] = ["--proxy", proxy]
+            creationflags = (
+                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if os.name == "nt" else 0
+            )
+            process = subprocess.Popen(
+                command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                text=True, creationflags=creationflags)
+            previous_size = current
+            previous_at = time.monotonic()
+            while process.poll() is None:
+                if cancel_event and cancel_event.is_set():
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    emit("下载已取消", -1)
+                    return False
+                time.sleep(1)
+                size = target.stat().st_size if target.is_file() else 0
+                now = time.monotonic()
+                speed = (size - previous_size) / max(now - previous_at, 0.001)
+                emit(
+                    f"下载 {Path(rel).name}："
+                    f"{size / 1048576:.1f}/{expected / 1048576:.1f} MB · "
+                    f"{max(speed, 0) / 1048576:.2f} MB/s",
+                    min((completed + size) / max(total_bytes, 1), 0.99),
+                )
+                previous_size = size
+                previous_at = now
+
+            _stdout, stderr = process.communicate()
+            current = target.stat().st_size if target.is_file() else 0
+            prog[rel] = current
+            _save_progress(data_dir, prog)
+            if (process.returncode == 0
+                    and _model_file_valid(target, rel, expected)):
+                emit(
+                    f"{Path(rel).name} 下载完成"
+                    f"（{current / 1048576:.1f} MB）",
+                    min((completed + current) / max(total_bytes, 1), 0.99),
+                )
+                success = True
+                break
+
+            reason = (stderr or "").strip().splitlines()
+            reason_text = reason[-1] if reason else (
+                f"curl 退出码 {process.returncode}，文件大小 "
+                f"{current}/{expected}")
+            if process.returncode == 0 and current == expected:
+                reason_text = "SHA-256 校验失败"
+                target.unlink(missing_ok=True)
+                current = 0
+            logger.warning(
+                "Model download failed for %s via %s (attempt %d/8): %s",
+                rel, route, attempt, reason_text)
+            if attempt < 8:
+                emit(
+                    f"{route}失败：{reason_text}；"
+                    f"将从 {current / 1048576:.1f} MB 自动续传…",
+                    completed / max(total_bytes, 1),
+                )
+                time.sleep(min(attempt, 5))
+            else:
+                emit(f"下载 {rel} 失败：{reason_text}", -1)
+        if not success:
+            return False
+        completed += expected
+
+    _progress_path(data_dir).unlink(missing_ok=True)
+    emit("数字人模型安装完成！", 1.0)
+    return models_ready(data_dir)
+
+
 def download_models(
     data_dir: Path,
     *,
@@ -388,6 +577,12 @@ def download_models(
 
     Returns True when all *required* files are present.
     """
+    curl = shutil.which("curl")
+    if curl:
+        return _download_models_with_curl(
+            curl, data_dir, mirror=mirror, proxy=proxy,
+            progress_cb=progress_cb, cancel_event=cancel_event)
+
     dest = _models_dir(data_dir)
     dest.mkdir(parents=True, exist_ok=True)
     prog = _load_progress(data_dir)
@@ -439,9 +634,14 @@ def download_models(
                     fp.unlink()
                     existing = 0
                     prog.pop(rel, None)
-                elif expected and fp.stat().st_size >= expected:
+                elif _model_file_valid(fp, rel, expected):
                     downloaded_so_far += expected
                     continue
+                elif expected and fp.stat().st_size == expected:
+                    _emit(f"{Path(rel).name} 校验失败，重新下载…",
+                          downloaded_so_far / max(total_bytes, 1))
+                    fp.unlink()
+                    existing = 0
                 else:
                     # Partial file — keep existing offset for resume
                     existing = fp.stat().st_size
@@ -739,6 +939,108 @@ def _safe_extract(archive: Path, target: Path) -> None:
         bundle.extractall(target)
 
 
+def install_runtime_archive(
+    data_dir: Path,
+    archive: Path,
+    *,
+    progress_cb: Callable[[str, float], None] | None = None,
+    cleanup_archive: bool = False,
+) -> None:
+    """Install a locally built archive into the same managed release layout."""
+    archive = Path(archive).resolve()
+    if not archive.is_file():
+        raise FileNotFoundError(f"SadTalker runtime archive 不存在：{archive}")
+    target = runtime_dir(data_dir)
+    staging = target.with_name(target.name + ".installing")
+    backup = target.with_name(target.name + ".previous")
+    if _runtime_payload_ready(target):
+        if progress_cb:
+            progress_cb("检测到已解压 runtime，继续完成激活…", 0.98)
+        _finish_runtime_install(data_dir, target, progress_cb)
+        return
+
+    if not _runtime_payload_ready(staging):
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=True)
+        if progress_cb:
+            progress_cb("解压 SadTalker CUDA runtime（可能需要数分钟）…", 0.90)
+        _safe_extract(archive, staging)
+    if not _runtime_payload_ready(staging):
+        shutil.rmtree(staging, ignore_errors=True)
+        raise RuntimeError("runtime 压缩包无效：缺少 python.exe 或 inference.py")
+    if progress_cb:
+        progress_cb("runtime 解压完成，切换到正式目录…", 0.97)
+
+    shutil.rmtree(backup, ignore_errors=True)
+    moved_target = False
+    try:
+        if target.exists():
+            _replace_with_retry(target, backup)
+            moved_target = True
+        _replace_with_retry(staging, target)
+        _finish_runtime_install(data_dir, target, progress_cb)
+        shutil.rmtree(backup, ignore_errors=True)
+        if cleanup_archive:
+            archive.unlink(missing_ok=True)
+            for part in archive.parent.glob(f"{RUNTIME_ASSET}.part*"):
+                part.unlink(missing_ok=True)
+        _clear_smoke_cache()
+    except Exception:
+        shutil.rmtree(target, ignore_errors=True)
+        if moved_target and backup.exists():
+            _replace_with_retry(backup, target)
+        raise
+
+
+def _runtime_payload_ready(path: Path) -> bool:
+    return (
+        (path / "python.exe").is_file()
+        and (path / "sadtalker-src" / "inference.py").is_file()
+    )
+
+
+def _finish_runtime_install(
+    data_dir: Path,
+    target: Path,
+    progress_cb: Callable[[str, float], None] | None,
+) -> None:
+    unpack = target / "Scripts" / "conda-unpack.exe"
+    if unpack.is_file():
+        if progress_cb:
+            progress_cb("激活 SadTalker runtime（可能需要数分钟）…", 0.98)
+        proc = subprocess.run(
+            [str(unpack)], cwd=str(target), capture_output=True, text=True,
+            timeout=900, check=False)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "conda-unpack 失败：" +
+                (proc.stderr or proc.stdout or "")[-800:])
+    _runtime_version_path(data_dir).write_text(
+        RUNTIME_ASSET, encoding="utf-8")
+    if not runtime_files_ready(data_dir):
+        _runtime_version_path(data_dir).unlink(missing_ok=True)
+        raise RuntimeError("runtime 激活后文件不完整")
+    if progress_cb:
+        progress_cb("SadTalker runtime 已激活", 1.0)
+    _clear_smoke_cache()
+
+
+def _replace_with_retry(source: Path, target: Path) -> None:
+    """Rename a runtime directory despite short-lived Windows AV locks."""
+    last_error: OSError | None = None
+    for attempt in range(8):
+        try:
+            source.replace(target)
+            return
+        except OSError as exc:
+            last_error = exc
+            if attempt == 7:
+                break
+            time.sleep(0.25 * (2 ** attempt))
+    assert last_error is not None
+    raise last_error
+
+
 def _install_runtime(
     data_dir: Path,
     *,
@@ -751,45 +1053,8 @@ def _install_runtime(
     archive = _download_runtime(
         data_dir, proxy=proxy, progress_cb=progress_cb,
         cancel_event=cancel_event)
-    target = runtime_dir(data_dir)
-    staging = target.with_name(target.name + ".installing")
-    backup = target.with_name(target.name + ".previous")
-    shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir(parents=True, exist_ok=True)
-    if progress_cb:
-        progress_cb("解压 SadTalker CUDA runtime…", 0.99)
-    _safe_extract(archive, staging)
-    if not (staging / "python.exe").is_file():
-        shutil.rmtree(staging, ignore_errors=True)
-        raise RuntimeError("runtime 压缩包无效：缺少 python.exe")
-    shutil.rmtree(backup, ignore_errors=True)
-    if target.exists():
-        target.replace(backup)
-    staging.replace(target)
-    try:
-        _runtime_version_path(data_dir).write_text(
-            RUNTIME_ASSET, encoding="utf-8")
-        unpack = target / "Scripts" / "conda-unpack.exe"
-        if unpack.is_file():
-            proc = subprocess.run(
-                [str(unpack)], cwd=str(target), capture_output=True, text=True,
-                timeout=600, check=False)
-            if proc.returncode != 0:
-                raise RuntimeError(
-                    "conda-unpack 失败：" +
-                    (proc.stderr or proc.stdout or "")[-800:])
-        if not runtime_files_ready(data_dir):
-            raise RuntimeError("runtime 解压后文件不完整")
-        shutil.rmtree(backup, ignore_errors=True)
-        archive.unlink(missing_ok=True)
-        for part in archive.parent.glob(f"{RUNTIME_ASSET}.part*"):
-            part.unlink(missing_ok=True)
-        _clear_smoke_cache()
-    except Exception:
-        shutil.rmtree(target, ignore_errors=True)
-        if backup.exists():
-            backup.replace(target)
-        raise
+    install_runtime_archive(
+        data_dir, archive, progress_cb=progress_cb, cleanup_archive=True)
 
 
 # ---------------------------------------------------------------------------
