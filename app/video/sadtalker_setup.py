@@ -483,7 +483,9 @@ def _model_urls(path: str, mirror: bool = True) -> list[str]:
         )
     urls.append(official)
     if mirror:
-        urls.append(f"https://ghproxy.net/{official}")
+        gh_mirror = os.environ.get("MEDIA_AGENT_GITHUB_MIRROR", "").strip()
+        if gh_mirror:
+            urls.append(f"{gh_mirror.rstrip('/')}/{official}")
     return list(dict.fromkeys(urls))
 
 

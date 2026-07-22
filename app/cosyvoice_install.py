@@ -92,9 +92,15 @@ def _archive_path(data_dir: Path) -> Path:
 def _manifest_url() -> str:
     target = runtime_target()
     manifest = runtime_manifest("cosyvoice", target) if target else RUNTIME_MANIFEST
-    return os.environ.get(
-        "MEDIA_AGENT_COSYVOICE_RUNTIME_MANIFEST_URL",
-        f"{RUNTIME_RELEASE_BASE}/{manifest}")
+    custom = os.environ.get(
+        "MEDIA_AGENT_COSYVOICE_RUNTIME_MANIFEST_URL", "").strip()
+    if custom:
+        return custom
+    official = f"{RUNTIME_RELEASE_BASE}/{manifest}"
+    gh_mirror = os.environ.get("MEDIA_AGENT_GITHUB_MIRROR", "").strip()
+    if gh_mirror:
+        return f"{gh_mirror.rstrip('/')}/{official}"
+    return official
 
 
 def _sha256(path: Path) -> str:
