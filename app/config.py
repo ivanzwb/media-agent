@@ -75,6 +75,7 @@ class Config:
     rewrite_priority: str = "agent"      # "agent" | "llm" — which backend wins when both are set
     cli_timeout: int = 500               # CLI agent timeout in seconds
     fetch_proxy: str | None = None       # HTTP proxy for RSS/scraper fetches (e.g. http://127.0.0.1:7890)
+    github_mirror: str | None = None     # GitHub 镜像前缀
 
     @property
     def archive_dir(self) -> Path:
@@ -162,6 +163,7 @@ class Config:
             rewrite_priority=os.environ.get("MEDIA_AGENT_REWRITE_PRIORITY", "agent"),
             cli_timeout=_int_env("MEDIA_AGENT_CLI_TIMEOUT") or 500,
             fetch_proxy=os.environ.get("MEDIA_AGENT_FETCH_PROXY"),
+            github_mirror=os.environ.get("MEDIA_AGENT_GITHUB_MIRROR"),
         )
         if store is not None:
             config._apply_db_overrides(store)
@@ -203,6 +205,7 @@ class Config:
             "cli_tool": "cli_tool",
             "rewrite_priority": "rewrite_priority",
             "fetch_proxy": "fetch_proxy",
+            "github_mirror": "github_mirror",
         }
         for attr, db_key in str_overrides.items():
             val = store.get_setting(db_key)

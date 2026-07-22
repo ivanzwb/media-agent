@@ -97,6 +97,14 @@ def init_db(conn: sqlite3.Connection) -> None:
         error TEXT,
         stats_json TEXT DEFAULT '{}'
     )""")
+    # Migrate: set default github_mirror if not configured
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key='github_mirror'"
+    ).fetchone()
+    if not row or not (row[0] or "").strip():
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            ("github_mirror", "https://ghproxy.net/"))
     conn.commit()
 
 
