@@ -775,16 +775,21 @@ function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
               ? `CosyVoice 已通过运行验证${status.device_name || status.gpu_name ? `（${status.device_name || status.gpu_name}）` : ""}。`
               : status?.asset_available === false
                 ? "当前没有适配此平台的可下载 runtime 资产；模型与 API 字段无需手动配置。"
-                : `下载安装独立${status?.accelerator === "CPU" ? " CPU" : " CUDA"} Runtime 与 CosyVoice2 模型；无需配置 Python、源码或模型路径，支持断点续传。`}
+                : `下载安装独立${status?.accelerator === "CPU" ? " CPU" : " CUDA"} Runtime 与约 4.9GB 模型，支持断点续传。`}
           </Text>
           {!status?.ready && status?.reason && <Text type="danger">{status.reason}</Text>}
           {status?.performance_warning && <Text type="warning">{status.performance_warning}</Text>}
           <Space>
             {!status?.ready && <Button type="primary" icon={<DownloadOutlined />}
               disabled={!status || !(status.installable ?? status.gpu_ok)} onClick={install}>
-              下载安装 CosyVoice runtime 和模型
+              下载安装 Runtime 与模型
             </Button>}
-            <Button icon={<ReloadOutlined />} onClick={() => refresh().catch(() => {})}>刷新状态</Button>
+            {status?.ready && (
+              <Button icon={<ReloadOutlined />} onClick={async () => {
+                await refresh().catch(() => {});
+                onSuccess();
+              }}>检查更新</Button>
+            )}
           </Space>
         </Space>
       )}
@@ -922,7 +927,7 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
               ? `SadTalker 已通过运行验证${status.device_name || status.gpu_name ? `（${status.device_name || status.gpu_name}）` : ""}，可直接使用口型同步。`
               : status?.supported === false
                 ? "当前平台没有适配的 SadTalker runtime。"
-                : `安装将下载独立的${status?.accelerator === "CPU" ? " CPU" : " NVIDIA CUDA"} Runtime 与约 1GB 模型，无需配置源码。支持断点续传与自动修复。`}
+                : `安装将下载独立的${status?.accelerator === "CPU" ? " CPU" : " NVIDIA CUDA"} Runtime 与约 1GB 模型，支持断点续传。`}
           </Text>
           {!status?.ready && status?.reason && <Text type="danger">{status.reason}</Text>}
           {status?.performance_warning && <Text type="warning">{status.performance_warning}</Text>}
