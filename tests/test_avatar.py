@@ -43,7 +43,60 @@ def test_talking_head_none_without_sadtalker(tmp_path):
     assert av.generate_talking_head(tmp_path / "a.wav", spec, tmp_path, 0) is None
 
 
+def test_talking_head_uses_managed_python_and_checkpoint_dir(tmp_path,
+                                                             monkeypatch):
+    source = tmp_path / "runtime" / "sadtalker-src"
+    source.mkdir(parents=True)
+    (source / "inference.py").write_text("", encoding="utf-8")
+    python = tmp_path / "runtime" / "python.exe"
+    python.write_bytes(b"python")
+    checkpoints = tmp_path / "models" / "checkpoints"
+    checkpoints.mkdir(parents=True)
+    for name in (
+        "SadTalker_V0.0.2_256.safetensors",
+        "mapping_00109-model.pth.tar",
+        "mapping_00229-model.pth.tar",
+    ):
+        (checkpoints / name).write_bytes(b"model")
+    spec = _spec(
+        tmp_path, provider="sadtalker", sadtalker_dir=str(source),
+        sadtalker_python=str(python), checkpoint_dir=str(checkpoints))
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"wav")
+    monkeypatch.setattr(av, "_to_wav", lambda _audio, out: out)
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        calls.append(([str(v) for v in cmd], kwargs))
+        result_dir = Path(cmd[cmd.index("--result_dir") + 1])
+        result_dir.mkdir(parents=True, exist_ok=True)
+        (result_dir / "talking.mp4").write_bytes(b"video")
+        return Result()
+
+    monkeypatch.setattr(av.subprocess, "run", fake_run)
+    result = av.generate_talking_head(audio, spec, tmp_path, 0)
+
+    assert result and result.name == "talking.mp4"
+    cmd, kwargs = calls[0]
+    assert cmd[0] == str(python)
+    assert cmd[cmd.index("--checkpoint_dir") + 1] == str(checkpoints)
+    assert kwargs["cwd"] == str(source)
+
+
 def test_composite_pip_static_replaces_clip(tmp_path, monkeypatch):
+    import app.video.builder as builder
+
+    def fake_sub(text, out):
+        assert text == "hi"
+        Path(out).write_bytes(b"sub")
+        return Path(out)
+
+    monkeypatch.setattr(builder, "render_subtitle_overlay", fake_sub)
     spec = _spec(tmp_path, position="pip")
     clip = tmp_path / "clip-0.mp4"
     clip.write_bytes(b"orig")
@@ -58,8 +111,10 @@ def test_composite_pip_static_replaces_clip(tmp_path, monkeypatch):
 
     assert clip.read_bytes() == b"composited"           # replaced in place
     joined = " ".join(calls[-1])
-    assert "overlay=" in joined                          # PiP overlay
+    assert joined.count("overlay=") == 2                 # PiP, then subtitle
+    assert "[av][2:v]overlay=0:0[v]" in joined           # subtitle is topmost
     assert str(spec.image) in calls[-1]                  # static image input
+    assert str(tmp_path / "av-sub-0.png") in calls[-1]   # subtitle input
 
 
 def test_composite_full_static_uses_subtitle(tmp_path, monkeypatch):

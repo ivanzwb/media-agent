@@ -4,6 +4,15 @@ from app.tts.voices import (
 from app.tts.base import get_tts_provider
 
 
+def _require_cosyvoice_native_deps():
+    import pytest
+    pytest.importorskip("numpy")
+    try:
+        __import__("torch")
+    except OSError as exc:
+        pytest.skip(f"torch native runtime unavailable: {exc}")
+
+
 def test_voice_crud(tmp_path):
     cfg = Config(data_dir=tmp_path)
     cfg.ensure_dirs()
@@ -36,10 +45,8 @@ def test_sample_path_rejects_unknown_and_traversal(tmp_path):
 
 
 def test_get_tts_provider_cosyvoice():
-    import pytest
     # CosyVoice pulls in heavy optional deps (numpy/torch); skip if absent.
-    pytest.importorskip("numpy")
-    pytest.importorskip("torch")
+    _require_cosyvoice_native_deps()
     from app.tts.providers.cosyvoice import CosyVoiceTTS
     prov = get_tts_provider("cosyvoice", voice="/tmp/ref.wav",
                             model="FunAudioLLM/CosyVoice2-0.5B")
@@ -50,8 +57,7 @@ def test_get_tts_provider_cosyvoice():
 
 def test_cosyvoice_requires_sample(tmp_path):
     import pytest
-    pytest.importorskip("numpy")
-    pytest.importorskip("torch")
+    _require_cosyvoice_native_deps()
     from app.tts.providers.cosyvoice import CosyVoiceTTS
     prov = CosyVoiceTTS(speaker_wav=None)
     with pytest.raises(RuntimeError):

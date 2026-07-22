@@ -45,6 +45,7 @@ class AvatarSpec:
     position: str = "pip"                # default placement: pip | full
     sadtalker_dir: str | None = None     # path to a SadTalker checkout
     sadtalker_python: str | None = None  # python exe for SadTalker (optional)
+    checkpoint_dir: str | None = None    # managed model checkpoint directory
 
     def ready(self) -> bool:
         return bool(self.enabled and self.image and Path(self.image).exists())
@@ -78,11 +79,20 @@ def scene_avatar_mode(scene: dict, spec: AvatarSpec) -> str:
 # ---------------------------------------------------------------------------
 
 def sadtalker_available(spec: AvatarSpec) -> bool:
-    d = spec.sadtalker_dir
-    if not d:
+    d, py, checkpoints = (
+        spec.sadtalker_dir, spec.sadtalker_python, spec.checkpoint_dir)
+    if not d or not py or not checkpoints:
         return False
     p = Path(d)
-    return p.is_dir() and (p / "inference.py").exists()
+    cp = Path(checkpoints)
+    return (
+        p.is_dir()
+        and (p / "inference.py").is_file()
+        and Path(py).is_file()
+        and (cp / "SadTalker_V0.0.2_256.safetensors").is_file()
+        and (cp / "mapping_00109-model.pth.tar").is_file()
+        and (cp / "mapping_00229-model.pth.tar").is_file()
+    )
 
 
 def _to_wav(audio: Path, out_wav: Path) -> Path | None:
@@ -107,18 +117,18 @@ def generate_talking_head(audio: Path, spec: AvatarSpec,
         wav = _to_wav(audio, result_dir / "drive.wav") if audio else None
         if wav is None:
             return None
-        py = spec.sadtalker_python or "python"
+        py = str(spec.sadtalker_python)
         cmd = [py, "inference.py",
                "--driven_audio", str(wav),
                "--source_image", str(spec.image),
+               "--checkpoint_dir", str(spec.checkpoint_dir),
                "--result_dir", str(result_dir),
                "--still", "--preprocess", "full"]
-        # pip 画中画头像很小，跳过 GFPGAN 省 10x 时间；全屏模式保留增强
-        if spec.position != "full":
-            cmd.append("--enhancer")
-            cmd.append("none")
-        logger.info("avatar: running SadTalker for scene #%d (enhancer=%s) …",
-                     idx + 1, "gfpgan" if spec.position == "full" else "none")
+        # The managed base install intentionally excludes the optional GFPGAN
+        # weights. SadTalker's default (no enhancer flag) is reliable for both
+        # PiP and full-frame modes and avoids a false "installed" state.
+        logger.info("avatar: running SadTalker for scene #%d (enhancer=none) …",
+                     idx + 1)
         proc = subprocess.run(cmd, cwd=spec.sadtalker_dir,
                               capture_output=True, text=True, timeout=900)
         if proc.returncode != 0:
@@ -138,21 +148,28 @@ def generate_talking_head(audio: Path, spec: AvatarSpec,
 # ---------------------------------------------------------------------------
 
 def _composite_pip(clip: Path, head_mp4: Path | None, image: Path,
-                   duration: float, out: Path) -> None:
+                   narration: str, duration: float, work_dir: Path,
+                   idx: int, out: Path) -> None:
     """Overlay the presenter in the bottom-right corner of *clip*, keeping the
-    clip's own video timeline and narration audio."""
+    clip's own video timeline and narration audio. Redraw subtitles LAST so
+    the presenter can never cover them."""
+    from app.video.builder import render_subtitle_overlay  # lazy (avoid cycle)
     dur = f"{max(1.0, duration):.2f}"
+    sub = render_subtitle_overlay(narration, work_dir / f"av-sub-{idx}.png")
     common = ["-map", "[v]", "-map", "0:a?", "-c:v", "libx264",
               "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
               "-ar", str(_SAMPLE_RATE), "-ac", "2", "-t", dur]
     ov = (f"[1:v]scale=-2:{_PIP_HEIGHT}[a];"
-          f"[0:v][a]overlay=W-w-{_PIP_MARGIN}:H-h-{_PIP_MARGIN}:shortest=1[v]")
+          f"[0:v][a]overlay=W-w-{_PIP_MARGIN}:H-h-{_PIP_MARGIN}:shortest=1[av];"
+          f"[av][2:v]overlay=0:0[v]")
     if head_mp4 and head_mp4.exists():
         _run(["ffmpeg", "-y", "-i", str(clip), "-stream_loop", "-1",
-              "-i", str(head_mp4), "-filter_complex", ov, *common, str(out)])
+              "-i", str(head_mp4), "-i", str(sub),
+              "-filter_complex", ov, *common, str(out)])
     else:
         _run(["ffmpeg", "-y", "-i", str(clip), "-loop", "1",
-              "-i", str(image), "-filter_complex", ov, *common, str(out)])
+              "-i", str(image), "-i", str(sub),
+              "-filter_complex", ov, *common, str(out)])
 
 
 def _composite_full(clip: Path, head_mp4: Path | None, image: Path,
@@ -191,7 +208,8 @@ def composite_scene(clip: Path, audio: Path | None, duration: float,
     tmp = clip.with_suffix(".av.mp4")
     try:
         if mode == "pip":
-            _composite_pip(clip, head, spec.image, duration, tmp)
+            _composite_pip(clip, head, spec.image, narration, duration,
+                           work_dir, idx, tmp)
         else:
             _composite_full(clip, head, spec.image, narration, duration,
                             work_dir, idx, tmp)

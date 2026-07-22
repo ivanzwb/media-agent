@@ -3690,6 +3690,7 @@ def create_app(config: Config | None = None,
         }
 
     # ── SadTalker one-click setup ───────────────────────────────────────────
+    sadtalker_install_lock = threading.Lock()
 
     @app.get("/api/sadtalker/status")
     def api_sadtalker_status():
@@ -3706,22 +3707,29 @@ def create_app(config: Config | None = None,
         from starlette.responses import StreamingResponse
         import queue, json as _json, threading as _threading
 
-        from app.video.sadtalker_setup import run_setup, models_ready
-        from app.store import get_store as _gs
+        from app.video.sadtalker_setup import run_setup, setup_status
 
-        # Fast check: already installed?
-        if models_ready(config.data_dir):
-            st_dir_resolve = None
-            from app.video.sadtalker_setup import resolve_sadtalker_dir
-            st_dir_resolve = resolve_sadtalker_dir(config.data_dir)
+        # Only a complete GPU + runtime + models + import smoke check counts as
+        # installed. Model file sizes alone previously produced false positives.
+        current = setup_status(config.data_dir)
+        if current["ready"]:
             return {
+                **current,
                 "ok": True,
-                "message": "数字人模型已就绪",
-                "sadtalker_dir": st_dir_resolve or "",
-                "sadtalker_python": "",
+                "message": "数字人 runtime 与模型已就绪",
+            }
+        if not sadtalker_install_lock.acquire(blocking=False):
+            return {
+                **current,
+                "ok": False,
+                "installing": True,
+                "message": "SadTalker 正在安装，请等待当前任务完成",
             }
 
         evt_q: queue.Queue = queue.Queue()
+        # Reload DB-backed settings so the network proxy configured in
+        # Settings applies to this large model download.
+        setup_config = Config.load(store=get_store())
 
         def _on_progress(msg: str, frac: float) -> None:
             evt_q.put({"event": "progress", "data": _json.dumps(
@@ -3735,25 +3743,19 @@ def create_app(config: Config | None = None,
                 result = run_setup(
                     config.data_dir,
                     mirror=mirror,
+                    proxy=setup_config.fetch_proxy,
                     progress_cb=_on_progress,
                     cancel_event=cancel,
                 )
-                # Auto-save paths to DB if setup succeeded
-                if result.get("ok"):
-                    try:
-                        _store = _gs()
-                        if result.get("sadtalker_dir"):
-                            _store.set_setting("sadtalker_dir", result["sadtalker_dir"])
-                        if result.get("sadtalker_python"):
-                            _store.set_setting("sadtalker_python", result["sadtalker_python"])
-                    except Exception:
-                        pass
                 evt_q.put({"event": "done",
                             "data": _json.dumps(result, ensure_ascii=False)})
             except Exception as exc:
                 evt_q.put({"event": "done",
-                            "data": _json.dumps({"ok": False, "message": str(exc)},
-                                                ensure_ascii=False)})
+                            "data": _json.dumps(
+                                {"ok": False, "message": str(exc)},
+                                ensure_ascii=False)})
+            finally:
+                sadtalker_install_lock.release()
 
         _threading.Thread(target=_worker, daemon=True).start()
 
@@ -3765,7 +3767,13 @@ def create_app(config: Config | None = None,
                     # Send heartbeat every 300ms while waiting
                     yield f"event: heartbeat\ndata: {{}}\n\n"
                     continue
-                yield f"{item['event']}: {item['data']}\n\n"
+                # Standard SSE framing is two fields:
+                #   event: <type>
+                #   data: <JSON>
+                # The old "<type>: <JSON>" form was not SSE, so the frontend
+                # ignored progress/done and falsely reported a broken stream
+                # after a successful download.
+                yield f"event: {item['event']}\ndata: {item['data']}\n\n"
                 if item["event"] == "done":
                     break
 

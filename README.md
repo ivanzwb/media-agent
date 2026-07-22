@@ -28,7 +28,7 @@
 - **合成**：ffmpeg 合成「图片轮播 / 原视频片段 + 中文字幕 + 配音」的 mp4；中文字幕用 PIL 生成画面帧/叠层（规避 ffmpeg 中文字体问题）；画面适配可选 `fit`（完整+黑边）/`crop`/`blur`。同一视频被连续分镜引用时**续播**、放完**冻结最后一帧**。
 - **TTS**：默认内置 `kitten`（中文走 edge-tts，免 key）；可选 **本地声音复刻 `cosyvoice`**（CosyVoice2-0.5B，上传干声本地克隆音色，最佳中文 TTS 自然度，需 Python < 3.13 + NVIDIA GPU）；也支持 OpenAI 兼容 TTS。
 - **更像人的语气**：edge-tts 可调 **语速 / 音调**（`tts_rate` / `tts_pitch`）；CosyVoice 可给 **语气/情感指令**（`tts_instruct`，如「用亲切自然的语气」）。多分镜配音**并行**合成，速度更快。
-- **数字人主播（可选）**：在讲解视频中叠加一个口播主播——**画中画（角落）**或**全屏主播**，可按分镜切换。口型同步用本地 **SadTalker**（需 GPU，单独安装）驱动，用每段配音生成说话头像；未配置 SadTalker 时自动回退为**静态头像**叠加（仍显示主播，只是没有口型）。在「设置 → 视频 → 数字人主播」上传主播头像并开启。
+- **数字人主播（可选）**：在讲解视频中叠加一个口播主播——**画中画（角落）**或**全屏主播**，可按分镜切换。口型同步使用独立的 **SadTalker CUDA Runtime**；在设置中一键断点续传 Runtime 与模型，不需要克隆源码或配置 Python。不可用时自动回退为**静态头像**叠加。
 - 合成需本地 **ffmpeg**；原视频/HLS 下载需 **yt-dlp**；数字人口型同步需 **SadTalker**（可选）。
 
 ### 运行与平台
@@ -100,7 +100,7 @@ macOS:    media-agent/media-agent serve
 | playwright 库 | ✅ 已内置 | 需额外下载 Chromium（脚本一键完成） |
 | ffmpeg | ❌ 需单独装 | 视频合成必需，[下载](https://ffmpeg.org)后加入 PATH |
 | CosyVoice | ✅ 嵌入式 Python 侧边部署 | 脚本自动部署嵌入式 Python + 安装 PyTorch + 下载模型，一键完成 |
-| SadTalker | ❌ 需单独装（可选） | 数字人主播口型同步用；运行 `setup-optional`（第 5 步，交互式选择安装）自动克隆 + 装依赖 + 下模型，或手动克隆 [SadTalker](https://github.com/OpenTalker/SadTalker)。装好后在「设置」填其目录；不装则用静态头像叠加 |
+| SadTalker | ✅ 设置内一键安装（可选） | 数字人主播口型同步用；自动检测 NVIDIA GPU，并断点续传托管 CUDA Runtime 与模型，无需源码目录或 Python 配置 |
 
 ### 本地构建
 
@@ -169,8 +169,6 @@ sources:
 | `MEDIA_AGENT_AVATAR_IMAGE` | 主播头像文件名（放在 `data/avatar/`；建议在「设置」页上传） | 无 |
 | `MEDIA_AGENT_AVATAR_POSITION` | 默认位置：`pip`（画中画/角落）\| `full`（全屏主播）；可按分镜覆盖 | `pip` |
 | `MEDIA_AGENT_AVATAR_PROVIDER` | `sadtalker`（本地口型同步，需 GPU）\| `still`（静态头像） | `sadtalker` |
-| `MEDIA_AGENT_SADTALKER_DIR` | 本地 SadTalker 代码目录（含 `inference.py`）；未配置则回退静态头像 | 无 |
-| `MEDIA_AGENT_SADTALKER_PYTHON` | 运行 SadTalker 的 Python 可执行文件（可选，留空用 `python`） | 无 |
 | `MEDIA_AGENT_SENSITIVE_LEVEL` | 敏感词过滤等级：`off` \| `basic` \| `standard` \| `strict` | `standard` |
 | `MEDIA_AGENT_SENSITIVE_WORDS` | 自定义敏感词（逗号/换行分隔，追加到内置词库） | 无 |
 
