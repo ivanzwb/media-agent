@@ -251,7 +251,9 @@ class CLIProvider:
         prompt = self._build_prompt(messages)
         timeout = opts.get("timeout", self._timeout)
         model = opts.get("model", "")
-        return self._run(prompt, timeout=timeout, model=model)
+        return self._run(
+            prompt, timeout=timeout, model=model,
+            allow_empty_output=bool(opts.get("allow_empty_output", False)))
 
     @property
     def tool_id(self) -> str:
@@ -299,7 +301,8 @@ class CLIProvider:
         # the prompt string.  Strip them unconditionally for safety.
         return result.replace("\x00", "")
 
-    def _run(self, prompt: str, timeout: int, model: str = "") -> str:
+    def _run(self, prompt: str, timeout: int, model: str = "",
+             allow_empty_output: bool = False) -> str:
         """Execute the CLI tool and return its stdout.
 
         On failure raises ``RuntimeError``.
@@ -381,6 +384,8 @@ class CLIProvider:
 
         output = (stdout or "").strip()
         if not output:
+            if allow_empty_output:
+                return ""
             raise RuntimeError(f"{self._td.label} returned empty output")
 
         # ── JSON event stream handler (e.g. opencode --format json) ─────────

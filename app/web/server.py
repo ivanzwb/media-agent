@@ -5,10 +5,13 @@ import logging
 import math
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
+import uuid
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -200,6 +203,10 @@ def create_app(config: Config | None = None,
     from app.log_setup import quiet_noisy_loggers
     quiet_noisy_loggers()  # silence trafilatura/courlan/urllib3 crawl noise
     config = config or Config.load()
+    # Anchor every path used by request/background threads once at startup.
+    # This is especially important for embedded/packaged callers that pass a
+    # relative Config while the process cwd may later differ.
+    config.data_dir = Path(config.data_dir).resolve()
     config.ensure_dirs()
     feeds_path = Path(feeds_path)
 
@@ -250,6 +257,7 @@ def create_app(config: Config | None = None,
     #     "error": str (when error),
     #     "prompt": str (original prompt) }
     _agent_tasks: dict[int, dict] = {}
+    _agent_tasks_lock = threading.RLock()
 
     # ── React SPA serving (when frontend/dist is built) ──────────────────
     _spa_index = _SPA_DIST / "index.html"
@@ -274,6 +282,14 @@ def create_app(config: Config | None = None,
         init_db(conn)
         return Store(conn, config)
 
+    def _current_config(store: Store | None = None) -> Config:
+        """Reload DB settings without ever re-deriving this app's data_dir."""
+        current = replace(config)
+        current.data_dir = config.data_dir
+        if store is not None:
+            current._apply_db_overrides(store)
+        return current
+
     def _db_conn() -> sqlite3.Connection:
         c = connect(config.db_path)
         init_db(c)
@@ -282,7 +298,7 @@ def create_app(config: Config | None = None,
     def run_now(progress=None):
         store = get_store()
         # Reload config with DB overrides so settings changes take effect
-        run_config = Config.load(store=store)
+        run_config = _current_config(store)
         feeds_cfg = load_feeds(feeds_path)
         provider = get_rewrite_provider(
             run_config.llm_provider, run_config.llm_api_key,
@@ -624,7 +640,7 @@ def create_app(config: Config | None = None,
                 _rewrite_log(article_id, "构建 LLM provider…",
                              op_key=op_key, op_conn=op_conn)
                 ws = get_store()
-                run_config = Config.load(store=ws)
+                run_config = _current_config(ws)
                 provider = get_rewrite_provider(
                     run_config.llm_provider, run_config.llm_api_key,
                     run_config.llm_model, llm_api_base=run_config.llm_api_base,
@@ -1016,136 +1032,142 @@ def create_app(config: Config | None = None,
 
     # ── Agent edit (draft → CLI agent) ──────────────────────────────────────
 
-    def _agent_run_background(draft_id: int, prompt: str, full_md: str,
-                              original_body: str, provider: cli_provider.CLIProvider):
-        """Background thread: run CLI agent, save result, update state."""
+    def _agent_workspace(draft_id: int, run_id: str) -> Path:
+        """Return an isolated, data-dir-scoped workspace for exactly one run."""
+        # Remove the legacy shared scratch file from releases that wrote
+        # data/output-draft.md. It is never consumed by the new workflow.
+        try:
+            (config.data_dir / "output-draft.md").unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("Could not remove legacy Agent output: %s", exc)
+        root = (config.data_dir / "agent-workspaces").resolve()
+        workspace = (root / f"draft-{draft_id}" / run_id).resolve()
+        if root != workspace and root not in workspace.parents:
+            raise RuntimeError("Agent 工作目录解析到了数据目录之外")
+        workspace.mkdir(parents=True, exist_ok=False)
+        return workspace
+
+    def _agent_task_is_current(draft_id: int, run_id: str,
+                               *, running: bool = False) -> bool:
+        task = _agent_tasks.get(draft_id)
+        return bool(
+            task and task.get("run_id") == run_id
+            and (not running or task.get("status") == "running")
+        )
+
+    def _set_agent_error(draft_id: int, run_id: str, error: str) -> None:
+        with _agent_tasks_lock:
+            if not _agent_task_is_current(draft_id, run_id, running=True):
+                return
+            task = _agent_tasks[draft_id]
+            task["status"] = "error"
+            task["error"] = error
+            task.pop("provider", None)
+
+    def _agent_run_background(draft_id: int, run_id: str, prompt: str,
+                              full_md: str, provider: LLMProvider,
+                              workspace: Path):
+        """Run one isolated Agent edit and publish only its current result."""
+        out_path = workspace / "output-draft.md"
         try:
             messages = [
                 Message(role="system", content=(
                     "你是一个文章编辑助手。用户会给你一篇完整草稿文件（包含 front-matter 元信息和正文 markdown）"
                     "以及修改指令。\n\n"
                     "规则：\n"
-                    "1. 根据指令修改草稿内容，**完整输出修改后的整篇文件（包含 front-matter）**。\n"
-                    "2. 禁止输出任何修改说明、总结、备注、注释、思考过程、标记符号——你的全部输出将被直接写入文件，任何多余文字都会出现在最终发布内容中，会造成破坏，所以禁止。\n"
-                    "3. 禁止在正文末尾添加分隔符（如 ---）、注释块、TODO 列表等。\n"
+                    "1. 只修改正文；保留 front-matter 元信息和标题。\n"
+                    "2. 完整输出修改后的整篇文件（包含 front-matter）。\n"
+                    "3. 禁止输出修改说明、总结、备注、注释、思考过程、TODO 或代码块。\n"
                     "4. 用户如果要求插入图片，用标准 Markdown 图片语法 `![描述](图片URL)`。\n"
-                    "5. 不要用代码块包裹输出。\n"
-                    "6. 如果你具备文件写入能力（Agent 模式），请把最终完整文件写入"
-                    "当前工作目录下的 `output-draft.md`（UTF-8 编码）；如果不能写文件，"
-                    "就直接把完整文件内容输出到 stdout。")),
+                    f"5. 如果具备文件写入能力，必须把最终完整文件写入这个绝对路径："
+                    f"`{out_path}`（UTF-8）；当前工作目录也是该文件所在目录。"
+                    "不要在项目目录或其他目录创建 output-draft.md。"
+                    "如果不能写文件，就把完整文件输出到 stdout。")),
                 Message(role="user", content=(
                     f"## 当前草稿文件\n```markdown\n{full_md}\n```\n\n"
                     f"## 用户指令\n{prompt}")),
             ]
-            # Remove any stale scratch file before the run so we never read an
-            # old result if the agent decides not to write this time.
-            out_path = config.data_dir / "output-draft.md"
-            try:
-                out_path.unlink()
-            except OSError:
-                pass
 
-            stdout_result = provider.chat(messages)
+            # Agentic CLIs are allowed to return empty stdout when their actual
+            # result was written to the isolated output file.
+            if isinstance(provider, cli_provider.CLIProvider):
+                stdout_result = provider.chat(messages, allow_empty_output=True)
+            else:
+                stdout_result = provider.chat(messages)
 
-            # Check if cancelled during execution
-            task = _agent_tasks.get(draft_id)
-            if task and task["status"] == "cancelled":
-                try:
-                    out_path.unlink()
-                except OSError:
-                    pass
-                return
+            with _agent_tasks_lock:
+                if not _agent_task_is_current(draft_id, run_id, running=True):
+                    return
 
-            # Agentic CLIs (opencode/claude) write the full document to a file
-            # and print only a summary to stdout; completion-style tools print
-            # the whole document. Prefer the file, fall back to stdout.
             file_result = ""
-            try:
-                if out_path.exists():
+            if out_path.is_file():
+                try:
                     file_result = out_path.read_text(encoding="utf-8").strip()
-            except OSError:
-                file_result = ""
-            try:
-                out_path.unlink()
-            except OSError:
-                pass
+                except (OSError, UnicodeError) as exc:
+                    raise RuntimeError(
+                        f"Agent 输出文件无法读取（{out_path}）：{exc}") from exc
+            raw_result = file_result or (stdout_result or "").strip()
+            if not raw_result:
+                raise RuntimeError(
+                    "Agent 没有生成可应用的正文：stdout 为空，且未创建 "
+                    f"{out_path}")
 
-            # Post-process
-            result = _clean_agent_output(file_result or stdout_result,
-                                         original_body=original_body)
+            result = _clean_agent_output(raw_result)
             import frontmatter as _fm
-            _parsed = _fm.loads(result)
+            parsed = _fm.loads(result)
+            parsed_body = parsed.content.strip()
+            if not parsed_body:
+                raise RuntimeError("Agent 输出格式无效：解析后的正文为空")
+            # A short body is valid when the CLI returned the required
+            # front-matter. Without metadata, short/no-heading output is much
+            # more likely to be a CLI execution summary than the full draft.
+            if _looks_like_thinking_text(parsed_body) and not parsed.metadata:
+                source = "输出文件" if file_result else "stdout"
+                raise RuntimeError(
+                    f"Agent {source} 看起来是执行摘要而不是完整正文；"
+                    f"请检查 CLI 权限，或确认它写入了 {out_path}")
 
-            # Backup current draft
-            store = get_store()
-            row = store.get_draft(draft_id)
-            if row and row["draft_path"]:
-                src = config.data_dir / row["draft_path"]
-                if src.exists():
-                    bak_path = src.with_name(src.name + ".agent-bak")
-                    bak_path.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-                    logger.info("agent-edit draft=%d backed up", draft_id)
+            # Publish the result to task state only. The explicit apply endpoint
+            # performs the draft write, so closing a completed dialog does not
+            # silently overwrite the editor or a later manual save.
+            with _agent_tasks_lock:
+                if not _agent_task_is_current(draft_id, run_id, running=True):
+                    return
+                task = _agent_tasks[draft_id]
+                task.update({
+                    "status": "completed",
+                    "body_md": parsed_body,
+                    "title_candidates": task["title_candidates"],
+                    "title_cn": task["title_cn"],
+                })
+                task.pop("provider", None)
+                logger.info("agent-edit draft=%d run=%s result ready",
+                            draft_id, run_id)
 
-            # Write agent output to draft file
-            if row and row["draft_path"]:
-                abs_path = config.data_dir / row["draft_path"]
-                abs_path.parent.mkdir(parents=True, exist_ok=True)
-                abs_path.write_text(result, encoding="utf-8")
-
-            # Sync DB
-            _parsed_titles = _parsed.metadata.get("title_candidates", []) or []
-            _parsed_body = _parsed.content
-            # Keep the article's Chinese title: use the rewritten front-matter's
-            # title_cn if present, else the draft's EXISTING title_cn. Never fall
-            # back to the body (that dumped the whole article into the title).
-            try:
-                existing_cn = (row["title_cn"] if row else "") or ""
-            except (KeyError, IndexError, TypeError):
-                existing_cn = ""
-            preserved_cn = _parsed.metadata.get("title_cn") or existing_cn
-            store.update_draft_body(
-                draft_id,
-                title_candidates=_parsed_titles,
-                body_md=_parsed_body,
-                status="drafted",
-                title_cn=preserved_cn,
-            )
-            logger.info("agent-edit draft=%d saved OK", draft_id)
-
-            _agent_tasks[draft_id] = {
-                "status": "completed",
-                "body_md": _parsed_body,
-                "started_at": _agent_tasks[draft_id]["started_at"],
-                "prompt": prompt,
-            }
-
-        except RuntimeError as e:
-            logger.error("agent-edit draft=%d failed: %s", draft_id, e)
-            _agent_tasks[draft_id] = {
-                "status": "error",
-                "error": str(e),
-                "started_at": _agent_tasks[draft_id]["started_at"],
-                "prompt": prompt,
-            }
-        except Exception as e:
-            logger.exception("agent-edit draft=%d unexpected error", draft_id)
-            _agent_tasks[draft_id] = {
-                "status": "error",
-                "error": f"内部错误: {e}",
-                "started_at": _agent_tasks[draft_id]["started_at"],
-                "prompt": prompt,
-            }
+        except RuntimeError as exc:
+            logger.error("agent-edit draft=%d run=%s failed: %s",
+                         draft_id, run_id, exc)
+            _set_agent_error(draft_id, run_id, str(exc))
+        except Exception as exc:
+            logger.exception("agent-edit draft=%d run=%s unexpected error",
+                             draft_id, run_id)
+            _set_agent_error(draft_id, run_id, f"内部错误: {exc}")
+        finally:
+            # This path was created by _agent_workspace and is unique to this
+            # run, so recursive cleanup cannot touch another draft or user file.
+            shutil.rmtree(workspace, ignore_errors=True)
 
     @app.post("/api/draft/{draft_id}/agent-edit")
-    def draft_agent_edit(draft_id: int, prompt: str = Form(...)):
+    def draft_agent_edit(draft_id: int, prompt: str = Form(...),
+                         body_md: str | None = Form(None),
+                         title_cn: str | None = Form(None),
+                         title_candidates: str | None = Form(None)):
         """Start CLI agent execution in background. Returns immediately."""
         store = get_store()
 
-        # Check if already running
-        if draft_id in _agent_tasks and _agent_tasks[draft_id]["status"] == "running":
+        if not prompt.strip():
             return JSONResponse(
-                {"ok": False, "error": "Agent 正在处理中，请等待完成或取消当前任务"},
-                status_code=409)
+                {"ok": False, "error": "修改指令不能为空"}, status_code=400)
 
         # 1. get draft content
         body = store.read_draft_body(draft_id)
@@ -1153,18 +1175,33 @@ def create_app(config: Config | None = None,
             return JSONResponse({"ok": False, "error": "草稿不存在或内容为空"}, status_code=404)
 
         row = store.get_draft(draft_id)
-        full_md = ""
-        if row and row["draft_path"]:
-            abs_path = config.data_dir / row["draft_path"]
-            if abs_path.exists():
-                full_md = abs_path.read_text(encoding="utf-8")
-        if not full_md:
-            import frontmatter
-            full_md = frontmatter.dumps(frontmatter.Post(body["body_md"]))
+        if not row:
+            return JSONResponse(
+                {"ok": False, "error": "草稿不存在"}, status_code=404)
+        source_body = body["body_md"] if body_md is None else body_md
+        source_titles = body.get("title_candidates", []) or []
+        if title_candidates is not None:
+            source_titles = [
+                item.strip() for item in title_candidates.splitlines()
+                if item.strip()
+            ]
+        source_title_cn = (
+            (body.get("title_cn") or row["title_cn"] or "")
+            if title_cn is None else title_cn.strip()
+        )
+        import frontmatter
+        source_meta = {k: v for k, v in body.items() if k != "body_md"}
+        source_meta["title_candidates"] = source_titles
+        if source_title_cn:
+            source_meta["title_cn"] = source_title_cn
+        else:
+            source_meta.pop("title_cn", None)
+        full_md = frontmatter.dumps(
+            frontmatter.Post(source_body, **source_meta))
 
         # 2. determine active CLI tool
-        db_tool = store.get_setting("cli_tool") or ""
-        active_tool = db_tool or config.cli_tool or "auto"
+        rc = _current_config(store)
+        active_tool = rc.cli_tool or "auto"
         if active_tool in ("none", "", None):
             return JSONResponse(
                 {"ok": False, "error": "未配置 CLI Agent，请在设置页选择并保存后再试"},
@@ -1183,46 +1220,62 @@ def create_app(config: Config | None = None,
                 {"ok": False, "error": f"Agent '{active_tool}' 未安装或不在 PATH 中"},
                 status_code=400)
 
-        # 4. start background execution — run the agent INSIDE the data dir so
-        # any scratch files it writes (e.g. output-draft.md) land there, not in
-        # the project root.
         try:
-            config.data_dir.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
+            run_id = uuid.uuid4().hex
+            workspace = _agent_workspace(draft_id, run_id)
+        except OSError as exc:
+            return JSONResponse(
+                {"ok": False,
+                 "error": f"无法创建 Agent 工作目录（{config.data_dir}）：{exc}"},
+                status_code=500)
         provider = cli_provider.CLIProvider(
-            active_tool, timeout=config.cli_timeout,
-            cwd=config.data_dir,
+            active_tool, timeout=rc.cli_timeout, model=rc.llm_model or "",
+            cwd=workspace,
         )
-        _original_body = body.get("body_md", "") if body else ""
-
-        _agent_tasks[draft_id] = {
-            "status": "running",
-            "provider": provider,
-            "started_at": time.time(),
-            "prompt": prompt,
-        }
+        with _agent_tasks_lock:
+            if (_agent_tasks.get(draft_id, {}).get("status") == "running"):
+                shutil.rmtree(workspace, ignore_errors=True)
+                return JSONResponse(
+                    {"ok": False,
+                     "error": "Agent 正在处理中，请等待完成或取消当前任务"},
+                    status_code=409)
+            _agent_tasks[draft_id] = {
+                "status": "running",
+                "run_id": run_id,
+                "provider": provider,
+                "started_at": time.time(),
+                "prompt": prompt,
+                "workspace": str(workspace),
+                "title_candidates": source_titles,
+                "title_cn": source_title_cn,
+                "draft_status": row["status"],
+            }
 
         t = threading.Thread(
             target=_agent_run_background,
-            args=(draft_id, prompt, full_md, _original_body, provider),
+            args=(draft_id, run_id, prompt, full_md, provider, workspace),
             daemon=True,
         )
         t.start()
 
-        return {"ok": True, "running": True, "draft_id": draft_id}
+        return {"ok": True, "running": True, "draft_id": draft_id,
+                "run_id": run_id}
 
     @app.post("/api/draft/{draft_id}/apply-template")
-    def draft_apply_template(draft_id: int, template_id: str = Form(...)):
+    def draft_apply_template(draft_id: int, template_id: str = Form(...),
+                             body_md: str | None = Form(None),
+                             title_cn: str | None = Form(None),
+                             title_candidates: str | None = Form(None)):
         """Rewrite the draft so it follows the selected template's structure and
         visual style. Honors the configured rewrite priority (LLM vs CLI Agent)
         and reuses the agent background flow + /agent-status polling."""
         store = get_store()
 
-        if draft_id in _agent_tasks and _agent_tasks[draft_id]["status"] == "running":
-            return JSONResponse(
-                {"ok": False, "error": "正在处理中，请等待完成或取消当前任务"},
-                status_code=409)
+        with _agent_tasks_lock:
+            if _agent_tasks.get(draft_id, {}).get("status") == "running":
+                return JSONResponse(
+                    {"ok": False, "error": "正在处理中，请等待完成或取消当前任务"},
+                    status_code=409)
 
         # Template rewrite is an LLM/Agent rewrite → same quota as other rewrites
         # (free: FREE_REWRITE_PER_DAY/day shared with archive rewrite; Pro: 无限).
@@ -1240,31 +1293,40 @@ def create_app(config: Config | None = None,
                                 status_code=404)
 
         row = store.get_draft(draft_id)
-        full_md = ""
-        if row and row["draft_path"]:
-            abs_path = config.data_dir / row["draft_path"]
-            if abs_path.exists():
-                full_md = abs_path.read_text(encoding="utf-8")
-        if not full_md:
-            import frontmatter
-            full_md = frontmatter.dumps(frontmatter.Post(body["body_md"]))
-
-        # Run the agent/LLM inside the data dir so any scratch file it writes
-        # (output-draft.md) lands there, not in the project root.
-        try:
-            config.data_dir.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
+        source_body = body["body_md"] if body_md is None else body_md
+        source_titles = body.get("title_candidates", []) or []
+        if title_candidates is not None:
+            source_titles = [
+                item.strip() for item in title_candidates.splitlines()
+                if item.strip()
+            ]
+        source_title_cn = (
+            (body.get("title_cn") or row["title_cn"] or "")
+            if title_cn is None else title_cn.strip()
+        )
+        import frontmatter
+        source_meta = {k: v for k, v in body.items() if k != "body_md"}
+        source_meta["title_candidates"] = source_titles
+        if source_title_cn:
+            source_meta["title_cn"] = source_title_cn
+        else:
+            source_meta.pop("title_cn", None)
+        full_md = frontmatter.dumps(
+            frontmatter.Post(source_body, **source_meta))
 
         # Resolve provider honoring rewrite_priority (LLM or CLI Agent).
-        rc = Config.load(store=store)
+        rc = _current_config(store)
         provider = _resolve_provider(rc)
-        # CLI agents write output-draft.md relative to their cwd.
-        if provider.__class__.__name__ == "CLIProvider":
-            try:
-                provider._cwd = str(config.data_dir)
-            except Exception:  # noqa: BLE001
-                pass
+        run_id = uuid.uuid4().hex
+        try:
+            workspace = _agent_workspace(draft_id, run_id)
+        except OSError as exc:
+            return JSONResponse(
+                {"ok": False,
+                 "error": f"无法创建 Agent 工作目录（{config.data_dir}）：{exc}"},
+                status_code=500)
+        if isinstance(provider, cli_provider.CLIProvider):
+            provider._cwd = str(workspace)
 
         prompt = (
             "请把这篇文章按照下面「目标模板」的结构、排版层级和视觉组件进行重写：\n"
@@ -1277,74 +1339,140 @@ def create_app(config: Config | None = None,
             f"## 目标模板（{tpl.name}）\n```markdown\n{tpl.markdown}\n```"
         )
 
-        _agent_tasks[draft_id] = {
-            "status": "running",
-            "provider": provider,
-            "started_at": time.time(),
-            "prompt": prompt,
-        }
+        with _agent_tasks_lock:
+            if _agent_tasks.get(draft_id, {}).get("status") == "running":
+                shutil.rmtree(workspace, ignore_errors=True)
+                return JSONResponse(
+                    {"ok": False, "error": "正在处理中，请等待完成或取消当前任务"},
+                    status_code=409)
+            _agent_tasks[draft_id] = {
+                "status": "running",
+                "run_id": run_id,
+                "provider": provider,
+                "started_at": time.time(),
+                "prompt": prompt,
+                "workspace": str(workspace),
+                "title_candidates": source_titles,
+                "title_cn": source_title_cn,
+                "draft_status": row["status"],
+            }
         LG.consume_rewrite(license_mgr, store)   # free-tier daily quota
         t = threading.Thread(
             target=_agent_run_background,
-            args=(draft_id, prompt, full_md, body.get("body_md", ""), provider),
+            args=(draft_id, run_id, prompt, full_md, provider, workspace),
             daemon=True,
         )
         t.start()
 
         return {"ok": True, "running": True, "draft_id": draft_id,
+                "run_id": run_id,
                 "template": tpl.name}
 
     @app.get("/api/draft/{draft_id}/agent-status")
     def draft_agent_status(draft_id: int):
         """Poll agent execution status."""
-        task = _agent_tasks.get(draft_id)
-        if not task:
-            return {"ok": True, "status": "idle"}
+        with _agent_tasks_lock:
+            task = _agent_tasks.get(draft_id)
+            if not task:
+                return {"ok": True, "status": "idle"}
 
-        elapsed = time.time() - task["started_at"]
-        base = {
-            "ok": True,
-            "status": task["status"],
-            "elapsed_s": round(elapsed, 1),
-            "prompt": task.get("prompt", ""),
-        }
+            elapsed = time.time() - task["started_at"]
+            base = {
+                "ok": True,
+                "status": task["status"],
+                "run_id": task.get("run_id", ""),
+                "elapsed_s": round(elapsed, 1),
+                "prompt": task.get("prompt", ""),
+            }
 
-        if task["status"] == "running":
+            if task["status"] == "running":
+                return base
+            if task["status"] == "completed":
+                return {**base, "body_md": task.get("body_md", "")}
+            if task["status"] == "error":
+                return {**base, "error": task.get("error", "未知错误")}
+            if task["status"] == "cancelled":
+                return {**base, "error": "已取消"}
             return base
-
-        if task["status"] == "completed":
-            return {**base, "body_md": task.get("body_md", "")}
-
-        if task["status"] == "error":
-            return {**base, "error": task.get("error", "未知错误")}
-
-        if task["status"] == "cancelled":
-            return {**base, "error": "已取消"}
-
-        return base
 
     @app.post("/api/draft/{draft_id}/agent-cancel")
     def draft_agent_cancel(draft_id: int):
         """Cancel a running agent task."""
-        task = _agent_tasks.get(draft_id)
-        if not task or task["status"] != "running":
-            return JSONResponse({"ok": False, "error": "没有正在运行的 Agent 任务"}, status_code=404)
-
-        provider = task.get("provider")
+        with _agent_tasks_lock:
+            task = _agent_tasks.get(draft_id)
+            if not task or task["status"] != "running":
+                return JSONResponse(
+                    {"ok": False, "error": "没有正在运行的 Agent 任务"},
+                    status_code=404)
+            # Mark cancelled before killing. If communicate() raises as a
+            # consequence, the stale worker is forbidden from replacing this
+            # state with an error or publishing its output.
+            task["status"] = "cancelled"
+            provider = task.get("provider")
         if provider:
             provider.cancel()
-
-        task["status"] = "cancelled"
         return {"ok": True, "cancelled": True}
+
+    @app.post("/api/draft/{draft_id}/agent-apply")
+    def draft_agent_apply(draft_id: int, run_id: str = Form(...)):
+        """Atomically apply one completed run and return editor-ready state."""
+        with _agent_tasks_lock:
+            task = _agent_tasks.get(draft_id)
+            if not task:
+                return JSONResponse(
+                    {"ok": False, "error": "Agent 结果不存在或已清除"},
+                    status_code=404)
+            if task.get("run_id") != run_id:
+                return JSONResponse(
+                    {"ok": False, "error": "Agent 结果已过期，请使用最新一次运行结果"},
+                    status_code=409)
+            if task.get("status") != "completed":
+                return JSONResponse(
+                    {"ok": False,
+                     "error": f"Agent 结果尚不可应用（当前状态：{task.get('status')}）"},
+                    status_code=409)
+
+            store = get_store()
+            row = store.get_draft(draft_id)
+            if not row or not row["draft_path"]:
+                return JSONResponse(
+                    {"ok": False, "error": "草稿不存在"}, status_code=404)
+            src = config.data_dir / row["draft_path"]
+            if src.exists():
+                bak_path = src.with_name(src.name + ".agent-bak")
+                bak_path.write_text(
+                    src.read_text(encoding="utf-8"), encoding="utf-8")
+            store.update_draft_body(
+                draft_id,
+                title_candidates=task["title_candidates"],
+                body_md=task["body_md"],
+                status=task["draft_status"],
+                title_cn=task["title_cn"],
+            )
+            response = {
+                "ok": True,
+                "run_id": run_id,
+                "body_md": task["body_md"],
+                "title_candidates": task["title_candidates"],
+                "title_cn": task["title_cn"],
+                "status": task["draft_status"],
+            }
+            _agent_tasks.pop(draft_id, None)
+            logger.info("agent-edit draft=%d run=%s applied", draft_id, run_id)
+            return response
 
     @app.post("/api/draft/{draft_id}/agent-clear")
     def draft_agent_clear(draft_id: int):
         """Forget a finished (non-running) agent task so the panel resets."""
-        task = _agent_tasks.get(draft_id)
-        if task and task["status"] == "running":
-            return JSONResponse(
-                {"ok": False, "error": "Agent 正在运行，无法清除"}, status_code=409)
-        _agent_tasks.pop(draft_id, None)
+        with _agent_tasks_lock:
+            task = _agent_tasks.get(draft_id)
+            if task and task["status"] == "running":
+                return JSONResponse(
+                    {"ok": False, "error": "Agent 正在运行，无法清除"},
+                    status_code=409)
+            _agent_tasks.pop(draft_id, None)
+        if task and task.get("workspace"):
+            shutil.rmtree(task["workspace"], ignore_errors=True)
         return {"ok": True}
 
     @app.post("/api/draft/{draft_id}/agent-undo")
@@ -1610,7 +1738,7 @@ def create_app(config: Config | None = None,
     def _resolve_proxy() -> str | None:
         """Resolve the fetch proxy from Config, or None if not configured."""
         try:
-            rc = Config.load(store=get_store())
+            rc = _current_config(get_store())
             return rc.fetch_proxy
         except Exception:
             return None
@@ -1618,7 +1746,7 @@ def create_app(config: Config | None = None,
     def _resolve_provider(rc: Config | None = None) -> LLMProvider:
         """Get LLM provider for rewriting, honoring rewrite_priority."""
         if rc is None:
-            rc = Config.load(store=get_store())
+            rc = _current_config(get_store())
         return get_rewrite_provider(
             rc.llm_provider, rc.llm_api_key,
             rc.llm_model, llm_api_base=rc.llm_api_base,
@@ -1948,7 +2076,7 @@ def create_app(config: Config | None = None,
         )
 
         p = auto_discover_progress
-        rc = Config.load(store=get_store())
+        rc = _current_config(get_store())
         provider = _resolve_provider(rc)
 
         def _provider_label(prov) -> str:
@@ -2527,7 +2655,7 @@ def create_app(config: Config | None = None,
 
         def worker():
             try:
-                run_config = Config.load(store=get_store())
+                run_config = _current_config(get_store())
                 llm = _resolve_provider(run_config)
                 tts = _build_tts(run_config, tts_provider, tts_voice)
                 generate_narration(draft_id, get_store(), llm, tts, config,
@@ -2701,7 +2829,7 @@ def create_app(config: Config | None = None,
 
         def worker():
             try:
-                run_config = Config.load(store=get_store())
+                run_config = _current_config(get_store())
                 tts = _build_tts(run_config, tts_provider, tts_voice)
                 resynth_scenes(draft_id, indices, tts, config,
                                tts_provider=tts_provider,
@@ -2754,7 +2882,7 @@ def create_app(config: Config | None = None,
         """
         import uuid
 
-        run_config = Config.load(store=get_store())
+        run_config = _current_config(get_store())
         out_dir = config.videos_dir / f"draft-{draft_id}"
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2994,7 +3122,7 @@ def create_app(config: Config | None = None,
 
         def worker():
             try:
-                rc = Config.load(store=get_store())
+                rc = _current_config(get_store())
                 # Debug: peek at script.json before building
                 import json as _json
                 _sp = rc.videos_dir / f"draft-{draft_id}" / "script.json"
@@ -3104,7 +3232,7 @@ def create_app(config: Config | None = None,
         if not meta:
             return JSONResponse({"error": "draft not found"}, status_code=404)
         titles = meta.get("title_candidates") or ["稿件"]
-        run_config = Config.load(store=store)
+        run_config = _current_config(store)
         provider = _resolve_provider(run_config)
         result = adapt(meta.get("body_md", ""), titles[0], platform, provider)
 
@@ -3128,7 +3256,7 @@ def create_app(config: Config | None = None,
         meta = store.read_draft_body(draft_id)
         if not meta:
             return JSONResponse({"ok": False, "error": "草稿不存在"}, status_code=404)
-        run_config = Config.load(store=store)
+        run_config = _current_config(store)
         provider = get_image_provider(
             run_config.image_provider,
             run_config.image_api_key or run_config.llm_api_key,
@@ -3159,7 +3287,7 @@ def create_app(config: Config | None = None,
                  or "")
         if not title:
             return {"ok": False, "error": "没有可用的标题用于搜索"}
-        run_config = Config.load(store=store)
+        run_config = _current_config(store)
         try:
             from ddgs import DDGS
             results = list(DDGS().images(title, max_results=5))
@@ -3267,7 +3395,7 @@ def create_app(config: Config | None = None,
         if not meta:
             return JSONResponse(
                 {"ok": False, "error": "draft not found"}, status_code=404)
-        run_config = Config.load(store=store)
+        run_config = _current_config(store)
         from app.wechat import get_wechat_client
         client = get_wechat_client(run_config)
         if client is None:
@@ -3360,7 +3488,7 @@ def create_app(config: Config | None = None,
         if not meta:
             return JSONResponse({"ok": False, "error": "draft not found"},
                                 status_code=404)
-        run_config = Config.load(store=store)
+        run_config = _current_config(store)
         from app.wechat.formatter import render_styled_html, list_themes
         from app.wechat.publish import (
             inline_images_base64, _absolutize_body_md)
@@ -3389,7 +3517,7 @@ def create_app(config: Config | None = None,
         if not meta:
             return JSONResponse({"ok": False, "error": "draft not found"},
                                 status_code=404)
-        run_config = Config.load(store=store)
+        run_config = _current_config(store)
         provider = _resolve_provider(run_config)
         from app.wechat.channels import (
             build_channels_caption, CHANNELS_CREATE_URL)
@@ -3432,7 +3560,7 @@ def create_app(config: Config | None = None,
             return JSONResponse(
                 {"ok": False, "error": f"{p.label} 暂不支持视频半自动发布"},
                 status_code=400)
-        run_config = Config.load(store=store)
+        run_config = _current_config(store)
         provider = _resolve_provider(run_config)
         from app.platforms.video_prepare import build_video_caption
         cap = build_video_caption(meta, provider, p.video_caption_style())
@@ -3792,7 +3920,7 @@ def create_app(config: Config | None = None,
                     "message": "CosyVoice 正在安装，请等待当前任务完成"}
 
         evt_q: queue.Queue = queue.Queue()
-        setup_config = Config.load(store=get_store())
+        setup_config = _current_config(get_store())
 
         def on_progress(message: str, fraction: float) -> None:
             evt_q.put({"event": "progress", "data": _json.dumps(
@@ -3871,7 +3999,7 @@ def create_app(config: Config | None = None,
         evt_q: queue.Queue = queue.Queue()
         # Reload DB-backed settings so the network proxy configured in
         # Settings applies to this large model download.
-        setup_config = Config.load(store=get_store())
+        setup_config = _current_config(get_store())
 
         def _on_progress(msg: str, frac: float) -> None:
             evt_q.put({"event": "progress", "data": _json.dumps(

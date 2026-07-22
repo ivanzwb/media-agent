@@ -102,6 +102,29 @@ def test_run_strips_null_bytes_before_subprocess():
     assert "helloworld" in arg_str
 
 
+def test_run_can_allow_empty_stdout_for_file_writing_agents():
+    """Agent workflows may receive the result through output-draft.md."""
+    p = CLIProvider("opencode")
+
+    class FakePopen:
+        def __init__(self, args, **kwargs):
+            self.returncode = 0
+
+        def communicate(self, timeout=None):
+            return ("", "")
+
+        def poll(self):
+            return self.returncode
+
+    with patch.object(subprocess, "Popen", FakePopen):
+        assert p._run(
+            "write the file", timeout=30, allow_empty_output=True) == ""
+
+    with patch.object(subprocess, "Popen", FakePopen):
+        with pytest.raises(RuntimeError, match="empty output"):
+            p._run("normal completion", timeout=30)
+
+
 def test_get_rewrite_provider_falls_back_to_mock():
     """When no CLI tool is configured, get_rewrite_provider falls back."""
     from app.llm.base import get_rewrite_provider

@@ -102,6 +102,10 @@ export default function DraftEdit() {
   const [theme, setTheme] = useState("default");
   const [loaded, setLoaded] = useState(false);
 
+  // DraftEdit can stay mounted while the route id changes. Never let the
+  // previous draft's one-shot hydration block the next draft from loading.
+  useEffect(() => { setLoaded(false); }, [draftId]);
+
   // Dynamic editor height: fill remaining viewport
   const [editorHeight, setEditorHeight] = useState(600);
   const draftRef = useRef<HTMLDivElement>(null);
@@ -590,8 +594,13 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     setTplApplying(true);
     message.loading({ content: `正在用「${t.name}」模板重写文章…`, key: "tpl", duration: 0 });
     try {
-      const r = await postForm<{ ok?: boolean; running?: boolean; error?: string }>(
-        `/api/draft/${data.id}/apply-template`, { template_id: t.id });
+      const r = await postForm<{ ok?: boolean; running?: boolean; error?: string; run_id?: string }>(
+        `/api/draft/${data.id}/apply-template`, {
+          template_id: t.id,
+          body_md: body,
+          title_cn: titleCn,
+          title_candidates: titleCands,
+        });
       if (r.error || r.ok === false) {
         setTplApplying(false);
         message.error({ content: "套用模板失败：" + (r.error || "未知错误"), key: "tpl" });
@@ -601,15 +610,28 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
       if (tplPollRef.current) clearInterval(tplPollRef.current);
       const poll = setInterval(async () => {
         try {
-          const s = await getJson<{ status: string; body_md?: string; error?: string }>(
+          const s = await getJson<{ status: string; run_id?: string; body_md?: string; error?: string }>(
             `/api/draft/${data.id}/agent-status`);
+          if (r.run_id && s.run_id && s.run_id !== r.run_id) {
+            clearInterval(poll); tplPollRef.current = null; setTplApplying(false);
+            message.error({ content: "套用模板失败：运行结果已被另一任务替换", key: "tpl" });
+            return;
+          }
           if (s.status === "completed") {
             clearInterval(poll); tplPollRef.current = null; setTplApplying(false);
-            if (s.body_md) commit(s.body_md);
-            try { await postForm(`/api/draft/${data.id}/agent-clear`); } catch { /* ignore */ }
-            message.success({ content: `已用「${t.name}」模板重写`, key: "tpl" });
-            qc.invalidateQueries({ queryKey: ["draft", data.id] });
-            refocusEditor();
+            try {
+              const applied = await postForm<{ body_md: string }>(
+                `/api/draft/${data.id}/agent-apply`, { run_id: r.run_id || s.run_id || "" });
+              if (applied.body_md) commit(applied.body_md);
+              message.success({ content: `已用「${t.name}」模板重写`, key: "tpl" });
+              qc.invalidateQueries({ queryKey: ["draft", data.id] });
+              refocusEditor();
+            } catch (e: any) {
+              message.error({
+                content: "套用模板失败：" + (e?.response?.data?.error || e?.message || "应用结果失败"),
+                key: "tpl",
+              });
+            }
           } else if (s.status === "error") {
             clearInterval(poll); tplPollRef.current = null; setTplApplying(false);
             message.error({ content: "套用模板失败：" + (s.error || "未知错误"), key: "tpl" });
@@ -783,8 +805,24 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
       <ComponentDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onInsert={insertAtCursor} getSelection={getSelection}
         templates={tplData?.templates || []} templateCategories={tplData?.categories || []}
         hasContent={!!body.trim()} onApplyTemplate={applyTemplate} tplApplying={tplApplying} />
-      <AgentModal open={agentOpen} draftId={data.id} onClose={() => setAgentOpen(false)}
-        onApplied={(md) => { commit(md); setAgentOpen(false); }} />
+      <AgentModal open={agentOpen} draftId={data.id} body={body}
+        titleCn={titleCn} titleCands={titleCands}
+        onClose={() => setAgentOpen(false)}
+        onApplied={(result) => {
+          commit(result.body_md);
+          setTitleCn(result.title_cn);
+          setTitleCands(result.title_candidates.join("\n"));
+          qc.setQueryData<DraftData>(["draft", data.id], (old) => old ? {
+            ...old,
+            body_md: result.body_md,
+            title_cn: result.title_cn,
+            title_candidates: result.title_candidates,
+            status: result.status,
+          } : old);
+          qc.invalidateQueries({ queryKey: ["draft", data.id] });
+          setAgentOpen(false);
+          refocusEditor();
+        }} />
       <FloatButton icon={<RobotOutlined />} type="primary" tooltip="Agent 编辑"
         onClick={() => setAgentOpen(true)} />
 
@@ -1097,7 +1135,22 @@ function ComponentDrawer({ open, onClose, onInsert, getSelection, templates, tem
   );
 }
 
-function AgentModal({ open, draftId, onClose, onApplied }: { open: boolean; draftId: number; onClose: () => void; onApplied: (md: string) => void; }) {
+interface AgentApplyResult {
+  body_md: string;
+  title_cn: string;
+  title_candidates: string[];
+  status: string;
+}
+
+function AgentModal({ open, draftId, body, titleCn, titleCands, onClose, onApplied }: {
+  open: boolean;
+  draftId: number;
+  body: string;
+  titleCn: string;
+  titleCands: string;
+  onClose: () => void;
+  onApplied: (result: AgentApplyResult) => void;
+}) {
   const { message } = AntApp.useApp();
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1105,6 +1158,7 @@ function AgentModal({ open, draftId, onClose, onApplied }: { open: boolean; draf
   const [elapsed, setElapsed] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
   const [resultBody, setResultBody] = useState("");
+  const runIdRef = useRef("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -1114,9 +1168,10 @@ function AgentModal({ open, draftId, onClose, onApplied }: { open: boolean; draf
     let cancelled = false;
     (async () => {
       try {
-        const s = await getJson<{ ok: boolean; status: string; elapsed_s?: number; body_md?: string; error?: string; prompt?: string }>(
+        const s = await getJson<{ ok: boolean; status: string; run_id?: string; elapsed_s?: number; body_md?: string; error?: string; prompt?: string }>(
           `/api/draft/${draftId}/agent-status`);
         if (cancelled) return;
+        runIdRef.current = s.run_id || "";
         if (s.status === "running") {
           setAgentStatus("running");
           setElapsed(s.elapsed_s || 0);
@@ -1140,8 +1195,15 @@ function AgentModal({ open, draftId, onClose, onApplied }: { open: boolean; draf
     timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
     pollRef.current = setInterval(async () => {
       try {
-        const s = await getJson<{ ok: boolean; status: string; elapsed_s?: number; body_md?: string; error?: string }>(
+        const s = await getJson<{ ok: boolean; status: string; run_id?: string; elapsed_s?: number; body_md?: string; error?: string }>(
           `/api/draft/${draftId}/agent-status`);
+        if (runIdRef.current && s.run_id && s.run_id !== runIdRef.current) {
+          stopPolling();
+          setAgentStatus("error");
+          setErrorMsg("当前结果已被另一 Agent 任务替换，请重新打开后确认");
+          return;
+        }
+        if (s.run_id) runIdRef.current = s.run_id;
         if (s.status === "completed") {
           stopPolling();
           setAgentStatus("completed");
@@ -1169,7 +1231,15 @@ function AgentModal({ open, draftId, onClose, onApplied }: { open: boolean; draf
 
   // Cleanup on unmount / close
   useEffect(() => {
-    if (!open) { stopPolling(); setAgentStatus("idle"); setBusy(false); setResultBody(""); setErrorMsg(""); setElapsed(0); }
+    if (!open) {
+      stopPolling();
+      runIdRef.current = "";
+      setAgentStatus("idle");
+      setBusy(false);
+      setResultBody("");
+      setErrorMsg("");
+      setElapsed(0);
+    }
   }, [open]);
 
   async function run() {
@@ -1179,14 +1249,17 @@ function AgentModal({ open, draftId, onClose, onApplied }: { open: boolean; draf
     setResultBody("");
     setErrorMsg("");
     try {
-      const r = await postForm<{ ok?: boolean; running?: boolean; error?: string }>(
-        `/api/draft/${draftId}/agent-edit`, { prompt });
+      const r = await postForm<{ ok?: boolean; running?: boolean; error?: string; run_id?: string }>(
+        `/api/draft/${draftId}/agent-edit`, {
+          prompt, body_md: body, title_cn: titleCn, title_candidates: titleCands,
+        });
       if (r.error) {
         setAgentStatus("error");
         setErrorMsg(r.error);
         setBusy(false);
         message.error(r.error);
       } else if (r.running) {
+        runIdRef.current = r.run_id || "";
         startPolling();
         setBusy(false);
       } else {
@@ -1194,11 +1267,12 @@ function AgentModal({ open, draftId, onClose, onApplied }: { open: boolean; draf
         setBusy(false);
         setAgentStatus("idle");
       }
-    } catch {
+    } catch (e: any) {
       setBusy(false);
       setAgentStatus("error");
-      setErrorMsg("请求失败");
-      message.error("请求失败");
+      const detail = e?.response?.data?.error || e?.message || "请求失败";
+      setErrorMsg(detail);
+      message.error(detail);
     }
   }
 
@@ -1212,10 +1286,20 @@ function AgentModal({ open, draftId, onClose, onApplied }: { open: boolean; draf
   }
 
   async function applyResult() {
-    if (!resultBody) return;
-    try { await postForm(`/api/draft/${draftId}/agent-clear`); } catch { /* ignore */ }
-    onApplied(resultBody);
-    message.success("已应用 Agent 修改");
+    if (!resultBody || !runIdRef.current) return;
+    setBusy(true);
+    try {
+      const applied = await postForm<AgentApplyResult>(
+        `/api/draft/${draftId}/agent-apply`, { run_id: runIdRef.current });
+      onApplied(applied);
+      message.success("已应用 Agent 修改");
+    } catch (e: any) {
+      const detail = e?.response?.data?.error || e?.message || "应用 Agent 修改失败";
+      setErrorMsg(detail);
+      message.error(detail);
+    } finally {
+      setBusy(false);
+    }
   }
 
   function formatTime(s: number) {
@@ -1258,7 +1342,7 @@ function AgentModal({ open, draftId, onClose, onApplied }: { open: boolean; draf
         <div style={{ textAlign: "center", padding: "24px 0" }}>
           <div style={{ fontSize: 16, marginBottom: 8 }}>🤖 Agent 正在处理…</div>
           <div style={{ fontSize: 24, fontFamily: "monospace", color: "#1890ff" }}>{formatTime(elapsed)}</div>
-          <div style={{ marginTop: 12, color: "#999", fontSize: 13 }}>完成后将自动应用修改，可关闭此窗口</div>
+          <div style={{ marginTop: 12, color: "#999", fontSize: 13 }}>完成后请点击「应用修改」写入编辑器</div>
         </div>
       )}
 
