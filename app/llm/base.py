@@ -24,7 +24,10 @@ def get_provider(name: str, api_key: str | None = None,
         return MockProvider()
     if name == "openai":
         from app.llm.providers.openai import OpenAIProvider
-        return OpenAIProvider(api_key=api_key, model=model, base_url=base_url)
+        kwargs = {"api_key": api_key, "model": model, "base_url": base_url}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        return OpenAIProvider(**kwargs)
     # CLI-agent providers (opencode / codex / copilot)
     from app.llm.providers.cli import detect_all as _cli_detect_all
     if name in ("opencode", "codex", "copilot"):
