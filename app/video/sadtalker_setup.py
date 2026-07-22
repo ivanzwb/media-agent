@@ -497,6 +497,7 @@ def _download_models_with_curl(
     proxy: str | None,
     progress_cb: Callable[[str, float], None] | None,
     cancel_event: threading.Event | None,
+    pause_event: threading.Event | None = None,
 ) -> bool:
     dest = _models_dir(data_dir)
     dest.mkdir(parents=True, exist_ok=True)
@@ -510,6 +511,16 @@ def _download_models_with_curl(
                 progress_cb(message, fraction)
             except Exception:
                 pass
+
+    def wait_if_paused() -> None:
+        if pause_event and pause_event.is_set():
+            emit("下载已暂停 — 可修改镜像后继续",
+                 completed / max(total_bytes, 1))
+            while pause_event.is_set():
+                if cancel_event and cancel_event.is_set():
+                    emit("下载已取消", -1)
+                    raise RuntimeError("安装已取消")
+                time.sleep(0.5)
 
     emit("使用 curl 下载 SadTalker 模型（支持断点续传）…", 0.0)
     for rel, expected in REQUIRED_FILES:
@@ -535,6 +546,7 @@ def _download_models_with_curl(
             if cancel_event and cancel_event.is_set():
                 emit("下载已取消", -1)
                 return False
+            wait_if_paused()
             current = target.stat().st_size if target.is_file() else 0
             url = urls[(attempt - 1) % len(urls)]
             route = "官方源" if url == official_url else "备用镜像"
@@ -569,6 +581,20 @@ def _download_models_with_curl(
                         process.kill()
                     emit("下载已取消", -1)
                     return False
+                if pause_event and pause_event.is_set():
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    emit("下载已暂停 — 可修改镜像后继续",
+                         completed / max(total_bytes, 1))
+                    while pause_event.is_set():
+                        if cancel_event and cancel_event.is_set():
+                            emit("下载已取消", -1)
+                            return False
+                        time.sleep(0.5)
+                    break  # break inner while to restart attempt loop
                 time.sleep(1)
                 size = target.stat().st_size if target.is_file() else 0
                 now = time.monotonic()
@@ -632,6 +658,7 @@ def download_models(
     proxy: str | None = None,
     progress_cb: Callable[[str, float], None] | None = None,
     cancel_event: threading.Event | None = None,
+    pause_event: threading.Event | None = None,
 ) -> bool:
     """Download *all* model files with per-file resume.
 
@@ -642,6 +669,8 @@ def download_models(
         -1 on error.  Intended for SSE streaming to the frontend.
     cancel_event:
         If set, the download loop exits early.
+    pause_event:
+        If set, download pauses and waits until cleared.
 
     Returns True when all *required* files are present.
     """
@@ -649,7 +678,8 @@ def download_models(
     if curl:
         return _download_models_with_curl(
             curl, data_dir, mirror=mirror, proxy=proxy,
-            progress_cb=progress_cb, cancel_event=cancel_event)
+            progress_cb=progress_cb, cancel_event=cancel_event,
+            pause_event=pause_event)
 
     dest = _models_dir(data_dir)
     dest.mkdir(parents=True, exist_ok=True)
@@ -725,6 +755,14 @@ def download_models(
             # partial file size and sends Range, so a dropped connection resumes
             # automatically instead of asking the user to click again.
             for attempt in range(1, 9):
+                if pause_event and pause_event.is_set():
+                    _emit("下载已暂停 — 可修改镜像后继续",
+                          downloaded_so_far / max(total_bytes, 1))
+                    while pause_event.is_set():
+                        if cancel_event and cancel_event.is_set():
+                            _emit("下载已取消", -1)
+                            return False
+                        time.sleep(0.5)
                 existing = fp.stat().st_size if fp.is_file() else 0
                 try:
                     _emit(f"下载 {rel}…",
@@ -776,6 +814,14 @@ def download_models(
                                 if cancel_event and cancel_event.is_set():
                                     _emit("下载已取消", -1)
                                     return False
+                                if pause_event and pause_event.is_set():
+                                    _emit("下载已暂停 — 可修改镜像后继续",
+                                          (downloaded_so_far + bytes_written) / max(total_bytes, 1))
+                                    while pause_event.is_set():
+                                        if cancel_event and cancel_event.is_set():
+                                            _emit("下载已取消", -1)
+                                            return False
+                                        time.sleep(0.5)
                                 fout.write(chunk)
                                 bytes_written += len(chunk)
                                 now = time.monotonic()
@@ -875,11 +921,19 @@ def _download_runtime_part(
     total_bytes: int,
     emit: Callable[[str, float], None],
     cancel_event: threading.Event | None,
+    pause_event: threading.Event | None = None,
 ) -> None:
     """Download one release-asset part, resuming an interrupted local file."""
     for attempt in range(1, 9):
         if cancel_event and cancel_event.is_set():
             raise RuntimeError("安装已取消")
+        if pause_event and pause_event.is_set():
+            emit("下载已暂停 — 可修改镜像后继续",
+                 completed_bytes / max(total_bytes, 1))
+            while pause_event.is_set():
+                if cancel_event and cancel_event.is_set():
+                    raise RuntimeError("安装已取消")
+                time.sleep(0.5)
         existing = destination.stat().st_size if destination.is_file() else 0
         if existing == expected_size and _sha256(destination) == expected_sha:
             return
@@ -898,6 +952,13 @@ def _download_runtime_part(
                     for chunk in response.iter_bytes(1024 * 1024):
                         if cancel_event and cancel_event.is_set():
                             raise RuntimeError("安装已取消")
+                        if pause_event and pause_event.is_set():
+                            emit("下载已暂停 — 可修改镜像后继续",
+                                 (completed_bytes + written) / max(total_bytes, 1))
+                            while pause_event.is_set():
+                                if cancel_event and cancel_event.is_set():
+                                    raise RuntimeError("安装已取消")
+                                time.sleep(0.5)
                         output.write(chunk)
                         written += len(chunk)
                         now = time.monotonic()
@@ -941,6 +1002,7 @@ def _download_runtime(
     proxy: str | None,
     progress_cb: Callable[[str, float], None] | None,
     cancel_event: threading.Event | None,
+    pause_event: threading.Event | None = None,
 ) -> Path:
     """Download a multipart release runtime with per-part Range resume."""
     archive = _runtime_archive(data_dir)
@@ -977,7 +1039,7 @@ def _download_runtime(
                 client, url=f"{base_url}/{name}", destination=destination,
                 expected_size=size, expected_sha=digest,
                 completed_bytes=completed, total_bytes=total, emit=emit,
-                cancel_event=cancel_event,
+                cancel_event=cancel_event, pause_event=pause_event,
             )
             local_parts.append(destination)
             completed += size
@@ -1130,12 +1192,13 @@ def _install_runtime(
     proxy: str | None,
     progress_cb: Callable[[str, float], None] | None,
     cancel_event: threading.Event | None,
+    pause_event: threading.Event | None = None,
 ) -> None:
     if runtime_files_ready(data_dir):
         return
     archive = _download_runtime(
         data_dir, proxy=proxy, progress_cb=progress_cb,
-        cancel_event=cancel_event)
+        cancel_event=cancel_event, pause_event=pause_event)
     install_runtime_archive(
         data_dir, archive, progress_cb=progress_cb, cleanup_archive=True)
 
@@ -1170,6 +1233,7 @@ def run_setup(
     proxy: str | None = None,
     progress_cb: Callable[[str, float], None] | None = None,
     cancel_event: threading.Event | None = None,
+    pause_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     """Run the full SadTalker setup: download models + resolve paths.
 
@@ -1201,7 +1265,7 @@ def run_setup(
                  _emit(message, min(max(fraction, 0.0) * 0.45, 0.45)))
                 if progress_cb else None
             ),
-            cancel_event=cancel_event,
+            cancel_event=cancel_event, pause_event=pause_event,
         )
     except Exception as exc:
         return {"ok": False, "message": str(exc), **setup_status(data_dir)}
@@ -1211,7 +1275,8 @@ def run_setup(
 
     ok = download_models(
         data_dir, mirror=mirror, proxy=proxy,
-        progress_cb=model_progress, cancel_event=cancel_event)
+        progress_cb=model_progress, cancel_event=cancel_event,
+        pause_event=pause_event)
     if not ok:
         return {"ok": False, "message": "模型下载失败，请检查网络后重试",
                 **setup_status(data_dir)}

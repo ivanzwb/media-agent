@@ -282,6 +282,7 @@ def _download_part(
     client: httpx.Client, *, url: str, destination: Path,
     expected_size: int, expected_sha: str, completed: int, total: int,
     progress_cb: Progress | None, cancel_event: threading.Event | None,
+    pause_event: threading.Event | None = None,
 ) -> None:
     for attempt in range(1, 9):
         if cancel_event and cancel_event.is_set():
@@ -303,6 +304,13 @@ def _download_part(
                     for chunk in response.iter_bytes(1024 * 1024):
                         if cancel_event and cancel_event.is_set():
                             raise RuntimeError("安装已取消")
+                        if pause_event and pause_event.is_set():
+                            _emit(progress_cb, "下载已暂停 — 可修改镜像后继续",
+                                  min((completed + written) / max(total, 1), .99))
+                            while pause_event.is_set():
+                                if cancel_event and cancel_event.is_set():
+                                    raise RuntimeError("安装已取消")
+                                time.sleep(0.5)
                         output.write(chunk)
                         written += len(chunk)
                         now = time.monotonic()
@@ -335,7 +343,8 @@ def _download_part(
 
 def _download_runtime(data_dir: Path, *, proxy: str | None,
                       progress_cb: Progress | None,
-                      cancel_event: threading.Event | None) -> Path:
+                      cancel_event: threading.Event | None,
+                      pause_event: threading.Event | None = None) -> Path:
     archive = _archive_path(data_dir)
     archive.parent.mkdir(parents=True, exist_ok=True)
     manifest_url = _manifest_url()
@@ -364,7 +373,7 @@ def _download_runtime(data_dir: Path, *, proxy: str | None,
                 expected_size=int(part["size"]),
                 expected_sha=str(part["sha256"]).lower(),
                 completed=completed, total=total, progress_cb=progress_cb,
-                cancel_event=cancel_event)
+                cancel_event=cancel_event, pause_event=pause_event)
             local_parts.append(destination)
             completed += int(part["size"])
         _emit(progress_cb, "合并并校验 CosyVoice runtime…", .99)
@@ -469,19 +478,31 @@ def install_runtime_archive(data_dir: Path, archive: Path, *,
 
 def _install_runtime(data_dir: Path, *, proxy: str | None,
                      progress_cb: Progress | None,
-                     cancel_event: threading.Event | None) -> None:
+                     cancel_event: threading.Event | None,
+                     pause_event: threading.Event | None = None) -> None:
     if runtime_files_ready(data_dir):
         return
     archive = _download_runtime(
         data_dir, proxy=proxy, progress_cb=progress_cb,
-        cancel_event=cancel_event)
+        cancel_event=cancel_event, pause_event=pause_event)
     install_runtime_archive(
         data_dir, archive, progress_cb=progress_cb, cleanup_archive=True)
 
 
+def _wait_if_paused(pause_event: threading.Event | None,
+                    cancel_event: threading.Event | None) -> None:
+    """Block while pause is active, raising on cancel."""
+    if pause_event and pause_event.is_set():
+        while pause_event.is_set():
+            if cancel_event and cancel_event.is_set():
+                raise RuntimeError("安装已取消")
+            time.sleep(0.5)
+
+
 def download_models(data_dir: Path, *, proxy: str | None = None,
                     progress_cb: Progress | None = None,
-                    cancel_event: threading.Event | None = None) -> bool:
+                    cancel_event: threading.Event | None = None,
+                    pause_event: threading.Event | None = None) -> bool:
     if models_ready(data_dir):
         return True
     env = os.environ.copy()
@@ -500,6 +521,7 @@ def download_models(data_dir: Path, *, proxy: str | None = None,
     for attempt in range(1, 9):
         if cancel_event and cancel_event.is_set():
             return False
+        _wait_if_paused(pause_event, cancel_event)
         _emit(progress_cb, "下载 CosyVoice2-0.5B 模型"
               f"（可断点续传，第 {attempt}/8 次）…", 0.0)
         proc = subprocess.Popen(
@@ -538,7 +560,8 @@ def download_models(data_dir: Path, *, proxy: str | None = None,
 
 def run_setup(data_dir: Path, *, proxy: str | None = None,
               progress_cb: Progress | None = None,
-              cancel_event: threading.Event | None = None) -> dict[str, Any]:
+              cancel_event: threading.Event | None = None,
+              pause_event: threading.Event | None = None) -> dict[str, Any]:
     current = setup_status(data_dir)
     if not current["installable"]:
         return {"ok": False, "message": current["reason"], **current}
@@ -547,7 +570,7 @@ def run_setup(data_dir: Path, *, proxy: str | None = None,
             data_dir, proxy=proxy,
             progress_cb=(lambda msg, frac: _emit(
                 progress_cb, msg, min(max(frac, 0) * .5, .5))),
-            cancel_event=cancel_event)
+            cancel_event=cancel_event, pause_event=pause_event)
     except Exception as exc:
         return {"ok": False, "message": str(exc), **setup_status(data_dir)}
     model_fraction = 0.0
@@ -562,7 +585,7 @@ def run_setup(data_dir: Path, *, proxy: str | None = None,
 
     if not download_models(
             data_dir, proxy=proxy, progress_cb=model_progress,
-            cancel_event=cancel_event):
+            cancel_event=cancel_event, pause_event=pause_event):
         return {"ok": False, "message": "CosyVoice2 模型下载失败",
                 **setup_status(data_dir)}
     accelerator = current["accelerator"] or "runtime"

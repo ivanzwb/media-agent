@@ -3,7 +3,7 @@ import {
   App as AntApp, Button, Card, Divider, Form, Input, InputNumber, Progress, Select,
   Space, Switch, Tag, Typography, List, Upload, Popconfirm, Tabs, Modal,
 } from "antd";
-import { UploadOutlined, AudioOutlined, StopOutlined, CheckOutlined, CloseOutlined, ThunderboltOutlined, DownloadOutlined, ReloadOutlined } from "@ant-design/icons";
+import { UploadOutlined, AudioOutlined, StopOutlined, CheckOutlined, CloseOutlined, ThunderboltOutlined, DownloadOutlined, ReloadOutlined, PauseCircleOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import { useState, useRef, useEffect } from "react";
 import { api, getJson, postForm } from "../api/client";
 
@@ -687,6 +687,7 @@ function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
   const [statusError, setStatusError] = useState("");
   const [installing, setInstalling] = useState(false);
   const [progress, setProgress] = useState<{ message: string; fraction: number } | null>(null);
+  const [paused, setPaused] = useState(false);
 
   const refresh = async () => {
     try {
@@ -703,6 +704,7 @@ function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
 
   async function install() {
     setInstalling(true);
+    setPaused(false);
     setProgress({ message: "准备安装…", fraction: 0 });
     try {
       const response = await fetch("/api/cosyvoice/setup", { method: "POST" });
@@ -748,6 +750,7 @@ function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
       message.error("CosyVoice 安装失败：" + (error?.message || error));
     } finally {
       setInstalling(false);
+      setPaused(false);
       setProgress(null);
     }
   }
@@ -758,7 +761,22 @@ function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
       {installing && progress ? (
         <Space direction="vertical" style={{ width: "100%" }}>
           <Text>{progress.message}</Text>
-          <Progress percent={Math.max(1, Math.round(Math.max(0, progress.fraction) * 100))} status="active" />
+          <Progress percent={Math.max(1, Math.round(Math.max(0, progress.fraction) * 100))} status={paused ? "normal" : "active"} />
+          <Space>
+            {paused ? (
+              <Button icon={<PlayCircleOutlined />} onClick={async () => {
+                try { await postForm("/api/cosyvoice/resume", {}); setPaused(false); } catch {}
+              }}>继续</Button>
+            ) : (
+              <Button icon={<PauseCircleOutlined />} onClick={async () => {
+                try { await postForm("/api/cosyvoice/pause", {}); setPaused(true); } catch {}
+              }}>暂停</Button>
+            )}
+            <Button danger icon={<StopOutlined />} onClick={async () => {
+              try { await postForm("/api/cosyvoice/cancel", {}); } catch {}
+              setProgress({ message: "正在取消…", fraction: progress?.fraction ?? 0 });
+            }}>取消</Button>
+          </Space>
         </Space>
       ) : (
         <Space direction="vertical">
@@ -809,6 +827,7 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
   const { message } = AntApp.useApp();
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState<{ message: string; fraction: number } | null>(null);
+  const [paused, setPaused] = useState(false);
 
   type SadTalkerStatus = ManagedRuntimeStatus;
 
@@ -819,6 +838,7 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
 
   async function startSetup() {
     setDownloading(true);
+    setPaused(false);
     setProgress({ message: "准备下载…", fraction: 0 });
 
     try {
@@ -833,6 +853,7 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
       if ((resp.headers.get("content-type") || "").includes("application/json")) {
         const payload = await resp.json();
         setDownloading(false);
+        setPaused(false);
         setProgress(null);
         if (payload.ok) {
           message.success(payload.message || "数字人模型已就绪");
@@ -892,10 +913,12 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
       if (buffer.trim() && handleEvent(buffer.trim())) return;
       // If we exit the loop without a "done" event, something went wrong
       setDownloading(false);
+      setPaused(false);
       setProgress(null);
       message.warning("下载连接中断，请重试");
     } catch (e: any) {
       setDownloading(false);
+      setPaused(false);
       setProgress(null);
       message.error("安装失败：" + (e?.message || e));
     }
@@ -911,7 +934,22 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
       {downloading && progress ? (
         <Space direction="vertical" style={{ width: "100%" }}>
           <Text>{progress.message}</Text>
-          <Progress percent={Math.max(1, Math.round(progress.fraction * 100))} status="active" />
+          <Progress percent={Math.max(1, Math.round(progress.fraction * 100))} status={paused ? "normal" : "active"} />
+          <Space>
+            {paused ? (
+              <Button icon={<PlayCircleOutlined />} onClick={async () => {
+                try { await postForm("/api/sadtalker/resume", {}); setPaused(false); } catch {}
+              }}>继续</Button>
+            ) : (
+              <Button icon={<PauseCircleOutlined />} onClick={async () => {
+                try { await postForm("/api/sadtalker/pause", {}); setPaused(true); } catch {}
+              }}>暂停</Button>
+            )}
+            <Button danger icon={<StopOutlined />} onClick={async () => {
+              try { await postForm("/api/sadtalker/cancel", {}); } catch {}
+              setProgress({ message: "正在取消…", fraction: progress?.fraction ?? 0 });
+            }}>取消</Button>
+          </Space>
         </Space>
       ) : (
         <Space direction="vertical">

@@ -3899,6 +3899,7 @@ def create_app(config: Config | None = None,
         return get_capabilities(config.data_dir)
 
     cosyvoice_install_lock = threading.Lock()
+    _cosyvoice_events: dict[str, threading.Event] = {}
 
     @app.get("/api/cosyvoice/status")
     def api_cosyvoice_status():
@@ -3931,6 +3932,9 @@ def create_app(config: Config | None = None,
                 ensure_ascii=False)})
 
         cancel = _threading.Event()
+        pause = _threading.Event()
+        _cosyvoice_events["cancel"] = cancel
+        _cosyvoice_events["pause"] = pause
 
         def worker() -> None:
             try:
@@ -3938,13 +3942,15 @@ def create_app(config: Config | None = None,
                     os.environ["MEDIA_AGENT_GITHUB_MIRROR"] = setup_config.github_mirror
                 result = run_setup(
                     config.data_dir, proxy=setup_config.fetch_proxy,
-                    progress_cb=on_progress, cancel_event=cancel)
+                    progress_cb=on_progress, cancel_event=cancel,
+                    pause_event=pause)
                 evt_q.put({"event": "done", "data": _json.dumps(
                     result, ensure_ascii=False)})
             except Exception as exc:
                 evt_q.put({"event": "done", "data": _json.dumps(
                     {"ok": False, "message": str(exc)}, ensure_ascii=False)})
             finally:
+                _cosyvoice_events.clear()
                 cosyvoice_install_lock.release()
 
         _threading.Thread(target=worker, daemon=True).start()
@@ -3966,6 +3972,7 @@ def create_app(config: Config | None = None,
 
     # ── SadTalker one-click setup ───────────────────────────────────────────
     sadtalker_install_lock = threading.Lock()
+    _sadtalker_events: dict[str, threading.Event] = {}
 
     @app.get("/api/sadtalker/status")
     def api_sadtalker_status():
@@ -4012,6 +4019,9 @@ def create_app(config: Config | None = None,
                 ensure_ascii=False)})
 
         cancel = _threading.Event()
+        pause = _threading.Event()
+        _sadtalker_events["cancel"] = cancel
+        _sadtalker_events["pause"] = pause
 
         def _worker() -> None:
             try:
@@ -4023,6 +4033,7 @@ def create_app(config: Config | None = None,
                     proxy=setup_config.fetch_proxy,
                     progress_cb=_on_progress,
                     cancel_event=cancel,
+                    pause_event=pause,
                 )
                 evt_q.put({"event": "done",
                             "data": _json.dumps(result, ensure_ascii=False)})
@@ -4032,6 +4043,7 @@ def create_app(config: Config | None = None,
                                 {"ok": False, "message": str(exc)},
                                 ensure_ascii=False)})
             finally:
+                _sadtalker_events.clear()
                 sadtalker_install_lock.release()
 
         _threading.Thread(target=_worker, daemon=True).start()
@@ -4056,6 +4068,50 @@ def create_app(config: Config | None = None,
 
         return StreamingResponse(_stream(), media_type="text/event-stream",
                                  headers={"X-Accel-Buffering": "no"})
+
+    # ── Pause / Resume / Cancel for running installs ───────────────────────
+
+    @app.post("/api/cosyvoice/pause")
+    def api_cosyvoice_pause():
+        if not _cosyvoice_events:
+            return {"ok": False, "message": "CosyVoice 没有正在运行的安装任务"}
+        _cosyvoice_events["pause"].set()
+        return {"ok": True, "message": "已暂停"}
+
+    @app.post("/api/cosyvoice/resume")
+    def api_cosyvoice_resume():
+        if not _cosyvoice_events:
+            return {"ok": False, "message": "CosyVoice 没有正在运行的安装任务"}
+        _cosyvoice_events["pause"].clear()
+        return {"ok": True, "message": "已恢复"}
+
+    @app.post("/api/cosyvoice/cancel")
+    def api_cosyvoice_cancel():
+        if not _cosyvoice_events:
+            return {"ok": False, "message": "CosyVoice 没有正在运行的安装任务"}
+        _cosyvoice_events["cancel"].set()
+        return {"ok": True, "message": "已取消"}
+
+    @app.post("/api/sadtalker/pause")
+    def api_sadtalker_pause():
+        if not _sadtalker_events:
+            return {"ok": False, "message": "SadTalker 没有正在运行的安装任务"}
+        _sadtalker_events["pause"].set()
+        return {"ok": True, "message": "已暂停"}
+
+    @app.post("/api/sadtalker/resume")
+    def api_sadtalker_resume():
+        if not _sadtalker_events:
+            return {"ok": False, "message": "SadTalker 没有正在运行的安装任务"}
+        _sadtalker_events["pause"].clear()
+        return {"ok": True, "message": "已恢复"}
+
+    @app.post("/api/sadtalker/cancel")
+    def api_sadtalker_cancel():
+        if not _sadtalker_events:
+            return {"ok": False, "message": "SadTalker 没有正在运行的安装任务"}
+        _sadtalker_events["cancel"].set()
+        return {"ok": True, "message": "已取消"}
 
     # SPA catch-all: serve index.html for client-side deep links that aren't
     # explicit API/asset routes (registered last so real routes win).
