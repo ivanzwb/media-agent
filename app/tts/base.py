@@ -105,7 +105,8 @@ def get_tts_provider(name: str | None, base_url: str | None = None,
                      api_key: str | None = None, model: str | None = None,
                      voice: str | None = None, rate: str | None = None,
                      pitch: str | None = None,
-                     instruct: str | None = None) -> TTSProvider:
+                     instruct: str | None = None,
+                     data_dir: Path | None = None) -> TTSProvider:
     # Default: in-process Kitten (edge-tts) — no external service needed.
     if name in (None, "", "kitten", "local"):
         from app.tts.providers.local_kitten import LocalKittenTTS
@@ -118,25 +119,15 @@ def get_tts_provider(name: str | None, base_url: str | None = None,
         inner = OpenAICompatibleTTS(base_url=base_url, api_key=api_key,
                                     model=model, voice=voice)
     elif name == "cosyvoice":
-        # voice = speaker reference wav path (resolved by caller);
-        # model = CosyVoice2 model name/path (HuggingFace ID or local dir).
-        try:
-            from app.tts.providers.cosyvoice import CosyVoiceTTS
-        except ImportError as exc:
-            raise RuntimeError(
-                "CosyVoice 声音复刻需要额外依赖（numpy、torch、cosyvoice 等），"
-                f"当前环境缺少：{exc.name or exc}。请运行 setup-optional 安装这些依赖，"
-                "或在「设置 → 语音」里把 TTS Provider 改为 Kitten（本地 edge-tts，"
-                "无需额外依赖）或 OpenAI 兼容（云端 API）。") from exc
-        except OSError as exc:
-            # Native DLL init failure (WinError 1114) while importing torch etc.
-            raise RuntimeError(
-                "CosyVoice 的本地依赖加载失败（原生 DLL 初始化失败）："
-                f"{exc}。通常是缺少 Microsoft Visual C++ 2015-2022 "
-                "Redistributable (x64)，或 torch/onnxruntime 依赖损坏；"
-                "可安装该运行库后重启，或在「设置 → 语音」改用 Kitten"
-                "（本地 edge-tts，无需额外依赖）。") from exc
-        inner = CosyVoiceTTS(speaker_wav=voice, model=model, instruct=instruct)
+        # Heavy dependencies remain isolated in a managed subprocess runtime.
+        # ``model`` is intentionally ignored: users never configure a source,
+        # Python, or checkpoint path.
+        del model
+        if data_dir is None:
+            raise RuntimeError("CosyVoice provider requires the managed data_dir")
+        from app.tts.providers.cosyvoice_runtime import CosyVoiceRuntimeTTS
+        inner = CosyVoiceRuntimeTTS(
+            data_dir=data_dir, speaker_wav=voice, instruct=instruct)
     else:
         raise ValueError(f"Unknown TTS provider: {name}")
 

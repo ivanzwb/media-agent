@@ -165,6 +165,8 @@ def _avatar_spec(config: Config, emit):
     if not config.avatar_enabled:
         return None
     from app.video.avatar import AvatarSpec, sadtalker_available
+    from app.video.sadtalker_setup import (
+        checkpoint_dir, resolve_sadtalker_dir, resolve_sadtalker_python)
     img = (config.avatar_image or "").strip()
     if not img:
         emit("数字人已启用，但未设置主播头像（设置→视频），本次跳过")
@@ -179,12 +181,13 @@ def _avatar_spec(config: Config, emit):
         enabled=True, image=img_path,
         provider=(config.avatar_provider or "sadtalker"),
         position=(config.avatar_position or "pip"),
-        sadtalker_dir=config.sadtalker_dir,
-        sadtalker_python=config.sadtalker_python,
+        sadtalker_dir=resolve_sadtalker_dir(config.data_dir),
+        sadtalker_python=resolve_sadtalker_python(config.data_dir),
+        checkpoint_dir=str(checkpoint_dir(config.data_dir)),
     )
     if spec.provider == "sadtalker" and not sadtalker_available(spec):
-        emit("提示：未检测到 SadTalker（将用静态头像）。"
-             "配置 SadTalker 目录后可启用口型同步。")
+        emit("提示：SadTalker runtime 或模型未就绪（将用静态头像）。"
+             "请在设置中完成数字人安装。")
     return spec
 
 

@@ -168,6 +168,8 @@ def test_settings_roundtrip_tts_and_avatar(tmp_path):
         "tts_provider": "cosyvoice", "tts_rate": "+10%", "tts_pitch": "+15Hz",
         "tts_instruct": "用亲切的语气",
         "avatar_enabled": "1", "avatar_image": "p.png", "avatar_position": "full",
+        # Legacy manual paths are intentionally ignored; the managed runtime
+        # owns both source and Python.
         "avatar_provider": "sadtalker", "sadtalker_dir": "/opt/SadTalker",
     }, follow_redirects=False)
     assert r.status_code in (200, 303)
@@ -176,7 +178,8 @@ def test_settings_roundtrip_tts_and_avatar(tmp_path):
     assert s["tts_instruct"] == "用亲切的语气"
     assert s["avatar_enabled"] is True
     assert s["avatar_image"] == "p.png" and s["avatar_position"] == "full"
-    assert s["sadtalker_dir"] == "/opt/SadTalker"
+    assert s["sadtalker_dir"] == ""
+    assert store.get_setting("sadtalker_dir") is None
     # persisted to DB
     assert store.get_setting("tts_pitch") == "+15Hz"
     assert store.get_setting("avatar_enabled") == "1"
@@ -732,3 +735,79 @@ def test_rewrite_preserves_title_not_body(tmp_path):
     # Title must be preserved — NOT replaced by (or containing) the body.
     assert row["title_cn"] == "我的中文标题"
     assert body_now and row["title_cn"] != body_now
+
+
+def test_sadtalker_setup_stream_uses_standard_sse(tmp_path, monkeypatch):
+    from app.video import sadtalker_setup as st
+
+    client, _, _ = make_client(tmp_path)
+    monkeypatch.setattr(st, "setup_status", lambda _: {
+        "ready": False, "gpu_ok": True, "runtime_ok": False,
+        "models_ok": True, "smoke_ok": False, "reason": "runtime missing",
+    })
+
+    def fake_setup(data_dir, *, mirror, proxy, progress_cb, cancel_event):
+        assert mirror is True
+        assert proxy is None
+        progress_cb("下载中", 0.5)
+        return {
+            "ok": True,
+            "message": "安装完成",
+            "sadtalker_dir": "",
+            "sadtalker_python": "",
+        }
+
+    monkeypatch.setattr(st, "run_setup", fake_setup)
+    r = client.post("/api/sadtalker/setup", data={"mirror": "true"})
+    assert r.status_code == 200
+    assert "event: progress\ndata: " in r.text
+    assert "event: done\ndata: " in r.text
+    assert 'progress: {"message"' not in r.text
+
+
+def test_sadtalker_status_requires_runtime_and_smoke(tmp_path, monkeypatch):
+    from app.video import sadtalker_setup as st
+
+    client, _, _ = make_client(tmp_path)
+    expected = {
+        "ready": False, "gpu_ok": True, "gpu_name": "Test GPU",
+        "runtime_ok": False, "models_ok": True, "smoke_ok": False,
+        "reason": "尚未安装 SadTalker runtime",
+        "runtime_dir": str(tmp_path / "runtimes" / "sadtalker"),
+        "models_dir": str(tmp_path / "models" / "sadtalker"),
+        "files": [],
+    }
+    monkeypatch.setattr(st, "setup_status", lambda _: expected)
+
+    response = client.get("/api/sadtalker/status")
+
+    assert response.status_code == 200
+    assert response.json() == expected
+
+
+def test_cosyvoice_setup_stream_and_status(tmp_path, monkeypatch):
+    from app import cosyvoice_install as cv
+
+    client, _, _ = make_client(tmp_path)
+    expected = {
+        "ready": False, "gpu_ok": True, "gpu_name": "Test GPU",
+        "runtime_ok": False, "models_ok": False, "smoke_ok": False,
+        "reason": "runtime missing",
+        "runtime_dir": str(tmp_path / "runtimes" / "cosyvoice"),
+        "models_dir": str(
+            tmp_path / "models" / "cosyvoice" / "CosyVoice2-0.5B"),
+    }
+    monkeypatch.setattr(cv, "setup_status", lambda _: expected)
+
+    def fake_setup(data_dir, *, proxy, progress_cb, cancel_event):
+        assert data_dir == tmp_path
+        assert proxy is None
+        progress_cb("下载中", .5)
+        return {**expected, "ok": True, "ready": True, "message": "安装完成"}
+
+    monkeypatch.setattr(cv, "run_setup", fake_setup)
+    assert client.get("/api/cosyvoice/status").json() == expected
+    response = client.post("/api/cosyvoice/setup")
+    assert response.status_code == 200
+    assert "event: progress\ndata: " in response.text
+    assert "event: done\ndata: " in response.text

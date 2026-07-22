@@ -1633,7 +1633,8 @@ def create_app(config: Config | None = None,
         if provider == "cosyvoice":
             sp = voice_sample_path(config, voice)
             return get_tts_provider("cosyvoice", voice=str(sp) if sp else None,
-                                    model=rc.tts_model, instruct=rc.tts_instruct)
+                                    instruct=rc.tts_instruct,
+                                    data_dir=config.data_dir)
         return get_tts_provider(
             provider, base_url=rc.tts_api_base,
             api_key=rc.tts_api_key, model=rc.tts_model, voice=voice,
@@ -3523,8 +3524,7 @@ def create_app(config: Config | None = None,
                         avatar_image: str = Form(""),
                         avatar_position: str = Form(""),
                         avatar_provider: str = Form(""),
-                        sadtalker_dir: str = Form(""),
-                        sadtalker_python: str = Form(""),
+
                        sensitive_level: str = Form(""),
                        sensitive_words: str = Form(""),
                        promotion_footer: str = Form(""),
@@ -3562,8 +3562,7 @@ def create_app(config: Config | None = None,
             "avatar_image": avatar_image.strip(),
             "avatar_position": avatar_position.strip(),
             "avatar_provider": avatar_provider.strip(),
-            "sadtalker_dir": sadtalker_dir.strip(),
-            "sadtalker_python": sadtalker_python.strip(),
+
             "sensitive_level": sensitive_level.strip(),
             "sensitive_words": sensitive_words.strip(),
             "promotion_footer": promotion_footer.strip(),
@@ -3703,6 +3702,167 @@ def create_app(config: Config | None = None,
             "version": version or "(版本信息不可用)",
             "label": label,
         }
+
+    # ── Managed optional runtimes ───────────────────────────────────────────
+    @app.get("/api/capabilities")
+    def api_capabilities():
+        from app.capabilities import get_capabilities
+        return get_capabilities(config.data_dir)
+
+    cosyvoice_install_lock = threading.Lock()
+
+    @app.get("/api/cosyvoice/status")
+    def api_cosyvoice_status():
+        from app.cosyvoice_install import setup_status
+        return setup_status(config.data_dir)
+
+    @app.post("/api/cosyvoice/setup")
+    def api_cosyvoice_setup():
+        """Install the managed runtime/model payload with SSE progress."""
+        import json as _json
+        import queue
+        import threading as _threading
+        from starlette.responses import StreamingResponse
+        from app.cosyvoice_install import run_setup, setup_status
+
+        current = setup_status(config.data_dir)
+        if current["ready"]:
+            return {**current, "ok": True,
+                    "message": "CosyVoice runtime 与模型已就绪"}
+        if not cosyvoice_install_lock.acquire(blocking=False):
+            return {**current, "ok": False, "installing": True,
+                    "message": "CosyVoice 正在安装，请等待当前任务完成"}
+
+        evt_q: queue.Queue = queue.Queue()
+        setup_config = Config.load(store=get_store())
+
+        def on_progress(message: str, fraction: float) -> None:
+            evt_q.put({"event": "progress", "data": _json.dumps(
+                {"message": message, "fraction": round(fraction, 3)},
+                ensure_ascii=False)})
+
+        cancel = _threading.Event()
+
+        def worker() -> None:
+            try:
+                result = run_setup(
+                    config.data_dir, proxy=setup_config.fetch_proxy,
+                    progress_cb=on_progress, cancel_event=cancel)
+                evt_q.put({"event": "done", "data": _json.dumps(
+                    result, ensure_ascii=False)})
+            except Exception as exc:
+                evt_q.put({"event": "done", "data": _json.dumps(
+                    {"ok": False, "message": str(exc)}, ensure_ascii=False)})
+            finally:
+                cosyvoice_install_lock.release()
+
+        _threading.Thread(target=worker, daemon=True).start()
+
+        def stream():
+            while True:
+                try:
+                    item = evt_q.get(timeout=.3)
+                except queue.Empty:
+                    yield "event: heartbeat\ndata: {}\n\n"
+                    continue
+                yield f"event: {item['event']}\ndata: {item['data']}\n\n"
+                if item["event"] == "done":
+                    break
+
+        return StreamingResponse(
+            stream(), media_type="text/event-stream",
+            headers={"X-Accel-Buffering": "no"})
+
+    # ── SadTalker one-click setup ───────────────────────────────────────────
+    sadtalker_install_lock = threading.Lock()
+
+    @app.get("/api/sadtalker/status")
+    def api_sadtalker_status():
+        """Return current SadTalker setup status (model files, paths, etc.)."""
+        from app.video.sadtalker_setup import setup_status
+        return setup_status(config.data_dir)
+
+    @app.post("/api/sadtalker/setup")
+    def api_sadtalker_setup(mirror: bool = Form(True)):
+        """Download SadTalker models with resume + auto-configure paths.
+
+        Returns SSE stream of progress events, then a final JSON result.
+        """
+        from starlette.responses import StreamingResponse
+        import queue, json as _json, threading as _threading
+
+        from app.video.sadtalker_setup import run_setup, setup_status
+
+        # Only a complete GPU + runtime + models + import smoke check counts as
+        # installed. Model file sizes alone previously produced false positives.
+        current = setup_status(config.data_dir)
+        if current["ready"]:
+            return {
+                **current,
+                "ok": True,
+                "message": "数字人 runtime 与模型已就绪",
+            }
+        if not sadtalker_install_lock.acquire(blocking=False):
+            return {
+                **current,
+                "ok": False,
+                "installing": True,
+                "message": "SadTalker 正在安装，请等待当前任务完成",
+            }
+
+        evt_q: queue.Queue = queue.Queue()
+        # Reload DB-backed settings so the network proxy configured in
+        # Settings applies to this large model download.
+        setup_config = Config.load(store=get_store())
+
+        def _on_progress(msg: str, frac: float) -> None:
+            evt_q.put({"event": "progress", "data": _json.dumps(
+                {"message": msg, "fraction": round(frac, 3)},
+                ensure_ascii=False)})
+
+        cancel = _threading.Event()
+
+        def _worker() -> None:
+            try:
+                result = run_setup(
+                    config.data_dir,
+                    mirror=mirror,
+                    proxy=setup_config.fetch_proxy,
+                    progress_cb=_on_progress,
+                    cancel_event=cancel,
+                )
+                evt_q.put({"event": "done",
+                            "data": _json.dumps(result, ensure_ascii=False)})
+            except Exception as exc:
+                evt_q.put({"event": "done",
+                            "data": _json.dumps(
+                                {"ok": False, "message": str(exc)},
+                                ensure_ascii=False)})
+            finally:
+                sadtalker_install_lock.release()
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
+        def _stream():
+            while True:
+                try:
+                    item = evt_q.get(timeout=0.3)
+                except queue.Empty:
+                    # Send heartbeat every 300ms while waiting
+                    yield f"event: heartbeat\ndata: {{}}\n\n"
+                    continue
+                # Standard SSE framing is two fields:
+                #   event: <type>
+                #   data: <JSON>
+                # The old "<type>: <JSON>" form was not SSE, so the frontend
+                # ignored progress/done and falsely reported a broken stream
+                # after a successful download.
+                yield f"event: {item['event']}\ndata: {item['data']}\n\n"
+                if item["event"] == "done":
+                    break
+
+        return StreamingResponse(_stream(), media_type="text/event-stream",
+                                 headers={"X-Accel-Buffering": "no"})
 
     # SPA catch-all: serve index.html for client-side deep links that aren't
     # explicit API/asset routes (registered last so real routes win).

@@ -9,7 +9,7 @@ echo "This script auto-detects and installs missing optional components."
 echo ""
 echo "  [1] Playwright + Chromium (for JS-rendered page scraping)"
 echo "  [2] ffmpeg (video compositing — install manually)"
-echo "  [3] CosyVoice (local voice cloning via embedded Python)"
+echo "  [3] CosyVoice (managed runtime; Windows installer in Settings)"
 echo "  [4] SadTalker (digital-human presenter lip-sync — optional, GPU)"
 echo ""
 echo "============================================"
@@ -82,11 +82,17 @@ else
 fi
 echo ""
 
-# ── 3. CosyVoice (embedded Python sidecar) ────
+# ── 3. CosyVoice (managed runtime) ────────────
 echo "[3/4] CosyVoice (local voice cloning)..."
+echo "  The managed prebuilt CosyVoice runtime is currently available on Windows."
+echo "  Install it from Settings -> Voice and Video; no Python/source paths are used."
+echo ""
 
-# Skip if already set up
-if [ -f "$COSYVOICE_DIR/bin/python3" ]; then
+# Legacy sidecar bootstrap is disabled; keep the block for old extracted
+# bundles but never enter it in current releases.
+if true; then
+    echo "  [SKIP] No sidecar installation is required."
+elif [ -f "$COSYVOICE_DIR/bin/python3" ]; then
     echo "  [OK] Embedded Python already set up"
     PYTHON="$COSYVOICE_DIR/bin/python3"
 else
@@ -138,6 +144,7 @@ else
 fi
 
 # Download model
+if false; then
 echo "  Checking CosyVoice model..."
 MODEL_DIR="$BUNDLE_DIR/pretrained_models/CosyVoice2-0.5B"
 if [ -f "$MODEL_DIR/model.pt" ]; then
@@ -167,10 +174,10 @@ else
     done
     [ "$_dl_n" -lt 8 ] && echo "  [OK] Model downloaded"
 fi
+fi
 
 echo ""
-echo "  [OK] CosyVoice is ready to use!"
-echo "  Start Media Agent, then set TTS Provider to 'cosyvoice' in Settings."
+echo "  Use the Settings installer on supported Windows systems."
 echo ""
 
 # ── 4. SadTalker (digital-human presenter lip-sync, optional) ──

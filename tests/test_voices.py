@@ -35,24 +35,18 @@ def test_sample_path_rejects_unknown_and_traversal(tmp_path):
     assert sample_path(cfg, "does-not-exist") is None
 
 
-def test_get_tts_provider_cosyvoice():
-    import pytest
-    # CosyVoice pulls in heavy optional deps (numpy/torch); skip if absent.
-    pytest.importorskip("numpy")
-    pytest.importorskip("torch")
-    from app.tts.providers.cosyvoice import CosyVoiceTTS
+def test_get_tts_provider_cosyvoice(tmp_path):
+    from app.tts.providers.cosyvoice_runtime import CosyVoiceRuntimeTTS
     prov = get_tts_provider("cosyvoice", voice="/tmp/ref.wav",
-                            model="FunAudioLLM/CosyVoice2-0.5B")
-    assert isinstance(prov, CosyVoiceTTS)
+                            model="ignored", data_dir=tmp_path)
+    assert isinstance(prov, CosyVoiceRuntimeTTS)
     assert prov.speaker_wav == "/tmp/ref.wav"
-    assert prov.model_name == "FunAudioLLM/CosyVoice2-0.5B"
+    assert prov.data_dir == tmp_path
 
 
 def test_cosyvoice_requires_sample(tmp_path):
     import pytest
-    pytest.importorskip("numpy")
-    pytest.importorskip("torch")
-    from app.tts.providers.cosyvoice import CosyVoiceTTS
-    prov = CosyVoiceTTS(speaker_wav=None)
+    from app.tts.providers.cosyvoice_runtime import CosyVoiceRuntimeTTS
+    prov = CosyVoiceRuntimeTTS(data_dir=tmp_path, speaker_wav=None)
     with pytest.raises(RuntimeError):
         prov.synthesize("你好", tmp_path / "out")

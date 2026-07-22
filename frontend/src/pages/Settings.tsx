@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  App as AntApp, Button, Card, Divider, Form, Input, InputNumber, Select,
+  App as AntApp, Button, Card, Divider, Form, Input, InputNumber, Progress, Select,
   Space, Switch, Tag, Typography, List, Upload, Popconfirm, Tabs, Modal,
 } from "antd";
-import { UploadOutlined, AudioOutlined, StopOutlined, CheckOutlined, CloseOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { UploadOutlined, AudioOutlined, StopOutlined, CheckOutlined, CloseOutlined, ThunderboltOutlined, DownloadOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useState, useRef, useEffect } from "react";
 import { api, getJson, postForm } from "../api/client";
 
@@ -71,7 +71,7 @@ export default function Settings() {
         video_fit: data.video_fit, video_brand_name: data.video_brand_name,
         avatar_enabled: data.avatar_enabled, avatar_image: data.avatar_image,
         avatar_position: data.avatar_position, avatar_provider: data.avatar_provider,
-        sadtalker_dir: data.sadtalker_dir, sadtalker_python: data.sadtalker_python,
+
         fetch_proxy: data.fetch_proxy,
         sensitive_level: data.sensitive_level, sensitive_words: data.sensitive_words,
         promotion_footer: data.promotion_footer,
@@ -128,44 +128,80 @@ export default function Settings() {
             ),
           },
           {
-            key: "voice", label: "语音", forceRender: true, children: (
+            key: "voice", label: "语音与视频", forceRender: true, children: (
               <Card title="TTS 与声音库" size="small">
-                <Form.Item name="tts_provider" label="Provider"
-                  extra={caps && !caps.cosyvoice.available
-                    ? `CosyVoice 在本机不可用：${caps.cosyvoice.reason}` : undefined}>
-                  <Select options={[
+                <Form.Item name="tts_provider" label="Provider">
+                  <Select onChange={() => form.setFieldValue("tts_voice", undefined)} options={[
                     { value: "kitten", label: "Kitten（本地 edge-tts，默认）" },
-                    { value: "cosyvoice",
-                      label: caps && !caps.cosyvoice.available
-                        ? "CosyVoice（本地 GPU 声音复刻）— 本机不可用"
-                        : "CosyVoice（本地 GPU 声音复刻）",
-                      disabled: !!caps && !caps.cosyvoice.available },
+                    { value: "cosyvoice", label: "CosyVoice（本地 GPU 声音复刻）" },
                     { value: "openai_compatible", label: "OpenAI 兼容（云端 API）" },
                     { value: "mock", label: "Mock（测试）" },
                   ]} />
                 </Form.Item>
-                <Form.Item name="tts_api_base" label="API Base"><Input /></Form.Item>
-                <Form.Item name="tts_model" label="模型"><Input /></Form.Item>
-                <Form.Item name="tts_voice" label="音色">
-                  <Select allowClear showSearch options={(data.voices || []).map((v) => ({ value: v.id, label: v.name || v.id }))} />
+                <Form.Item noStyle shouldUpdate={(prev, cur) => prev.tts_provider !== cur.tts_provider}>
+                  {({ getFieldValue }) => {
+                    const provider = getFieldValue("tts_provider") || "kitten";
+                    const adjustable = (
+                      <Space wrap>
+                        <Form.Item name="tts_rate" label="语速" tooltip="语音语速，如 +10% / -10%">
+                          <Input placeholder="+0%" style={{ width: 140 }} />
+                        </Form.Item>
+                        <Form.Item name="tts_pitch" label="音调" tooltip="语音音调，调高更活泼，如 +15Hz / -10Hz">
+                          <Input placeholder="+0Hz" style={{ width: 140 }} />
+                        </Form.Item>
+                      </Space>
+                    );
+
+                    if (provider === "kitten") return (
+                      <>
+                        <Form.Item name="tts_voice" label="音色">
+                          <Select allowClear options={[
+                            { value: "assistant", label: "助手（默认）" },
+                            { value: "female", label: "女声" },
+                            { value: "female_warm", label: "温柔女声" },
+                            { value: "male", label: "男声" },
+                            { value: "male_deep", label: "低沉男声" },
+                            { value: "child", label: "儿童声" },
+                          ]} />
+                        </Form.Item>
+                        {adjustable}
+                      </>
+                    );
+
+                    if (provider === "cosyvoice") return (
+                      <>
+                        <CosyVoiceSetup onSuccess={refetch} />
+                        <Form.Item name="tts_voice" label="复刻声音">
+                          <Select allowClear showSearch placeholder="选择声音库中的样本"
+                            options={(data.voices || []).map((v) => ({ value: v.id, label: v.name || v.id }))} />
+                        </Form.Item>
+                        {adjustable}
+                        <Form.Item name="tts_instruct" label="语气 / 情感"
+                          tooltip="用自然语言描述语气/情感，如「用亲切自然的语气」「热情激昂地讲解」">
+                          <Input placeholder="例如：用亲切自然的语气讲解" />
+                        </Form.Item>
+                        <Divider />
+                        <VoiceManager voices={data.voices || []} onChange={refetch} />
+                      </>
+                    );
+
+                    if (provider === "openai_compatible") return (
+                      <>
+                        <Form.Item name="tts_api_base" label="API Base"><Input /></Form.Item>
+                        <Form.Item name="tts_model" label="模型"><Input /></Form.Item>
+                        <Form.Item name="tts_voice" label="音色">
+                          <Input placeholder="例如 alloy、nova，或服务商支持的音色名称" />
+                        </Form.Item>
+                        {adjustable}
+                        <Form.Item name="tts_api_key" label={<>API Key {data.tts_api_key.set && <Tag color="green">已设置 {data.tts_api_key.masked}</Tag>}</>}>
+                          <Input.Password placeholder={data.tts_api_key.set ? "留空则保持不变" : "输入 API Key"} />
+                        </Form.Item>
+                      </>
+                    );
+
+                    return <Text type="secondary">Mock Provider 用于测试，不需要额外配置。</Text>;
+                  }}
                 </Form.Item>
-                <Space wrap>
-                  <Form.Item name="tts_rate" label="语速" tooltip="语音语速，如 +10% / -10%">
-                    <Input placeholder="+0%" style={{ width: 140 }} />
-                  </Form.Item>
-                  <Form.Item name="tts_pitch" label="音调" tooltip="语音音调，调高更活泼，如 +15Hz / -10Hz">
-                    <Input placeholder="+0Hz" style={{ width: 140 }} />
-                  </Form.Item>
-                </Space>
-                <Form.Item name="tts_instruct" label="语气 / 情感（CosyVoice）"
-                  tooltip="仅 CosyVoice：用自然语言描述语气/情感，如「用亲切自然的语气」「热情激昂地讲解」">
-                  <Input placeholder="例如：用亲切自然的语气讲解" />
-                </Form.Item>
-                <Form.Item name="tts_api_key" label={<>API Key {data.tts_api_key.set && <Tag color="green">已设置 {data.tts_api_key.masked}</Tag>}</>}>
-                  <Input.Password placeholder={data.tts_api_key.set ? "留空则保持不变" : "输入 API Key"} />
-                </Form.Item>
-                <Divider />
-                <VoiceManager voices={data.voices || []} onChange={refetch} />
                 <Divider />
                 <Card title="视频设置" size="small" style={{ marginTop: 16 }}>
                   <Form.Item name="video_fit" label="视频适配">
@@ -217,13 +253,7 @@ export default function Settings() {
                     { value: "still", label: "静态头像（无口型）" },
                   ]} />
                 </Form.Item>
-                <Form.Item name="sadtalker_dir" label="SadTalker 目录"
-                  tooltip="本地 SadTalker 代码目录（含 inference.py）；配置后启用口型同步，否则回退静态头像">
-                  <Input placeholder="如 C:\\Projects\\SadTalker" />
-                </Form.Item>
-                <Form.Item name="sadtalker_python" label="SadTalker Python（可选）">
-                  <Input placeholder="留空用 python" />
-                </Form.Item>
+                <SadTalkerSetup data={data} onSuccess={refetch} />
               </Card>
             ),
           },
@@ -271,10 +301,6 @@ export default function Settings() {
                     tooltip="归档时把文章视频下载到本地（需 yt-dlp）；关闭则保留远程 URL（MEDIA_AGENT_DOWNLOAD_VIDEOS）">
                     <Switch />
                   </Form.Item>
-                  <Form.Item name="fetch_proxy" label="网络代理"
-                    tooltip="RSS/网页抓取与媒体下载走此 HTTP/HTTPS 代理，可用于绕过 Cloudflare/WAF 或访问受限站点；留空则不使用（MEDIA_AGENT_FETCH_PROXY）">
-                    <Input placeholder="如 http://127.0.0.1:7890" />
-                  </Form.Item>
                 </Card>
                 <Card title="定时" size="small">
                   <Form.Item name="schedule_cron" label="Cron 表达式"><Input placeholder="如 0 8 * * *" /></Form.Item>
@@ -295,20 +321,28 @@ export default function Settings() {
             ),
           },
           {
-            key: "io", label: "导入导出", forceRender: true, children: (
-              <Card title="导出 / 导入配置" size="small">
-                <Space>
-                  <Button href="/export">导出配置</Button>
-                  <Upload accept="application/json,.json" showUploadList={false}
-                    customRequest={async ({ file, onSuccess, onError }) => {
-                      const fd = new FormData(); fd.append("file", file as File);
-                      try { await api.post("/import", fd); message.success("导入成功"); refetch(); onSuccess?.({}); }
-                      catch (e) { message.error("导入失败"); onError?.(e as any); }
-                    }}>
-                    <Button icon={<UploadOutlined />}>导入配置</Button>
-                  </Upload>
-                </Space>
-              </Card>
+            key: "io", label: "其它", forceRender: true, children: (
+              <>
+                <Card title="网络代理" size="small" style={{ marginBottom: 16 }}>
+                  <Form.Item name="fetch_proxy" label="HTTP/HTTPS 代理"
+                    tooltip="RSS/网页抓取与媒体下载走此代理，可用于绕过 Cloudflare/WAF 或访问受限站点；留空则不使用（MEDIA_AGENT_FETCH_PROXY）">
+                    <Input placeholder="如 http://127.0.0.1:7890" />
+                  </Form.Item>
+                </Card>
+                <Card title="导出 / 导入配置" size="small">
+                  <Space>
+                    <Button href="/export">导出配置</Button>
+                    <Upload accept="application/json,.json" showUploadList={false}
+                      customRequest={async ({ file, onSuccess, onError }) => {
+                        const fd = new FormData(); fd.append("file", file as File);
+                        try { await api.post("/import", fd); message.success("导入成功"); refetch(); onSuccess?.({}); }
+                        catch (e) { message.error("导入失败"); onError?.(e as any); }
+                      }}>
+                      <Button icon={<UploadOutlined />}>导入配置</Button>
+                    </Upload>
+                  </Space>
+                </Card>
+              </>
             ),
           },
         ]} />
@@ -605,4 +639,273 @@ function CliTestButton({ form }: { form: any }) {
   }
 
   return <Button icon={<ThunderboltOutlined />} loading={loading} onClick={testCli}>检测</Button>;
+}
+
+type ManagedRuntimeStatus = {
+  ready: boolean;
+  gpu_ok: boolean;
+  gpu_name: string;
+  runtime_ok: boolean;
+  models_ok: boolean;
+  smoke_ok: boolean;
+  reason: string;
+  runtime_dir: string;
+  models_dir: string;
+};
+
+/** One-click managed CosyVoice runtime/model installation. */
+function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
+  const { message } = AntApp.useApp();
+  const qc = useQueryClient();
+  const [status, setStatus] = useState<ManagedRuntimeStatus | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [progress, setProgress] = useState<{ message: string; fraction: number } | null>(null);
+
+  const refresh = async () => {
+    const value = await getJson<ManagedRuntimeStatus>("/api/cosyvoice/status");
+    setStatus(value);
+    await qc.invalidateQueries({ queryKey: ["capabilities"] });
+  };
+  useEffect(() => { refresh().catch(() => {}); }, []);
+
+  async function install() {
+    setInstalling(true);
+    setProgress({ message: "准备安装…", fraction: 0 });
+    try {
+      const response = await fetch("/api/cosyvoice/setup", { method: "POST" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if ((response.headers.get("content-type") || "").includes("application/json")) {
+        const payload = await response.json();
+        if (!payload.ok) throw new Error(payload.message || "安装失败");
+        message.success(payload.message || "CosyVoice 已就绪");
+        await refresh(); onSuccess(); return;
+      }
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finished = false;
+      const handle = async (block: string) => {
+        const event = block.split("\n").find((line) => line.startsWith("event:"))?.slice(6).trim();
+        const raw = block.split("\n").filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart()).join("\n");
+        if (!event || !raw || event === "heartbeat") return;
+        const payload = JSON.parse(raw);
+        if (event === "progress") setProgress(payload);
+        if (event === "done") {
+          finished = true;
+          if (!payload.ok) throw new Error(payload.message || "安装失败");
+          message.success(payload.message || "CosyVoice 安装完成");
+          await refresh(); onSuccess();
+        }
+      };
+      while (!finished) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, "\n");
+        let boundary: number;
+        while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+          const block = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          await handle(block);
+          if (finished) break;
+        }
+        if (done) break;
+      }
+      if (!finished) throw new Error("安装连接中断，请重试（已下载内容会续传）");
+    } catch (error: any) {
+      message.error("CosyVoice 安装失败：" + (error?.message || error));
+    } finally {
+      setInstalling(false);
+      setProgress(null);
+    }
+  }
+
+  return (
+    <Card size="small" title="CosyVoice Runtime 与模型" style={{ marginBottom: 16 }}
+      extra={status && <Tag color={status.ready ? "green" : "default"}>{status.ready ? "已就绪" : "未就绪"}</Tag>}>
+      {installing && progress ? (
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Text>{progress.message}</Text>
+          <Progress percent={Math.max(1, Math.round(Math.max(0, progress.fraction) * 100))} status="active" />
+        </Space>
+      ) : (
+        <Space direction="vertical">
+          {status && <Space wrap>
+            <Tag color={status.gpu_ok ? "green" : "red"}>NVIDIA GPU</Tag>
+            <Tag color={status.runtime_ok ? "green" : "default"}>CUDA Runtime</Tag>
+            <Tag color={status.models_ok ? "green" : "default"}>CosyVoice2 模型</Tag>
+            <Tag color={status.smoke_ok ? "green" : "default"}>模型加载验证</Tag>
+          </Space>}
+          <Text type="secondary">
+            {status?.ready
+              ? `CosyVoice 已通过运行验证${status.gpu_name ? `（${status.gpu_name}）` : ""}。`
+              : "下载安装独立 CUDA Runtime 与 CosyVoice2 模型；无需配置 Python、源码或模型路径，支持断点续传。"}
+          </Text>
+          {!status?.ready && status?.reason && <Text type="danger">{status.reason}</Text>}
+          <Space>
+            {!status?.ready && <Button type="primary" icon={<DownloadOutlined />}
+              disabled={!!status && !status.gpu_ok} onClick={install}>
+              下载安装 Runtime 与模型
+            </Button>}
+            <Button icon={<ReloadOutlined />} onClick={() => refresh().catch(() => {})}>刷新状态</Button>
+          </Space>
+        </Space>
+      )}
+    </Card>
+  );
+}
+
+/** One-click SadTalker setup: status display + download with SSE progress. */
+function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: () => void }) {
+  const { message } = AntApp.useApp();
+  const [downloading, setDownloading] = useState(false);
+  const [progress, setProgress] = useState<{ message: string; fraction: number } | null>(null);
+
+  type SadTalkerStatus = {
+    ready: boolean;
+    gpu_ok: boolean;
+    gpu_name: string;
+    runtime_ok: boolean;
+    models_ok: boolean;
+    smoke_ok: boolean;
+    reason: string;
+    runtime_dir: string;
+    models_dir: string;
+  };
+
+  async function fetchStatus(): Promise<SadTalkerStatus> {
+    const r = await getJson<SadTalkerStatus>("/api/sadtalker/status");
+    return r;
+  }
+
+  async function startSetup() {
+    setDownloading(true);
+    setProgress({ message: "准备下载…", fraction: 0 });
+
+    try {
+      const fd = new FormData();
+      fd.append("mirror", "true");
+
+      // Use fetch + ReadableStream for SSE (axios doesn't support streaming well)
+      const resp = await fetch("/api/sadtalker/setup", { method: "POST", body: fd });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+      // The already-installed fast path returns ordinary JSON rather than SSE.
+      if ((resp.headers.get("content-type") || "").includes("application/json")) {
+        const payload = await resp.json();
+        setDownloading(false);
+        setProgress(null);
+        if (payload.ok) {
+          message.success(payload.message || "数字人模型已就绪");
+          fetchStatus().then(setStatus).catch(() => {});
+          onSuccess();
+        } else {
+          message.error(payload.message || "安装失败");
+        }
+        return;
+      }
+
+      const reader = resp.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      function handleEvent(block: string): boolean {
+        const lines = block.split("\n");
+        const eventType = lines.find((line) => line.startsWith("event:"))
+          ?.slice(6).trim() || "";
+        const dataText = lines.filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart()).join("\n");
+        if (!eventType || !dataText || eventType === "heartbeat") return false;
+        try {
+          const payload = JSON.parse(dataText);
+          if (eventType === "progress") {
+            setProgress({ message: payload.message, fraction: payload.fraction });
+          } else if (eventType === "done") {
+            setDownloading(false);
+            setProgress(null);
+            if (payload.ok) {
+              message.success(payload.message || "数字人模型安装完成！");
+              fetchStatus().then(setStatus).catch(() => {});
+              onSuccess();
+            } else {
+              message.error(payload.message || "安装失败");
+            }
+            return true;
+          }
+        } catch { /* ignore malformed/non-JSON event */ }
+        return false;
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        // Parse complete SSE blocks, not individual lines. An `event:` line and
+        // its `data:` line may arrive in different network chunks.
+        buffer = buffer.replace(/\r\n/g, "\n");
+        let boundary: number;
+        while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+          const block = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          if (handleEvent(block)) return;
+        }
+        if (done) break;
+      }
+      if (buffer.trim() && handleEvent(buffer.trim())) return;
+      // If we exit the loop without a "done" event, something went wrong
+      setDownloading(false);
+      setProgress(null);
+      message.warning("下载连接中断，请重试");
+    } catch (e: any) {
+      setDownloading(false);
+      setProgress(null);
+      message.error("安装失败：" + (e?.message || e));
+    }
+  }
+
+  // Auto-fetch status on mount to check models
+  const [status, setStatus] = useState<SadTalkerStatus | null>(null);
+  useEffect(() => { fetchStatus().then(setStatus).catch(() => {}); }, []);
+
+  return (
+    <Card size="small" title="数字人 Runtime 与模型" style={{ marginTop: 8 }}
+      extra={status && <Tag color={status.ready ? "green" : "default"}>{status.ready ? "已就绪" : "未就绪"}</Tag>}>
+      {downloading && progress ? (
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Text>{progress.message}</Text>
+          <Progress percent={Math.max(1, Math.round(progress.fraction * 100))} status="active" />
+        </Space>
+      ) : (
+        <Space direction="vertical">
+          {status && (
+            <Space wrap>
+              <Tag color={status.gpu_ok ? "green" : "red"}>NVIDIA GPU</Tag>
+              <Tag color={status.runtime_ok ? "green" : "default"}>CUDA Runtime</Tag>
+              <Tag color={status.models_ok ? "green" : "default"}>模型文件</Tag>
+              <Tag color={status.smoke_ok ? "green" : "default"}>运行验证</Tag>
+            </Space>
+          )}
+          <Text type="secondary">
+            {status?.ready
+              ? `SadTalker 已通过运行验证${status.gpu_name ? `（${status.gpu_name}）` : ""}，可直接使用口型同步。`
+              : "安装将下载独立的 NVIDIA CUDA Runtime 与约 1GB 模型，无需安装或配置 SadTalker 源码。支持断点续传与自动修复。"}
+          </Text>
+          {!status?.ready && status?.reason && <Text type="danger">{status.reason}</Text>}
+          <Space>
+            {!status?.ready && (
+              <Button type="primary" icon={<DownloadOutlined />} onClick={startSetup}
+                disabled={!!status && !status.gpu_ok}>
+                下载安装 Runtime 与模型
+              </Button>
+            )}
+            {status?.ready && (
+              <Button icon={<ReloadOutlined />} onClick={async () => {
+                const s = await fetchStatus().catch(() => null);
+                if (s) setStatus(s);
+                onSuccess();
+              }}>检查更新</Button>
+            )}
+          </Space>
+        </Space>
+      )}
+    </Card>
+  );
 }

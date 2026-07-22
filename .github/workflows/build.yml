@@ -30,17 +30,6 @@ jobs:
           pip install -r requirements.txt
           pip install "click<8.2" pyinstaller playwright
 
-      # Download embeddable Python for CosyVoice sidecar env
-      - name: Download embeddable Python
-        shell: pwsh
-        run: |
-          $url = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip"
-          $out = "packaging/python-embed-win64.zip"
-          if (-not (Test-Path $out)) {
-            Invoke-WebRequest -Uri $url -OutFile $out
-          }
-          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "packaging/get-pip.py"
-
       - name: Build
         shell: pwsh
         run: |
@@ -50,8 +39,6 @@ jobs:
             --add-data "app/web/static;app/web/static" `
             --add-data "frontend/dist;frontend/dist" `
             --add-data "app/licensing/public_key.b64;app/licensing" `
-            --add-data "packaging/python-embed-win64.zip;packaging" `
-            --add-data "packaging/get-pip.py;packaging" `
             --exclude-module "torch" `
             --exclude-module "zstandard" `
             --exclude-module "torchvision" `
@@ -103,7 +90,6 @@ jobs:
             --hidden-import "lxml" `
             --hidden-import "trafilatura" `
             --hidden-import "curl_cffi" `
-            --hidden-import "cosyvoice" `
             --collect-all "playwright" `
             --console `
             packaging/run_app.py
@@ -178,17 +164,6 @@ jobs:
           pip install -r requirements.txt
           pip install "click<8.2" pyinstaller playwright
 
-      # Download embeddable Python for CosyVoice sidecar env (best-effort:
-      # official embeddables are Windows-only, so this may be absent on macOS —
-      # the sidecar bootstraps at runtime instead). Keep a file present so the
-      # --add-data below never fails the build.
-      - name: Download embeddable Python
-        run: |
-          url="https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-macosx10.9-${{ matrix.arch }}.tar.gz"
-          curl -sfL "$url" -o packaging/python-embed-macos.tar.gz || echo "embed python unavailable for ${{ matrix.arch }}; sidecar will bootstrap at runtime"
-          [ -f packaging/python-embed-macos.tar.gz ] || : > packaging/python-embed-macos.tar.gz
-          curl -sL "https://bootstrap.pypa.io/get-pip.py" -o packaging/get-pip.py
-
       - name: Build
         run: |
           pyinstaller --onedir \
@@ -197,8 +172,6 @@ jobs:
             --add-data "app/web/static:app/web/static" \
             --add-data "frontend/dist:frontend/dist" \
             --add-data "app/licensing/public_key.b64:app/licensing" \
-            --add-data "packaging/python-embed-macos.tar.gz:packaging" \
-            --add-data "packaging/get-pip.py:packaging" \
             --exclude-module "torch" \
             --exclude-module "zstandard" \
             --exclude-module "torchvision" \
@@ -250,7 +223,6 @@ jobs:
             --hidden-import "lxml" \
             --hidden-import "trafilatura" \
             --hidden-import "curl_cffi" \
-            --hidden-import "cosyvoice" \
             --collect-all "playwright" \
             --console \
             packaging/run_app.py
