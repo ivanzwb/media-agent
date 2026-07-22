@@ -84,6 +84,7 @@ export default function Settings() {
         avatar_position: data.avatar_position, avatar_provider: data.avatar_provider,
 
         fetch_proxy: data.fetch_proxy,
+        github_mirror: data.github_mirror,
         sensitive_level: data.sensitive_level, sensitive_words: data.sensitive_words,
         promotion_footer: data.promotion_footer,
         wechat_appid: data.wechat_appid, wechat_author: data.wechat_author,
@@ -338,6 +339,12 @@ export default function Settings() {
                   <Form.Item name="fetch_proxy" label="HTTP/HTTPS 代理"
                     tooltip="RSS/网页抓取与媒体下载走此代理，可用于绕过 Cloudflare/WAF 或访问受限站点；留空则不使用（MEDIA_AGENT_FETCH_PROXY）">
                     <Input placeholder="如 http://127.0.0.1:7890" />
+                  </Form.Item>
+                </Card>
+                <Card title="GitHub 镜像" size="small" style={{ marginBottom: 16 }}>
+                  <Form.Item name="github_mirror" label="GitHub 镜像前缀"
+                    tooltip="下载 GitHub Release 资源时使用此镜像前缀加速；留空则直连 GitHub（MEDIA_AGENT_GITHUB_MIRROR）">
+                    <Input placeholder="如 https://ghproxy.net/" />
                   </Form.Item>
                 </Card>
                 <Card title="导出 / 导入配置" size="small">
