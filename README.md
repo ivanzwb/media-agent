@@ -88,6 +88,9 @@ pip install -r requirements.txt
 
 不想装 Python？从 [Releases](https://github.com/ivanzwb/media-agent/releases) 下载对应平台的 zip，解压后直接运行：
 
+> 国内下载慢？用镜像加速：把 `https://github.com` 替换为 `https://ghproxy.net/https://github.com`，例如：
+> `https://ghproxy.net/https://github.com/ivanzwb/media-agent/releases/download/v0.2.30/media-agent-win64.zip`
+
 ```
 Windows:  media-agent\media-agent.exe serve
 macOS:    media-agent/media-agent serve
