@@ -15,6 +15,37 @@ PART_BYTES = 1800 * 1024 * 1024
 COPY_BYTES = 8 * 1024 * 1024
 MATCHA_DATA_LINK = "cosyvoice-src/third_party/Matcha-TTS/data"
 
+# processor.py only uses pyarrow inside parquet_opener() (training data
+# loading).  HyperPyYAML's ``!name:`` directives eagerly import the whole
+# module at inference time, triggering ``import pyarrow`` which is a heavy,
+# unnecessary dependency for runtime inference.  Move the import inside the
+# function so inference never hits it.
+
+_TOPLEVEL_PYARROW = "import pyarrow.parquet as pq\n"
+# The line right after the parquet_opener docstring in upstream source.
+_PARQUET_OPENER_BODY = '    """\n    for sample in data:'
+
+
+def _patch_processor_py(prefix: Path) -> None:
+    """Make pyarrow import lazy inside cosyvoice dataset processor."""
+    processor = (
+        prefix / "cosyvoice-src" / "cosyvoice" / "dataset" / "processor.py")
+    if not processor.is_file():
+        return
+    text = processor.read_text(encoding="utf-8")
+    if _TOPLEVEL_PYARROW not in text:
+        return  # already patched or different upstream
+    # 1. Remove top-level import.
+    text = text.replace(_TOPLEVEL_PYARROW, "", 1)
+    # 2. Insert ``import pyarrow.parquet as pq`` right after the docstring
+    #    of parquet_opener, before the function body.
+    body_marker = _PARQUET_OPENER_BODY
+    lazy_import = '    """\n    import pyarrow.parquet as pq\n    for sample in data:'
+    if body_marker in text:
+        text = text.replace(body_marker, lazy_import, 1)
+    processor.write_text(text, encoding="utf-8")
+    print(f"Patched {processor} (lazy pyarrow import)")
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -29,6 +60,7 @@ def pack_runtime(prefix: Path, output_dir: Path, *, worker: Path,
                  keep_archive: bool = False) -> tuple[Path, list[Path]]:
     prefix = prefix.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    _patch_processor_py(prefix)
     shutil.copy2(worker.resolve(), prefix / "cosyvoice-worker.py")
     archive = output_dir / asset_name
     conda_pack.pack(
