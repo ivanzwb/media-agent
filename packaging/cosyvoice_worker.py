@@ -122,10 +122,46 @@ class Engine:
         self.model = CosyVoice2(
             str(model_dir), load_jit=False, load_trt=False,
             fp16=self.device == "cuda")
-        if self.device == "cuda" and torch.cuda.memory_allocated() <= 0:
-            raise RuntimeError(
-                "CosyVoice requested CUDA but loaded no model data on GPU")
+        if self.device == "cuda":
+            if torch.cuda.memory_allocated() <= 0:
+                raise RuntimeError(
+                    "CosyVoice requested CUDA but loaded no model data on GPU")
+            # Validate CUDA kernels actually execute on this GPU.  Some
+            # devices report torch.cuda.is_available() == True but the
+            # compiled PyTorch CUDA kernels don't cover the compute
+            # capability (e.g. cu121 build on older GPUs).
+            if not self._validate_cuda(torch):
+                _emit({"event": "stage", "stage": "cuda_fallback",
+                       "reason": "CUDA kernel validation failed, falling back to CPU"})
+                self._fallback_to_cpu(model_dir, torch, CosyVoice2)
         self.whisper = None
+
+    # ------------------------------------------------------------------
+    # CUDA validation / fallback helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _validate_cuda(torch) -> bool:
+        """Return True if a trivial CUDA operation succeeds."""
+        try:
+            t = torch.ones(1, device="cuda")
+            _ = t + t
+            del t
+            torch.cuda.empty_cache()
+            return True
+        except Exception:
+            return False
+
+    def _fallback_to_cpu(self, model_dir: Path, torch, CosyVoice2) -> None:
+        """Reload the model on CPU after CUDA validation failed."""
+        # Free any partial CUDA state.
+        try:
+            del self.model
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        self.device = "cpu"
+        self.model = CosyVoice2(
+            str(model_dir), load_jit=False, load_trt=False, fp16=False)
 
     def transcribe(self, wav: str) -> str:
         if self.whisper is None:
@@ -271,12 +307,38 @@ def smoke(model_dir: Path, deep: bool = False) -> int:
             soundfile.write(str(short_sample), prompt_audio, prompt_rate)
             output = Path(directory) / "smoke.wav"
             _emit({"event": "stage", "stage": "synthesizing"})
-            engine.synthesize({
-                "text": "你好。",
-                "prompt_wav": str(short_sample),
-                "prompt_text": "希望你以后",
-                "output": str(output),
-            })
+            try:
+                engine.synthesize({
+                    "text": "你好。",
+                    "prompt_wav": str(short_sample),
+                    "prompt_text": "希望你以后",
+                    "output": str(output),
+                })
+            except Exception as exc:
+                # The basic CUDA tensor test in Engine.__init__ may pass while
+                # the actual model kernels (convolutions, attention) still fail
+                # with "no kernel image" on unsupported GPU architectures.
+                # Catch that and reload the model on CPU.
+                _cuda_err = ("CUDA" in str(exc)
+                             or "cuda" in str(exc).lower())
+                if engine.device == "cuda" and _cuda_err:
+                    _emit({"event": "stage", "stage": "cuda_synthesis_fallback",
+                           "reason": str(exc)})
+                    del engine
+                    torch.cuda.empty_cache()
+                    os.environ["MEDIA_AGENT_TORCH_DEVICE"] = "cpu"
+                    engine = Engine(model_dir)
+                    _emit({"event": "stage", "stage": "model_loaded",
+                           "device": "cpu", "fp16": False})
+                    _emit({"event": "stage", "stage": "synthesizing"})
+                    engine.synthesize({
+                        "text": "你好。",
+                        "prompt_wav": str(short_sample),
+                        "prompt_text": "希望你以后",
+                        "output": str(output),
+                    })
+                else:
+                    raise
             _emit({"event": "stage", "stage": "validating_audio"})
             audio, sample_rate = soundfile.read(
                 str(output), dtype="float32", always_2d=False)
@@ -286,7 +348,9 @@ def smoke(model_dir: Path, deep: bool = False) -> int:
                     f"CosyVoice 验证音频内容无效：{audio_info}")
         if not synthesized:
             raise RuntimeError("CosyVoice 真实合成验证未生成有效音频")
-    device_name = torch.cuda.get_device_name(0) if device == "cuda" else "CPU"
+    device_name = (torch.cuda.get_device_name(0)
+                   if device == "cuda" and torch.cuda.is_available()
+                   else "CPU")
     _emit({"ok": True, "device": device, "device_name": device_name, "deep": deep,
            "synthesized": synthesized})
     return 0
