@@ -87,6 +87,7 @@ jobs:
             --hidden-import "dateparser" `
             --hidden-import "ddgs" `
             --hidden-import "json5" `
+            --hidden-import "frontmatter" `
             --hidden-import "lxml" `
             --hidden-import "trafilatura" `
             --hidden-import "curl_cffi" `
@@ -94,6 +95,8 @@ jobs:
             --collect-all "playwright" `
             --console `
             packaging/run_app.py
+          dist/media-agent/media-agent.exe --check-module app.web.server
+          if ($LASTEXITCODE -ne 0) { throw "Frozen server import smoke test failed" }
           Remove-Item -Recurse -Force build, media-agent.spec -ErrorAction SilentlyContinue
           Copy-Item setup-optional.bat dist/media-agent/setup-optional.bat
 
@@ -221,6 +224,7 @@ jobs:
             --hidden-import "dateparser" \
             --hidden-import "ddgs" \
             --hidden-import "json5" \
+            --hidden-import "frontmatter" \
             --hidden-import "lxml" \
             --hidden-import "trafilatura" \
             --hidden-import "curl_cffi" \
@@ -228,6 +232,7 @@ jobs:
             --collect-all "playwright" \
             --console \
             packaging/run_app.py
+          dist/media-agent/media-agent --check-module app.web.server
           rm -rf build media-agent.spec
 
       - name: Package (zip)

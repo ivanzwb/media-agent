@@ -1,0 +1,3 @@
+# Legacy source distributions such as openai-whisper==20231117 import
+# pkg_resources from setuptools while determining their build requirements.
+setuptools<81

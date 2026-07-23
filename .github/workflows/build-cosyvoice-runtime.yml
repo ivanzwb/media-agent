@@ -11,6 +11,10 @@ on:
 jobs:
   windows-cuda:
     runs-on: windows-latest
+    env:
+      # pip 24 applies PIP_CONSTRAINT inside isolated PEP 517 build envs too.
+      # openai-whisper==20231117 still imports pkg_resources at build time.
+      PIP_CONSTRAINT: ${{ github.workspace }}/packaging/pip-build-constraints.txt
     defaults:
       run:
         shell: bash -el {0}
@@ -79,6 +83,8 @@ jobs:
             arch: x64
             torch: "2.2.2"
     runs-on: ${{ matrix.runner }}
+    env:
+      PIP_CONSTRAINT: ${{ github.workspace }}/packaging/pip-build-constraints.txt
     defaults:
       run:
         shell: bash -el {0}
