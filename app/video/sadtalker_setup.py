@@ -267,6 +267,10 @@ def runtime_files_ready(data_dir: Path) -> bool:
 
 
 _SMOKE_CACHE: dict[tuple[str, int, int, bool, bool], tuple[bool, str]] = {}
+_SMOKE_SCHEMA = 2
+_GPU_SMOKE_TIMEOUT = 300
+_CPU_SMOKE_TIMEOUT = 1800
+_SMOKE_AUDIO_SECONDS = 1.0
 
 
 def _clear_smoke_cache() -> None:
@@ -277,14 +281,28 @@ def _smoke_marker(data_dir: Path) -> Path:
     return runtime_dir(data_dir) / ".inference-smoke-ok.json"
 
 
+def _smoke_failure_marker(data_dir: Path) -> Path:
+    return runtime_dir(data_dir) / ".inference-smoke-failure.json"
+
+
 def _smoke_fingerprint(data_dir: Path) -> dict[str, Any]:
     py = runtime_python(data_dir)
+    inference = runtime_source(data_dir) / "inference.py"
+
+    def file_identity(path: Path) -> dict[str, int]:
+        try:
+            stat = path.stat()
+            return {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+        except OSError:
+            return {"size": 0, "mtime_ns": 0}
+
     return {
+        "schema": _SMOKE_SCHEMA,
         "runtime": _runtime_asset(),
-        "python_size": py.stat().st_size if py.is_file() else 0,
+        "python": file_identity(py),
+        "inference": file_identity(inference),
         "models": {
-            rel: (checkpoint_dir(data_dir) / Path(rel).name).stat().st_size
-            if (checkpoint_dir(data_dir) / Path(rel).name).is_file() else 0
+            rel: file_identity(checkpoint_dir(data_dir) / Path(rel).name)
             for rel, _ in REQUIRED_FILES
         },
     }
@@ -298,14 +316,238 @@ def _deep_smoke_ready(data_dir: Path) -> bool:
         return False
 
 
+def _last_smoke_failure(data_dir: Path) -> str:
+    """Return the last deep-inference failure for the current installed assets."""
+    try:
+        saved = json.loads(
+            _smoke_failure_marker(data_dir).read_text(encoding="utf-8"))
+        if saved.get("fingerprint") == _smoke_fingerprint(data_dir):
+            return str(saved.get("reason") or "").strip()
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return ""
+
+
+def _subprocess_reason(
+    process: subprocess.CompletedProcess[str], fallback: str,
+) -> str:
+    """Preserve both output streams; stderr alone often omits the real cause."""
+    sections: list[str] = []
+    stdout = (process.stdout or "").strip()
+    stderr = (process.stderr or "").strip()
+    if stdout:
+        sections.append(f"stdout:\n{stdout}")
+    if stderr:
+        sections.append(f"stderr:\n{stderr}")
+    return "\n\n".join(sections) or fallback
+
+
+def _emit_smoke_progress(
+    callback: Callable[[str, float], None] | None,
+    message: str,
+    fraction: float,
+) -> None:
+    if callback:
+        try:
+            callback(message, fraction)
+        except Exception:
+            pass
+
+
+def _prepare_smoke_assets(source: Path, work_dir: Path) -> tuple[Path, Path]:
+    """Create deterministic one-second inputs without invoking ffmpeg."""
+    import wave
+
+    from PIL import Image
+
+    example_face = source / "examples" / "source_image" / "happy.png"
+    example_audio = source / "examples" / "driven_audio" / "bus_chinese.wav"
+    if not example_face.is_file() or not example_audio.is_file():
+        raise FileNotFoundError("runtime 缺少 SadTalker 推理验证素材")
+    work_dir.mkdir(parents=True, exist_ok=True)
+    face = work_dir / "face.png"
+    audio = work_dir / "audio-1s.wav"
+    with Image.open(example_face) as image:
+        image.convert("RGB").resize((256, 256)).save(face)
+    with wave.open(str(example_audio), "rb") as source_wav:
+        params = source_wav.getparams()
+        frames = source_wav.readframes(
+            min(params.nframes, int(params.framerate * _SMOKE_AUDIO_SECONDS)))
+    with wave.open(str(audio), "wb") as output_wav:
+        output_wav.setparams(params)
+        output_wav.writeframes(frames)
+    return face, audio
+
+
+_SMOKE_RUNNER = (
+    "import runpy,sys,torch\n"
+    "script=sys.argv[1]\n"
+    "expected=sys.argv[2]\n"
+    "actual='cuda' if torch.cuda.is_available() else 'cpu'\n"
+    "print('[media-agent] selected_device='+actual, flush=True)\n"
+    "if actual != expected:\n"
+    " raise RuntimeError('SadTalker device mismatch: expected '+expected"
+    "+', got '+actual)\n"
+    "sys.argv=[script]+sys.argv[3:]\n"
+    "runpy.run_path(script, run_name='__main__')\n"
+)
+
+
+def _smoke_command(
+    python: Path,
+    source: Path,
+    checkpoints: Path,
+    result_dir: Path,
+    face: Path,
+    audio: Path,
+    *,
+    device: str,
+) -> list[str]:
+    """Build the validation-only SadTalker command."""
+    command = [
+        str(python), "-c", _SMOKE_RUNNER,
+        str(source / "inference.py"), device,
+        "--driven_audio", str(audio),
+        "--source_image", str(face),
+        "--checkpoint_dir", str(checkpoints),
+        "--result_dir", str(result_dir),
+        "--size", "256",
+        "--batch_size", "2",
+        "--preprocess", "resize",
+        "--still",
+    ]
+    if device == "cpu":
+        command.append("--cpu")
+    return command
+
+
+def _output_text(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
+
+
+def _inference_stage(output: str) -> tuple[str, float]:
+    if "The generated video is named" in output:
+        return "编码并封装验证视频", 0.9
+    if "mel:" in output or "audio" in output.lower():
+        return "运行音频驱动与短帧生成", 0.7
+    if "3DMM Extraction" in output:
+        return "提取单帧人脸参数", 0.5
+    if "[media-agent] selected_device=" in output:
+        return "加载 SadTalker 检查点", 0.3
+    return "启动 SadTalker runtime", 0.2
+
+
+def _run_smoke_process(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout: int,
+    progress_cb: Callable[[str, float], None] | None,
+) -> tuple[subprocess.CompletedProcess[str], float, bool]:
+    """Run inference with heartbeat progress and retain complete output."""
+    started = time.monotonic()
+    creationflags = (
+        (getattr(subprocess, "CREATE_NO_WINDOW", 0)
+         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+        if os.name == "nt" else 0)
+    process = subprocess.Popen(
+        command, cwd=str(cwd), env=env, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, encoding="utf-8",
+        errors="replace", creationflags=creationflags,
+        start_new_session=(os.name != "nt"))
+    partial_stdout = ""
+    partial_stderr = ""
+    timed_out = False
+    while True:
+        elapsed = time.monotonic() - started
+        remaining = timeout - elapsed
+        if remaining <= 0:
+            timed_out = True
+            if os.name == "nt" and getattr(process, "pid", None):
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    capture_output=True, text=True, timeout=15, check=False)
+            elif getattr(process, "pid", None):
+                import signal
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except OSError:
+                    process.kill()
+            else:
+                process.kill()
+            stdout, stderr = process.communicate()
+            break
+        try:
+            stdout, stderr = process.communicate(timeout=min(8, remaining))
+            break
+        except subprocess.TimeoutExpired as exc:
+            partial_stdout = _output_text(exc.stdout or exc.output)
+            partial_stderr = _output_text(exc.stderr)
+            elapsed = time.monotonic() - started
+            stage, fraction = _inference_stage(
+                partial_stdout + "\n" + partial_stderr)
+            _emit_smoke_progress(
+                progress_cb,
+                f"{stage}（已用时 {int(elapsed)} 秒）…",
+                fraction,
+            )
+    elapsed = time.monotonic() - started
+    stdout = _output_text(stdout) or partial_stdout
+    stderr = _output_text(stderr) or partial_stderr
+    completed = subprocess.CompletedProcess(
+        command, process.returncode, stdout, stderr)
+    return completed, elapsed, timed_out
+
+
+def _inspect_smoke_video(
+    python: Path, video: Path, *, cwd: Path, env: dict[str, str],
+) -> tuple[bool, str]:
+    code = (
+        "import cv2,json,sys\n"
+        "cap=cv2.VideoCapture(sys.argv[1])\n"
+        "ok,frame=cap.read()\n"
+        "info={'opened':cap.isOpened(),'decoded':bool(ok),"
+        "'frames':int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),"
+        "'fps':float(cap.get(cv2.CAP_PROP_FPS)),"
+        "'width':int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),"
+        "'height':int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),"
+        "'std':float(frame.std()) if ok else 0.0}\n"
+        "print(json.dumps(info))\n"
+    )
+    check = subprocess.run(
+        [str(python), "-c", code, str(video)], cwd=str(cwd), env=env,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=30, check=False)
+    if check.returncode != 0:
+        return False, _subprocess_reason(check, "无法读取验证视频")
+    try:
+        info = json.loads((check.stdout or "").strip().splitlines()[-1])
+    except (IndexError, ValueError, json.JSONDecodeError):
+        return False, _subprocess_reason(check, "验证视频元数据无效")
+    valid = bool(
+        info.get("opened") and info.get("decoded")
+        and 12 <= int(info.get("frames", 0)) <= 40
+        and int(info.get("width", 0)) == 256
+        and int(info.get("height", 0)) == 256
+        and 20 <= float(info.get("fps", 0)) <= 30
+        and float(info.get("std", 0)) > 1.0
+    )
+    return valid, "" if valid else f"验证视频内容无效：{info}"
+
+
 def runtime_smoke(
     data_dir: Path, *, require_gpu: bool | None = None, deep: bool = False,
+    progress_cb: Callable[[str, float], None] | None = None,
 ) -> tuple[bool, str]:
     """Verify imports/accelerator and optionally complete one real inference."""
     data_dir = Path(data_dir).resolve()
     if not runtime_files_ready(data_dir):
         return False, "SadTalker runtime 文件不完整"
     if deep and _deep_smoke_ready(data_dir):
+        _emit_smoke_progress(progress_cb, "已使用通过验证的 runtime 缓存", 1.0)
         return True, ""
     py = runtime_python(data_dir)
     source = runtime_source(data_dir)
@@ -328,63 +570,106 @@ def runtime_smoke(
     )
     env = os.environ.copy()
     env["PYTHONPATH"] = str(source)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
     try:
-        check = subprocess.run(
-            [str(py), "-c", code],
-            cwd=str(source), env=env, capture_output=True, text=True,
-            timeout=90, check=False,
+        _emit_smoke_progress(progress_cb, "检查 runtime 与加速设备…", 0.05)
+        # Deep validation's wrapper performs the same device assertion before
+        # importing inference.py. Avoid two extra interpreter/import passes:
+        # torch + torchvision startup can itself take tens of seconds.
+        check = (
+            subprocess.CompletedProcess([], 0, "", "")
+            if deep else subprocess.run(
+                [str(py), "-c", code],
+                cwd=str(source), env=env, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=90, check=False,
+            )
         )
         if check.returncode != 0:
-            result = (False, (check.stderr or check.stdout or
-                              "runtime import failed").strip()[-800:])
+            result = (False, _subprocess_reason(check, "runtime import failed"))
         else:
-            help_check = subprocess.run(
-                [str(py), str(source / "inference.py"), "--help"],
-                cwd=str(source), env=env, capture_output=True, text=True,
-                timeout=90, check=False,
+            help_check = (
+                subprocess.CompletedProcess([], 0, "", "")
+                if deep else subprocess.run(
+                    [str(py), str(source / "inference.py"), "--help"],
+                    cwd=str(source), env=env, capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=90,
+                    check=False,
+                )
             )
             if help_check.returncode != 0:
-                result = (
-                    False, (help_check.stderr or help_check.stdout or
-                            "SadTalker import failed").strip()[-800:])
+                result = (False, _subprocess_reason(
+                    help_check, "SadTalker import failed"))
             elif deep:
-                face = source / "examples" / "source_image" / "full_body_1.png"
-                audio = source / "examples" / "driven_audio" / "bus_chinese.wav"
-                if not face.is_file() or not audio.is_file():
-                    result = (False, "runtime 缺少 SadTalker 推理验证素材")
+                result_dir = runtime_dir(data_dir) / ".smoke-result"
+                shutil.rmtree(result_dir, ignore_errors=True)
+                face, audio = _prepare_smoke_assets(
+                    source, result_dir / "input")
+                _emit_smoke_progress(
+                    progress_cb, "已准备 1 秒、256×256 验证素材", 0.1)
+                command = _smoke_command(
+                    py, source, checkpoint_dir(data_dir), result_dir,
+                    face, audio, device=target.device)
+                timeout = (
+                    _CPU_SMOKE_TIMEOUT if target.slow
+                    else _GPU_SMOKE_TIMEOUT)
+                infer, elapsed, timed_out = _run_smoke_process(
+                    command, cwd=source, env=env, timeout=timeout,
+                    progress_cb=progress_cb)
+                videos = list(result_dir.glob("*.mp4"))
+                selected = f"[media-agent] selected_device={target.device}"
+                if timed_out:
+                    result = (
+                        False,
+                        f"SadTalker 验证超过 {timeout} 秒，已终止"
+                        f"（实际用时 {elapsed:.1f} 秒）\n"
+                        + _subprocess_reason(infer, "无子进程输出"))
+                elif infer.returncode != 0:
+                    result = (
+                        False,
+                        f"SadTalker 验证失败（用时 {elapsed:.1f} 秒）\n"
+                        + _subprocess_reason(infer, "推理进程失败"))
+                elif selected not in (infer.stdout or ""):
+                    result = (
+                        False,
+                        "SadTalker 未确认使用预期设备，拒绝标记为已就绪\n"
+                        + _subprocess_reason(infer, "缺少设备确认输出"))
+                elif not videos:
+                    result = (
+                        False,
+                        f"SadTalker 未生成验证视频（用时 {elapsed:.1f} 秒）\n"
+                        + _subprocess_reason(infer, "无子进程输出"))
                 else:
-                    result_dir = runtime_dir(data_dir) / ".smoke-result"
-                    shutil.rmtree(result_dir, ignore_errors=True)
-                    command = [
-                            str(py), str(source / "inference.py"),
-                            "--driven_audio", str(audio),
-                            "--source_image", str(face),
-                            "--checkpoint_dir", str(checkpoint_dir(data_dir)),
-                            "--result_dir", str(result_dir),
-                            "--still", "--preprocess", "full",
-                        ]
-                    if target.device == "cpu":
-                        command.extend(["--device", "cpu"])
-                    infer = subprocess.run(
-                        command,
-                        cwd=str(source), env=env, capture_output=True, text=True,
-                        timeout=3600 if target.slow else 1200, check=False,
-                    )
-                    videos = list(result_dir.rglob("*.mp4"))
-                    if infer.returncode == 0 and videos:
+                    _emit_smoke_progress(
+                        progress_cb, "检查验证视频帧与内容…", 0.95)
+                    content_ok, content_reason = _inspect_smoke_video(
+                        py, videos[0], cwd=source, env=env)
+                    if content_ok:
                         _smoke_marker(data_dir).write_text(
                             json.dumps(_smoke_fingerprint(data_dir), indent=2),
                             encoding="utf-8")
+                        _smoke_failure_marker(data_dir).unlink(missing_ok=True)
+                        _emit_smoke_progress(
+                            progress_cb,
+                            f"实际推理验证通过（用时 {elapsed:.1f} 秒）",
+                            1.0)
                         result = (True, "")
                     else:
-                        result = (
-                            False, (infer.stderr or infer.stdout or
-                                    "SadTalker 未生成验证视频").strip()[-1200:])
-                    shutil.rmtree(result_dir, ignore_errors=True)
+                        result = (False, content_reason)
+                shutil.rmtree(result_dir, ignore_errors=True)
             else:
                 result = (True, "")
     except (OSError, subprocess.TimeoutExpired) as exc:
         result = (False, str(exc))
+    if deep and not result[0]:
+        _smoke_failure_marker(data_dir).parent.mkdir(
+            parents=True, exist_ok=True)
+        _smoke_failure_marker(data_dir).write_text(json.dumps({
+            "fingerprint": _smoke_fingerprint(data_dir),
+            "reason": result[1],
+            "failed_at": int(time.time()),
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
     _SMOKE_CACHE[key] = result
     return result
 
@@ -403,14 +688,31 @@ def setup_status(data_dir: Path) -> dict[str, Any]:
     elif not device["ok"]:
         smoke_reason = device["reason"]
     elif runtime_ok and models_ok and _deep_smoke_ready(data_dir):
-        smoke_ok, smoke_reason = runtime_smoke(data_dir)
+        smoke_ok = True
     elif runtime_ok and models_ok:
-        smoke_reason = "尚未完成 SadTalker 实际推理验证"
+        smoke_reason = (
+            _last_smoke_failure(data_dir)
+            or "尚未完成 SadTalker 实际推理验证")
     elif not runtime_ok:
         smoke_reason = "尚未安装 SadTalker runtime"
     else:
         smoke_reason = "SadTalker 模型文件不完整"
     ready = bool(models_ok and runtime_ok and device["ok"] and smoke_ok)
+    installed = bool(models_ok and runtime_ok)
+    if ready:
+        state = "ready"
+    elif target is None:
+        state = "unsupported"
+    elif not device["ok"]:
+        state = "device_unavailable"
+    elif installed and _last_smoke_failure(data_dir):
+        state = "validation_failed"
+    elif installed:
+        state = "validation_pending"
+    elif runtime_ok or models_ok:
+        state = "partially_installed"
+    else:
+        state = "not_installed"
     files_info: list[dict[str, Any]] = []
     for f, expected in ALL_FILES:
         fp = d / f
@@ -430,6 +732,9 @@ def setup_status(data_dir: Path) -> dict[str, Any]:
         })
     return {
         "ready": ready,
+        "installed": installed,
+        "state": state,
+        "retry_validation": bool(installed and device["ok"] and not smoke_ok),
         "supported": target is not None,
         "asset_available": target is not None,
         "installable": bool(target is not None and device["ok"]),
@@ -1234,6 +1539,7 @@ def run_setup(
     progress_cb: Callable[[str, float], None] | None = None,
     cancel_event: threading.Event | None = None,
     pause_event: threading.Event | None = None,
+    validation_only: bool = False,
 ) -> dict[str, Any]:
     """Run the full SadTalker setup: download models + resolve paths.
 
@@ -1255,31 +1561,44 @@ def run_setup(
         return {
             "ok": False, "message": device["reason"], **setup_status(data_dir)}
 
-    # Runtime is deliberately separate from the ~1 GB model payload so either
-    # can be resumed/repaired without re-downloading the other.
-    try:
-        _install_runtime(
-            data_dir, proxy=proxy,
-            progress_cb=(
-                (lambda message, fraction:
-                 _emit(message, min(max(fraction, 0.0) * 0.45, 0.45)))
-                if progress_cb else None
-            ),
-            cancel_event=cancel_event, pause_event=pause_event,
-        )
-    except Exception as exc:
-        return {"ok": False, "message": str(exc), **setup_status(data_dir)}
+    if validation_only:
+        current = setup_status(data_dir)
+        if not current["runtime_ok"] or not current["models_ok"]:
+            return {
+                **current,
+                "ok": False,
+                "message": "Runtime 或模型尚未完整安装，无法仅重试推理验证",
+            }
+    else:
+        # Runtime is deliberately separate from the ~1 GB model payload so
+        # either can be resumed/repaired without re-downloading the other.
+        try:
+            _install_runtime(
+                data_dir, proxy=proxy,
+                progress_cb=(
+                    (lambda message, fraction:
+                     _emit(message, min(max(fraction, 0.0) * 0.45, 0.45)))
+                    if progress_cb else None
+                ),
+                cancel_event=cancel_event, pause_event=pause_event,
+            )
+        except Exception as exc:
+            status = setup_status(data_dir)
+            return {**status, "ok": False, "message": str(exc)}
 
-    def model_progress(message: str, fraction: float) -> None:
-        _emit(message, fraction if fraction < 0 else 0.45 + fraction * 0.5)
+        def model_progress(message: str, fraction: float) -> None:
+            _emit(message, fraction if fraction < 0 else 0.45 + fraction * 0.5)
 
-    ok = download_models(
-        data_dir, mirror=mirror, proxy=proxy,
-        progress_cb=model_progress, cancel_event=cancel_event,
-        pause_event=pause_event)
-    if not ok:
-        return {"ok": False, "message": "模型下载失败，请检查网络后重试",
-                **setup_status(data_dir)}
+        ok = download_models(
+            data_dir, mirror=mirror, proxy=proxy,
+            progress_cb=model_progress, cancel_event=cancel_event,
+            pause_event=pause_event)
+        if not ok:
+            status = setup_status(data_dir)
+            return {
+                **status, "ok": False,
+                "message": "模型下载失败，请检查网络后重试",
+            }
 
     _emit(
         "运行 SadTalker 实际推理验证"
@@ -1287,10 +1606,19 @@ def run_setup(
            else "（首次安装可能需要数分钟）…"),
         0.97)
     _clear_smoke_cache()
-    smoke_ok, reason = runtime_smoke(data_dir, deep=True)
+
+    def smoke_progress(message: str, fraction: float) -> None:
+        _emit(message, 0.97 + min(max(fraction, 0.0), 1.0) * 0.029)
+
+    smoke_ok, reason = runtime_smoke(
+        data_dir, deep=True, progress_cb=smoke_progress)
     if not smoke_ok:
-        return {"ok": False, "message": f"runtime 验证失败：{reason}",
-                **setup_status(data_dir)}
+        status = setup_status(data_dir)
+        return {
+            **status,
+            "ok": False,
+            "message": f"runtime 验证失败：\n{reason}",
+        }
 
     status = setup_status(data_dir)
     _emit("数字人 runtime 与模型安装完成！", 1.0)

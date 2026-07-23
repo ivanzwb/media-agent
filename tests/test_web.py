@@ -788,8 +788,12 @@ def test_sadtalker_setup_stream_uses_standard_sse(tmp_path, monkeypatch):
         "models_ok": True, "smoke_ok": False, "reason": "runtime missing",
     })
 
-    def fake_setup(data_dir, *, mirror, proxy, progress_cb, cancel_event):
+    def fake_setup(
+        data_dir, *, mirror, validation_only, proxy, progress_cb,
+        cancel_event, pause_event=None,
+    ):
         assert mirror is True
+        assert validation_only is False
         assert proxy is None
         progress_cb("下载中", 0.5)
         return {
@@ -805,6 +809,82 @@ def test_sadtalker_setup_stream_uses_standard_sse(tmp_path, monkeypatch):
     assert "event: progress\ndata: " in r.text
     assert "event: done\ndata: " in r.text
     assert 'progress: {"message"' not in r.text
+
+
+def test_sadtalker_setup_sse_preserves_multiline_unicode_failure(
+        tmp_path, monkeypatch):
+    import json
+    from app.video import sadtalker_setup as st
+
+    client, _, _ = make_client(tmp_path)
+    installed = {
+        "ready": False, "installed": True, "state": "validation_failed",
+        "retry_validation": True, "supported": True, "installable": True,
+        "gpu_ok": True, "runtime_ok": True, "models_ok": True,
+        "smoke_ok": False, "reason": "旧错误",
+    }
+    monkeypatch.setattr(st, "setup_status", lambda _: installed)
+
+    def fake_setup(
+        data_dir, *, mirror, validation_only, proxy, progress_cb,
+        cancel_event, pause_event=None,
+    ):
+        assert validation_only is True
+        progress_cb("运行实际推理验证…", 0.97)
+        return {
+            **installed,
+            "ok": False,
+            "message": "runtime 验证失败：\nCUDA 内存不足\n完整 traceback",
+        }
+
+    monkeypatch.setattr(st, "run_setup", fake_setup)
+    response = client.post("/api/sadtalker/setup", data={
+        "mirror": "true", "validation_only": "true",
+    })
+
+    assert response.status_code == 200
+    done_block = next(
+        block for block in response.text.replace("\r\n", "\n").split("\n\n")
+        if block.startswith("event: done\n"))
+    data_text = "\n".join(
+        line[5:].lstrip() for line in done_block.splitlines()
+        if line.startswith("data:"))
+    payload = json.loads(data_text)
+    assert payload["installed"] is True
+    assert payload["runtime_ok"] is True and payload["models_ok"] is True
+    assert payload["message"].endswith("CUDA 内存不足\n完整 traceback")
+
+
+def test_sadtalker_setup_unhandled_error_uses_terminal_sse_frame(
+        tmp_path, monkeypatch):
+    import json
+    from app.video import sadtalker_setup as st
+
+    client, _, _ = make_client(tmp_path)
+    status = {
+        "ready": False, "installed": True, "state": "validation_failed",
+        "retry_validation": True, "runtime_ok": True, "models_ok": True,
+        "smoke_ok": False, "reason": "验证失败",
+    }
+    monkeypatch.setattr(st, "setup_status", lambda _: status)
+
+    def fail_setup(*_args, **_kwargs):
+        raise RuntimeError("第一行\n第二行：显存不足")
+
+    monkeypatch.setattr(st, "run_setup", fail_setup)
+    response = client.post("/api/sadtalker/setup", data={
+        "validation_only": "true",
+    })
+
+    error_block = next(
+        block for block in response.text.replace("\r\n", "\n").split("\n\n")
+        if block.startswith("event: error\n"))
+    data_text = "\n".join(
+        line[5:].lstrip() for line in error_block.splitlines()
+        if line.startswith("data:"))
+    payload = json.loads(data_text)
+    assert payload["installed"] is True
+    assert payload["message"] == "第一行\n第二行：显存不足"
 
 
 def test_sadtalker_status_requires_runtime_and_smoke(tmp_path, monkeypatch):
@@ -841,7 +921,9 @@ def test_cosyvoice_setup_stream_and_status(tmp_path, monkeypatch):
     }
     monkeypatch.setattr(cv, "setup_status", lambda _: expected)
 
-    def fake_setup(data_dir, *, proxy, progress_cb, cancel_event):
+    def fake_setup(
+        data_dir, *, proxy, progress_cb, cancel_event, pause_event=None,
+    ):
         assert data_dir == tmp_path
         assert proxy is None
         progress_cb("下载中", .5)

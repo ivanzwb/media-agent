@@ -35,7 +35,10 @@ def test_models_ready_rejects_partial_files(tmp_path: Path, monkeypatch):
 def test_run_setup_threads_mirror_to_downloader(tmp_path: Path, monkeypatch):
     seen = {}
 
-    def fake_download(data_dir, *, mirror, proxy, progress_cb, cancel_event):
+    def fake_download(
+        data_dir, *, mirror, proxy, progress_cb, cancel_event,
+        pause_event=None,
+    ):
         seen["mirror"] = mirror
         seen["proxy"] = proxy
         return True
@@ -123,6 +126,288 @@ def test_status_requires_successful_real_inference_marker(tmp_path: Path,
 
     assert status["smoke_ok"] is True
     assert status["ready"] is True
+
+
+def test_deep_smoke_failure_preserves_streams_and_status(
+        tmp_path: Path, monkeypatch):
+    rel = "checkpoints/model.bin"
+    monkeypatch.setattr(st, "REQUIRED_FILES", [(rel, 3)])
+    monkeypatch.setattr(st, "ALL_FILES", [(rel, 3)])
+    monkeypatch.setattr(st, "REQUIRED_HASHES", {})
+    source = st.runtime_source(tmp_path)
+    (source / "examples" / "source_image").mkdir(parents=True)
+    (source / "examples" / "driven_audio").mkdir(parents=True)
+    (source / "inference.py").write_text("", encoding="utf-8")
+    (source / "examples" / "source_image" / "full_body_1.png").write_bytes(
+        b"image")
+    (source / "examples" / "driven_audio" / "bus_chinese.wav").write_bytes(
+        b"audio")
+    st.runtime_python(tmp_path).write_bytes(b"python")
+    st._runtime_version_path(tmp_path).write_text(
+        st._runtime_asset(), encoding="utf-8")
+    model = st._models_dir(tmp_path) / rel
+    model.parent.mkdir(parents=True)
+    model.write_bytes(b"123")
+    monkeypatch.setattr(st, "accelerator_status", lambda _target=None: {
+        "ok": True, "name": "Test GPU", "accelerator": "CUDA", "reason": "",
+    })
+
+    results = iter([
+        st.subprocess.CompletedProcess([], 0, "imports ok\n", ""),
+        st.subprocess.CompletedProcess([], 0, "usage\n", ""),
+    ])
+    monkeypatch.setattr(st.subprocess, "run", lambda *_a, **_k: next(results))
+    monkeypatch.setattr(
+        st, "_prepare_smoke_assets",
+        lambda *_a, **_k: (
+            source / "examples" / "source_image" / "full_body_1.png",
+            source / "examples" / "driven_audio" / "bus_chinese.wav"))
+    monkeypatch.setattr(
+        st, "_run_smoke_process",
+        lambda *_a, **_k: (
+            st.subprocess.CompletedProcess(
+                [], 1, "加载模型：中文输出\nsecond line\n",
+                "CUDA 内存不足\ntrace detail\n"),
+            12.5,
+            False,
+        ))
+
+    ok, reason = st.runtime_smoke(tmp_path, deep=True)
+
+    assert ok is False
+    assert "加载模型：中文输出\nsecond line" in reason
+    assert "CUDA 内存不足\ntrace detail" in reason
+    status = st.setup_status(tmp_path)
+    assert status["installed"] is True
+    assert status["state"] == "validation_failed"
+    assert status["retry_validation"] is True
+    assert status["runtime_ok"] is True and status["models_ok"] is True
+    assert status["reason"] == reason
+
+
+def test_smoke_command_uses_fast_cuda_flags(tmp_path: Path):
+    command = st._smoke_command(
+        Path("python.exe"), Path("source"), Path("checkpoints"),
+        Path("results"), Path("face.png"), Path("audio.wav"),
+        device="cuda")
+
+    assert command[:3] == ["python.exe", "-c", st._SMOKE_RUNNER]
+    assert command[4] == "cuda"
+    assert command[command.index("--preprocess") + 1] == "resize"
+    assert command[command.index("--size") + 1] == "256"
+    assert command[command.index("--batch_size") + 1] == "2"
+    assert "--still" in command
+    assert "--cpu" not in command
+    assert "--enhancer" not in command
+    assert "full" not in command
+
+
+def test_smoke_command_uses_upstream_cpu_flag_on_macos():
+    command = st._smoke_command(
+        Path("bin/python"), Path("source"), Path("checkpoints"),
+        Path("results"), Path("face.png"), Path("audio.wav"),
+        device="cpu")
+
+    assert command[4] == "cpu"
+    assert "--cpu" in command
+    assert "--device" not in command
+
+
+def test_prepare_smoke_assets_creates_short_deterministic_media(
+        tmp_path: Path):
+    import wave
+    from PIL import Image
+
+    source = tmp_path / "source"
+    face = source / "examples" / "source_image" / "happy.png"
+    audio = source / "examples" / "driven_audio" / "bus_chinese.wav"
+    face.parent.mkdir(parents=True)
+    audio.parent.mkdir(parents=True)
+    Image.new("RGB", (512, 320), "red").save(face)
+    with wave.open(str(audio), "wb") as wav:
+        wav.setparams((1, 2, 16000, 32000, "NONE", "not compressed"))
+        wav.writeframes(b"\x01\x00" * 32000)
+
+    smoke_face, smoke_audio = st._prepare_smoke_assets(
+        source, tmp_path / "work")
+
+    assert Image.open(smoke_face).size == (256, 256)
+    with wave.open(str(smoke_audio), "rb") as wav:
+        assert wav.getframerate() == 16000
+        assert wav.getnframes() == 16000
+
+
+def test_smoke_process_reports_stage_progress(monkeypatch, tmp_path: Path):
+    calls = 0
+
+    class Process:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise st.subprocess.TimeoutExpired(
+                    [], timeout, output=(
+                        b"[media-agent] selected_device=cuda\n"
+                        b"3DMM Extraction for source image\n"))
+            return (
+                "[media-agent] selected_device=cuda\n"
+                "3DMM Extraction for source image\n"
+                "The generated video is named: result.mp4\n",
+                "",
+            )
+
+        def kill(self):
+            raise AssertionError("healthy process should not be killed")
+
+    monkeypatch.setattr(st.subprocess, "Popen", lambda *_a, **_k: Process())
+    progress = []
+
+    result, _elapsed, timed_out = st._run_smoke_process(
+        ["python"], cwd=tmp_path, env={}, timeout=60,
+        progress_cb=lambda message, fraction: progress.append(
+            (message, fraction)))
+
+    assert timed_out is False and result.returncode == 0
+    assert any("提取单帧人脸参数" in message for message, _ in progress)
+    assert all("已用时" in message for message, _ in progress)
+
+
+def test_smoke_process_timeout_is_bounded_and_keeps_output(
+        monkeypatch, tmp_path: Path):
+    ticks = iter([0.0, 301.0, 302.0])
+
+    class Process:
+        returncode = -9
+        killed = False
+
+        def communicate(self, timeout=None):
+            assert self.killed
+            return ("checkpoint loading\n", "last CUDA diagnostic\n")
+
+        def kill(self):
+            self.killed = True
+
+    monkeypatch.setattr(st.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(st.subprocess, "Popen", lambda *_a, **_k: Process())
+
+    result, elapsed, timed_out = st._run_smoke_process(
+        ["python"], cwd=tmp_path, env={}, timeout=300, progress_cb=None)
+
+    assert timed_out is True
+    assert elapsed == 302.0
+    assert "checkpoint loading" in result.stdout
+    assert "last CUDA diagnostic" in result.stderr
+
+
+def test_deep_smoke_cache_skips_process_for_matching_fingerprint(
+        tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(st, "runtime_files_ready", lambda _: True)
+    marker = st._smoke_marker(tmp_path)
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps(st._smoke_fingerprint(tmp_path)), encoding="utf-8")
+    monkeypatch.setattr(
+        st.subprocess, "Popen",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("cached validation must not launch inference")))
+    progress = []
+
+    result = st.runtime_smoke(
+        tmp_path, deep=True,
+        progress_cb=lambda message, fraction: progress.append(
+            (message, fraction)))
+
+    assert result == (True, "")
+    assert progress == [("已使用通过验证的 runtime 缓存", 1.0)]
+
+
+def test_deep_smoke_rejects_silent_device_fallback(
+        tmp_path: Path, monkeypatch):
+    target = st.runtime_target("Windows", "AMD64")
+    assert target is not None
+    monkeypatch.setattr(st, "runtime_target", lambda *_a, **_k: target)
+    monkeypatch.setattr(st, "runtime_files_ready", lambda _: True)
+    python = st.runtime_python(tmp_path)
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"python")
+    results = iter([
+        st.subprocess.CompletedProcess([], 0, "GPU ok", ""),
+        st.subprocess.CompletedProcess([], 0, "usage", ""),
+    ])
+    monkeypatch.setattr(st.subprocess, "run", lambda *_a, **_k: next(results))
+
+    def prepare(_source, input_dir):
+        input_dir.mkdir(parents=True)
+        (input_dir.parent / "result.mp4").write_bytes(b"video")
+        return input_dir / "face.png", input_dir / "audio.wav"
+
+    monkeypatch.setattr(st, "_prepare_smoke_assets", prepare)
+    monkeypatch.setattr(st, "_run_smoke_process", lambda *_a, **_k: (
+        st.subprocess.CompletedProcess(
+            [], 0, "[media-agent] selected_device=cpu\n", ""),
+        5.0,
+        False,
+    ))
+
+    ok, reason = st.runtime_smoke(tmp_path, deep=True)
+
+    assert ok is False
+    assert "未确认使用预期设备" in reason
+    assert not st._smoke_marker(tmp_path).exists()
+
+
+def test_smoke_video_inspection_rejects_empty_output(
+        tmp_path: Path, monkeypatch):
+    response = st.subprocess.CompletedProcess(
+        [], 0,
+        json.dumps({
+            "opened": True, "decoded": False, "frames": 0, "fps": 0,
+            "width": 0, "height": 0, "std": 0,
+        }),
+        "",
+    )
+    monkeypatch.setattr(st.subprocess, "run", lambda *_a, **_k: response)
+
+    ok, reason = st._inspect_smoke_video(
+        Path("python"), tmp_path / "empty.mp4", cwd=tmp_path, env={})
+
+    assert ok is False
+    assert "验证视频内容无效" in reason
+
+
+def test_validation_retry_skips_runtime_and_model_downloads(
+        tmp_path: Path, monkeypatch):
+    target = st.runtime_target("Windows", "AMD64")
+    assert target is not None
+    status = {
+        "ready": False, "installed": True, "state": "validation_failed",
+        "retry_validation": True, "runtime_ok": True, "models_ok": True,
+        "smoke_ok": False, "reason": "previous failure",
+    }
+    monkeypatch.setattr(st, "runtime_target", lambda *_a, **_k: target)
+    monkeypatch.setattr(st, "accelerator_status", lambda _target=None: {
+        "ok": True, "name": "Test GPU", "accelerator": "CUDA", "reason": "",
+    })
+    monkeypatch.setattr(st, "setup_status", lambda _: status)
+    monkeypatch.setattr(
+        st, "_install_runtime",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("runtime download must not run")))
+    monkeypatch.setattr(
+        st, "download_models",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("model download must not run")))
+    monkeypatch.setattr(
+        st, "runtime_smoke",
+        lambda *_a, **_k: (False, "CUDA out of memory\n完整堆栈"))
+
+    result = st.run_setup(tmp_path, validation_only=True)
+
+    assert result["ok"] is False
+    assert result["installed"] is True
+    assert "CUDA out of memory\n完整堆栈" in result["message"]
 
 
 def test_models_ready_rejects_wrong_hash_at_exact_size(

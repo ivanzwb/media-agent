@@ -3981,7 +3981,10 @@ def create_app(config: Config | None = None,
         return setup_status(config.data_dir)
 
     @app.post("/api/sadtalker/setup")
-    def api_sadtalker_setup(mirror: bool = Form(True)):
+    def api_sadtalker_setup(
+        mirror: bool = Form(True),
+        validation_only: bool = Form(False),
+    ):
         """Download SadTalker models with resume + auto-configure paths.
 
         Returns SSE stream of progress events, then a final JSON result.
@@ -4030,6 +4033,7 @@ def create_app(config: Config | None = None,
                 result = run_setup(
                     config.data_dir,
                     mirror=mirror,
+                    validation_only=validation_only,
                     proxy=setup_config.fetch_proxy,
                     progress_cb=_on_progress,
                     cancel_event=cancel,
@@ -4038,9 +4042,11 @@ def create_app(config: Config | None = None,
                 evt_q.put({"event": "done",
                             "data": _json.dumps(result, ensure_ascii=False)})
             except Exception as exc:
-                evt_q.put({"event": "done",
+                current_status = setup_status(config.data_dir)
+                evt_q.put({"event": "error",
                             "data": _json.dumps(
-                                {"ok": False, "message": str(exc)},
+                                {**current_status, "ok": False,
+                                 "message": str(exc)},
                                 ensure_ascii=False)})
             finally:
                 _sadtalker_events.clear()
@@ -4048,13 +4054,22 @@ def create_app(config: Config | None = None,
 
         _threading.Thread(target=_worker, daemon=True).start()
 
+        def _sse_frame(event: str, data: str) -> str:
+            # Prefix every physical line as required by the SSE grammar. JSON
+            # normally escapes newlines, but this also protects future plain
+            # text payloads while preserving Unicode verbatim.
+            normalized = data.replace("\r\n", "\n").replace("\r", "\n")
+            data_fields = "".join(
+                f"data: {line}\n" for line in normalized.split("\n"))
+            return f"event: {event}\n{data_fields}\n"
+
         def _stream():
             while True:
                 try:
                     item = evt_q.get(timeout=0.3)
                 except queue.Empty:
                     # Send heartbeat every 300ms while waiting
-                    yield f"event: heartbeat\ndata: {{}}\n\n"
+                    yield _sse_frame("heartbeat", "{}")
                     continue
                 # Standard SSE framing is two fields:
                 #   event: <type>
@@ -4062,8 +4077,8 @@ def create_app(config: Config | None = None,
                 # The old "<type>: <JSON>" form was not SSE, so the frontend
                 # ignored progress/done and falsely reported a broken stream
                 # after a successful download.
-                yield f"event: {item['event']}\ndata: {item['data']}\n\n"
-                if item["event"] == "done":
+                yield _sse_frame(item["event"], item["data"])
+                if item["event"] in {"done", "error"}:
                     break
 
         return StreamingResponse(_stream(), media_type="text/event-stream",

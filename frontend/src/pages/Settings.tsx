@@ -661,6 +661,9 @@ function CliTestButton({ form }: { form: any }) {
 
 type ManagedRuntimeStatus = {
   ready: boolean;
+  installed?: boolean;
+  state?: "ready" | "unsupported" | "device_unavailable" | "validation_failed" | "validation_pending" | "partially_installed" | "not_installed";
+  retry_validation?: boolean;
   supported?: boolean;
   asset_available?: boolean;
   installable?: boolean;
@@ -828,6 +831,8 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState<{ message: string; fraction: number } | null>(null);
   const [paused, setPaused] = useState(false);
+  const [validationOnly, setValidationOnly] = useState(false);
+  const [latestFailure, setLatestFailure] = useState("");
 
   type SadTalkerStatus = ManagedRuntimeStatus;
 
@@ -836,14 +841,19 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
     return r;
   }
 
-  async function startSetup() {
+  async function startSetup(retryValidation = false) {
     setDownloading(true);
     setPaused(false);
-    setProgress({ message: "准备下载…", fraction: 0 });
+    setValidationOnly(retryValidation);
+    setProgress({
+      message: retryValidation ? "准备重新运行实际推理验证…" : "准备下载…",
+      fraction: retryValidation ? 0.97 : 0,
+    });
 
     try {
       const fd = new FormData();
       fd.append("mirror", "true");
+      fd.append("validation_only", retryValidation ? "true" : "false");
 
       // Use fetch + ReadableStream for SSE (axios doesn't support streaming well)
       const resp = await fetch("/api/sadtalker/setup", { method: "POST", body: fd });
@@ -856,11 +866,16 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
         setPaused(false);
         setProgress(null);
         if (payload.ok) {
+          setLatestFailure("");
           message.success(payload.message || "数字人模型已就绪");
           fetchStatus().then(setStatus).catch(() => {});
           onSuccess();
         } else {
-          message.error(payload.message || "安装失败");
+          const reason = payload.message || payload.reason || "安装失败";
+          setLatestFailure(reason);
+          if (typeof payload.ready === "boolean") setStatus(payload);
+          message.error(reason);
+          fetchStatus().then(setStatus).catch(() => {});
         }
         return;
       }
@@ -880,15 +895,23 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
           const payload = JSON.parse(dataText);
           if (eventType === "progress") {
             setProgress({ message: payload.message, fraction: payload.fraction });
-          } else if (eventType === "done") {
+          } else if (eventType === "done" || eventType === "error") {
             setDownloading(false);
+            setPaused(false);
             setProgress(null);
             if (payload.ok) {
+              setLatestFailure("");
               message.success(payload.message || "数字人模型安装完成！");
               fetchStatus().then(setStatus).catch(() => {});
               onSuccess();
             } else {
-              message.error(payload.message || "安装失败");
+              const reason = payload.message || payload.reason || "安装失败";
+              setLatestFailure(reason);
+              if (typeof payload.ready === "boolean") setStatus(payload);
+              message.error(reason);
+              // Refresh filesystem-derived status, while latestFailure remains
+              // visible even if an older server omits persisted failure state.
+              fetchStatus().then(setStatus).catch(() => {});
             }
             return true;
           }
@@ -901,7 +924,7 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
         buffer += decoder.decode(value, { stream: !done });
         // Parse complete SSE blocks, not individual lines. An `event:` line and
         // its `data:` line may arrive in different network chunks.
-        buffer = buffer.replace(/\r\n/g, "\n");
+        buffer = buffer.replace(/\r\n?/g, "\n");
         let boundary: number;
         while ((boundary = buffer.indexOf("\n\n")) >= 0) {
           const block = buffer.slice(0, boundary);
@@ -915,12 +938,17 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
       setDownloading(false);
       setPaused(false);
       setProgress(null);
-      message.warning("下载连接中断，请重试");
+      const reason = "安装连接中断，未收到完成状态，请重试";
+      setLatestFailure(reason);
+      message.warning(reason);
     } catch (e: any) {
       setDownloading(false);
       setPaused(false);
       setProgress(null);
-      message.error("安装失败：" + (e?.message || e));
+      const reason = "安装失败：" + (e?.message || e);
+      setLatestFailure(reason);
+      message.error(reason);
+      fetchStatus().then(setStatus).catch(() => {});
     }
   }
 
@@ -930,12 +958,18 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
 
   return (
     <Card size="small" title="数字人 Runtime 与模型" style={{ marginTop: 8 }}
-      extra={status && <Tag color={status.ready ? "green" : "default"}>{status.ready ? "已就绪" : "未就绪"}</Tag>}>
+      extra={status && <Tag color={status.ready ? "green" : status.installed ? "orange" : "default"}>
+        {status.ready
+          ? "已就绪"
+          : status.state === "validation_failed"
+            ? "已安装，验证失败"
+            : status.installed ? "已安装，待验证" : "未就绪"}
+      </Tag>}>
       {downloading && progress ? (
         <Space direction="vertical" style={{ width: "100%" }}>
           <Text>{progress.message}</Text>
           <Progress percent={Math.max(1, Math.round(progress.fraction * 100))} status={paused ? "normal" : "active"} />
-          <Space>
+          {!validationOnly && <Space>
             {paused ? (
               <Button icon={<PlayCircleOutlined />} onClick={async () => {
                 try { await postForm("/api/sadtalker/resume", {}); setPaused(false); } catch {}
@@ -949,7 +983,7 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
               try { await postForm("/api/sadtalker/cancel", {}); } catch {}
               setProgress({ message: "正在取消…", fraction: progress?.fraction ?? 0 });
             }}>取消</Button>
-          </Space>
+          </Space>}
         </Space>
       ) : (
         <Space direction="vertical">
@@ -964,7 +998,9 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
                 {status.accelerator === "CPU" ? "CPU Runtime" : "CUDA Runtime"}
               </Tag>
               <Tag color={status.models_ok ? "green" : "default"}>模型文件</Tag>
-              <Tag color={status.smoke_ok ? "green" : "default"}>运行验证</Tag>
+              <Tag color={status.smoke_ok ? "green" : status.state === "validation_failed" ? "red" : "default"}>
+                运行验证
+              </Tag>
             </Space>
           ))}
           <Text type="secondary">
@@ -972,15 +1008,25 @@ function SadTalkerSetup({ data, onSuccess }: { data: SettingsData; onSuccess: ()
               ? `SadTalker 已通过运行验证${status.device_name || status.gpu_name ? `（${status.device_name || status.gpu_name}）` : ""}，可直接使用口型同步。`
               : status?.supported === false
                 ? "当前平台没有适配的 SadTalker runtime。"
+                : status?.installed
+                  ? "Runtime 与模型均已安装；只需重新运行实际推理验证，不会重复下载。"
                 : `安装将下载独立的${status?.accelerator === "CPU" ? " CPU" : " NVIDIA CUDA"} Runtime 与约 1GB 模型，支持断点续传。`}
           </Text>
-          {!status?.ready && status?.reason && <Text type="danger">{status.reason}</Text>}
+          {!status?.ready && (latestFailure || status?.reason) && (
+            <Text type="danger" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {latestFailure || status?.reason}
+            </Text>
+          )}
           {status?.performance_warning && <Text type="warning">{status.performance_warning}</Text>}
           <Space>
             {!status?.ready && (
-              <Button type="primary" icon={<DownloadOutlined />} onClick={startSetup}
+              <Button type="primary"
+                icon={status?.retry_validation || status?.installed ? <ReloadOutlined /> : <DownloadOutlined />}
+                onClick={() => startSetup(!!(status?.retry_validation || status?.installed))}
                 disabled={!status || !(status.installable ?? status.gpu_ok)}>
-                下载安装 Runtime 与模型
+                {status?.retry_validation || status?.installed
+                  ? "重新运行推理验证"
+                  : "下载安装 Runtime 与模型"}
               </Button>
             )}
             {status?.ready && (
