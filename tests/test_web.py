@@ -922,9 +922,11 @@ def test_cosyvoice_setup_stream_and_status(tmp_path, monkeypatch):
     monkeypatch.setattr(cv, "setup_status", lambda _: expected)
 
     def fake_setup(
-        data_dir, *, proxy, progress_cb, cancel_event, pause_event=None,
+        data_dir, *, validation_only, proxy, progress_cb, cancel_event,
+        pause_event=None,
     ):
         assert data_dir == tmp_path
+        assert validation_only is False
         assert proxy is None
         progress_cb("下载中", .5)
         return {**expected, "ok": True, "ready": True, "message": "安装完成"}
@@ -935,6 +937,47 @@ def test_cosyvoice_setup_stream_and_status(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert "event: progress\ndata: " in response.text
     assert "event: done\ndata: " in response.text
+
+
+def test_cosyvoice_validation_retry_and_unicode_failure_sse(
+        tmp_path, monkeypatch):
+    import json
+    from app import cosyvoice_install as cv
+
+    client, _, _ = make_client(tmp_path)
+    installed = {
+        "ready": False, "installed": True, "state": "validation_failed",
+        "retry_validation": True, "supported": True, "installable": True,
+        "gpu_ok": True, "runtime_ok": True, "models_ok": True,
+        "smoke_ok": False, "reason": "旧错误",
+    }
+    monkeypatch.setattr(cv, "setup_status", lambda _: installed)
+
+    def fake_setup(
+        data_dir, *, validation_only, proxy, progress_cb, cancel_event,
+        pause_event=None,
+    ):
+        assert data_dir == tmp_path
+        assert validation_only is True
+        progress_cb("加载 CosyVoice2 模型（已用时 5 秒）…", .97)
+        return {
+            **installed, "ok": False,
+            "message": "runtime 验证失败：\nCUDA 内存不足\n完整 traceback",
+        }
+
+    monkeypatch.setattr(cv, "run_setup", fake_setup)
+    response = client.post(
+        "/api/cosyvoice/setup", data={"validation_only": "true"})
+
+    done_block = next(
+        block for block in response.text.replace("\r\n", "\n").split("\n\n")
+        if block.startswith("event: done\n"))
+    payload = json.loads("\n".join(
+        line[5:].lstrip() for line in done_block.splitlines()
+        if line.startswith("data:")))
+    assert payload["installed"] is True
+    assert payload["message"].endswith("CUDA 内存不足\n完整 traceback")
+    assert "已用时 5 秒" in response.text
 
 
 def test_capabilities_uses_managed_runtime_contract(tmp_path, monkeypatch):

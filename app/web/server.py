@@ -3907,7 +3907,7 @@ def create_app(config: Config | None = None,
         return setup_status(config.data_dir)
 
     @app.post("/api/cosyvoice/setup")
-    def api_cosyvoice_setup():
+    def api_cosyvoice_setup(validation_only: bool = Form(False)):
         """Install the managed runtime/model payload with SSE progress."""
         import json as _json
         import queue
@@ -3943,27 +3943,35 @@ def create_app(config: Config | None = None,
                 result = run_setup(
                     config.data_dir, proxy=setup_config.fetch_proxy,
                     progress_cb=on_progress, cancel_event=cancel,
-                    pause_event=pause)
+                    pause_event=pause, validation_only=validation_only)
                 evt_q.put({"event": "done", "data": _json.dumps(
                     result, ensure_ascii=False)})
             except Exception as exc:
-                evt_q.put({"event": "done", "data": _json.dumps(
-                    {"ok": False, "message": str(exc)}, ensure_ascii=False)})
+                current_status = setup_status(config.data_dir)
+                evt_q.put({"event": "error", "data": _json.dumps(
+                    {**current_status, "ok": False, "message": str(exc)},
+                    ensure_ascii=False)})
             finally:
                 _cosyvoice_events.clear()
                 cosyvoice_install_lock.release()
 
         _threading.Thread(target=worker, daemon=True).start()
 
+        def sse_frame(event: str, data: str) -> str:
+            normalized = data.replace("\r\n", "\n").replace("\r", "\n")
+            fields = "".join(
+                f"data: {line}\n" for line in normalized.split("\n"))
+            return f"event: {event}\n{fields}\n"
+
         def stream():
             while True:
                 try:
                     item = evt_q.get(timeout=.3)
                 except queue.Empty:
-                    yield "event: heartbeat\ndata: {}\n\n"
+                    yield sse_frame("heartbeat", "{}")
                     continue
-                yield f"event: {item['event']}\ndata: {item['data']}\n\n"
-                if item["event"] == "done":
+                yield sse_frame(item["event"], item["data"])
+                if item["event"] in {"done", "error"}:
                     break
 
         return StreamingResponse(

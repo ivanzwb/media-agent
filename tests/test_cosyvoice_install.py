@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import runpy
 import tarfile
 from pathlib import Path
 
@@ -177,3 +178,156 @@ def test_unsupported_platform_has_actionable_reason(tmp_path: Path, monkeypatch)
     assert status["supported"] is False
     assert status["installable"] is False
     assert "Linux x86_64" in status["reason"]
+
+
+def test_deep_smoke_failure_preserves_streams_and_installed_state(
+        tmp_path: Path, monkeypatch):
+    target = cv.runtime_target("Windows", "AMD64")
+    assert target is not None
+    monkeypatch.setattr(cv, "runtime_target", lambda *_a, **_k: target)
+    monkeypatch.setattr(cv, "runtime_files_ready", lambda _: True)
+    monkeypatch.setattr(cv, "models_ready", lambda _: True)
+    monkeypatch.setattr(
+        "app.video.sadtalker_setup.gpu_status",
+        lambda: {"ok": True, "name": "GPU", "reason": ""})
+    monkeypatch.setattr(cv, "_run_smoke_process", lambda *_a, **_k: (
+        cv.subprocess.CompletedProcess(
+            [], 1, "加载模型：中文诊断\n完整 stdout\n",
+            "CUDA 内存不足\n完整 traceback\n"),
+        12.5,
+        False,
+    ))
+
+    ok, reason = cv.runtime_smoke(tmp_path, deep=True)
+
+    assert ok is False
+    assert "加载模型：中文诊断\n完整 stdout" in reason
+    assert "CUDA 内存不足\n完整 traceback" in reason
+    status = cv.setup_status(tmp_path)
+    assert status["installed"] is True
+    assert status["state"] == "validation_failed"
+    assert status["retry_validation"] is True
+    assert status["runtime_ok"] is True and status["models_ok"] is True
+    assert status["reason"] == reason
+
+
+def test_deep_smoke_requires_explicit_expected_device(
+        tmp_path: Path, monkeypatch):
+    target = cv.runtime_target("Windows", "AMD64")
+    assert target is not None
+    monkeypatch.setattr(cv, "runtime_target", lambda *_a, **_k: target)
+    monkeypatch.setattr(cv, "runtime_files_ready", lambda _: True)
+    monkeypatch.setattr(cv, "models_ready", lambda _: True)
+    seen = {}
+
+    def fake_run(_command, *, cwd, env, timeout, progress_cb):
+        seen.update(env=env, timeout=timeout)
+        return (
+            cv.subprocess.CompletedProcess(
+                [], 0, 'MEDIA_AGENT_JSON:{"ok": true, "device": "cpu"}\n', ""),
+            3.0,
+            False,
+        )
+
+    monkeypatch.setattr(cv, "_run_smoke_process", fake_run)
+    ok, reason = cv.runtime_smoke(tmp_path, deep=True)
+
+    assert seen["env"]["MEDIA_AGENT_TORCH_DEVICE"] == "cuda"
+    assert seen["timeout"] == cv._GPU_SMOKE_TIMEOUT
+    assert ok is False
+    assert "未确认使用预期设备" in reason
+    assert not cv._smoke_path(tmp_path).exists()
+
+
+def test_deep_smoke_cache_fingerprints_runtime_model_and_source(
+        tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(cv, "runtime_files_ready", lambda _: True)
+    monkeypatch.setattr(cv, "models_ready", lambda _: True)
+    source = cv.runtime_source(tmp_path) / "cosyvoice" / "cli" / "cosyvoice.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("first", encoding="utf-8")
+    marker = cv._smoke_path(tmp_path)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps(cv._fingerprint(tmp_path)), encoding="utf-8")
+    monkeypatch.setattr(
+        cv, "_run_smoke_process",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("matching fingerprint must skip synthesis")))
+
+    assert cv.runtime_smoke(tmp_path, deep=True) == (True, "")
+    source.write_text("changed-source", encoding="utf-8")
+    assert not cv._deep_smoke_ready(tmp_path)
+
+
+def test_validation_retry_never_downloads_or_replaces_assets(
+        tmp_path: Path, monkeypatch):
+    target = cv.runtime_target("Windows", "AMD64")
+    assert target is not None
+    status = {
+        "ready": False, "installed": True, "state": "validation_failed",
+        "retry_validation": True, "installable": True, "runtime_ok": True,
+        "models_ok": True, "smoke_ok": False, "accelerator": "CUDA",
+        "performance_warning": "", "reason": "previous failure",
+    }
+    monkeypatch.setattr(cv, "setup_status", lambda _: status)
+    monkeypatch.setattr(
+        cv, "_install_runtime",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("runtime download must not run")))
+    monkeypatch.setattr(
+        cv, "download_models",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("model download must not run")))
+    monkeypatch.setattr(
+        cv, "runtime_smoke",
+        lambda *_a, **_k: (False, "CUDA out of memory\n完整堆栈"))
+
+    result = cv.run_setup(tmp_path, validation_only=True)
+
+    assert result["ok"] is False
+    assert result["installed"] is True
+    assert "CUDA out of memory\n完整堆栈" in result["message"]
+
+
+def test_smoke_process_reports_stage_and_elapsed(monkeypatch, tmp_path: Path):
+    calls = 0
+
+    class Process:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise cv.subprocess.TimeoutExpired(
+                    [], timeout,
+                    output=b'MEDIA_AGENT_JSON:{"stage":"loading_model"}\n')
+            return (
+                'MEDIA_AGENT_JSON:{"stage":"loading_model"}\n'
+                'MEDIA_AGENT_JSON:{"ok":true,"device":"cuda"}\n',
+                "",
+            )
+
+    monkeypatch.setattr(cv.subprocess, "Popen", lambda *_a, **_k: Process())
+    progress = []
+
+    result, _elapsed, timed_out = cv._run_smoke_process(
+        ["python"], cwd=tmp_path, env={}, timeout=60,
+        progress_cb=lambda message, fraction: progress.append(
+            (message, fraction)))
+
+    assert timed_out is False and result.returncode == 0
+    assert any("加载 CosyVoice2 模型" in message for message, _ in progress)
+    assert all("已用时" in message for message, _ in progress)
+
+
+def test_worker_audio_acceptance_rejects_silence_and_bad_duration():
+    import numpy as np
+
+    worker = runpy.run_path(str(
+        Path(__file__).parents[1] / "packaging" / "cosyvoice_worker.py"))
+    validate = worker["_validate_audio"]
+
+    assert validate(np.zeros(16000, dtype=np.float32), 16000)[0] is False
+    assert validate(np.full(100, .1, dtype=np.float32), 16000)[0] is False
+    assert validate(np.full(8000, .1, dtype=np.float32), 16000)[0] is True

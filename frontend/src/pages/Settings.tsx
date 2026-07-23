@@ -691,6 +691,8 @@ function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
   const [installing, setInstalling] = useState(false);
   const [progress, setProgress] = useState<{ message: string; fraction: number } | null>(null);
   const [paused, setPaused] = useState(false);
+  const [validationOnly, setValidationOnly] = useState(false);
+  const [latestFailure, setLatestFailure] = useState("");
 
   const refresh = async () => {
     try {
@@ -705,16 +707,23 @@ function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
   };
   useEffect(() => { refresh().catch(() => {}); }, []);
 
-  async function install() {
+  async function install(retryValidation = false) {
     setInstalling(true);
     setPaused(false);
-    setProgress({ message: "准备安装…", fraction: 0 });
+    setValidationOnly(retryValidation);
+    setProgress({
+      message: retryValidation ? "准备重新运行实际合成验证…" : "准备安装…",
+      fraction: retryValidation ? 0.95 : 0,
+    });
     try {
-      const response = await fetch("/api/cosyvoice/setup", { method: "POST" });
+      const body = new FormData();
+      body.append("validation_only", retryValidation ? "true" : "false");
+      const response = await fetch("/api/cosyvoice/setup", { method: "POST", body });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       if ((response.headers.get("content-type") || "").includes("application/json")) {
         const payload = await response.json();
         if (!payload.ok) throw new Error(payload.message || "安装失败");
+        setLatestFailure("");
         message.success(payload.message || "CosyVoice 已就绪");
         await refresh(); onSuccess(); return;
       }
@@ -729,9 +738,15 @@ function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
         if (!event || !raw || event === "heartbeat") return;
         const payload = JSON.parse(raw);
         if (event === "progress") setProgress(payload);
-        if (event === "done") {
+        if (event === "done" || event === "error") {
           finished = true;
-          if (!payload.ok) throw new Error(payload.message || "安装失败");
+          if (!payload.ok) {
+            const reason = payload.message || payload.reason || "安装失败";
+            setLatestFailure(reason);
+            if (typeof payload.ready === "boolean") setStatus(payload);
+            throw new Error(reason);
+          }
+          setLatestFailure("");
           message.success(payload.message || "CosyVoice 安装完成");
           await refresh(); onSuccess();
         }
@@ -750,7 +765,10 @@ function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
       }
       if (!finished) throw new Error("安装连接中断，请重试（已下载内容会续传）");
     } catch (error: any) {
-      message.error("CosyVoice 安装失败：" + (error?.message || error));
+      const reason = error?.message || String(error);
+      setLatestFailure(reason);
+      message.error("CosyVoice 安装失败：" + reason);
+      await refresh().catch(() => {});
     } finally {
       setInstalling(false);
       setPaused(false);
@@ -760,12 +778,18 @@ function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
 
   return (
     <Card size="small" title="CosyVoice Runtime 与模型" style={{ marginBottom: 16 }}
-      extra={status && <Tag color={status.ready ? "green" : "default"}>{status.ready ? "已就绪" : "未就绪"}</Tag>}>
+      extra={status && <Tag color={status.ready ? "green" : status.installed ? "orange" : "default"}>
+        {status.ready
+          ? "已就绪"
+          : status.state === "validation_failed"
+            ? "已安装，验证失败"
+            : status.installed ? "已安装，待验证" : "未就绪"}
+      </Tag>}>
       {installing && progress ? (
         <Space direction="vertical" style={{ width: "100%" }}>
           <Text>{progress.message}</Text>
           <Progress percent={Math.max(1, Math.round(Math.max(0, progress.fraction) * 100))} status={paused ? "normal" : "active"} />
-          <Space>
+          {!validationOnly && <Space>
             {paused ? (
               <Button icon={<PlayCircleOutlined />} onClick={async () => {
                 try { await postForm("/api/cosyvoice/resume", {}); setPaused(false); } catch {}
@@ -779,7 +803,7 @@ function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
               try { await postForm("/api/cosyvoice/cancel", {}); } catch {}
               setProgress({ message: "正在取消…", fraction: progress?.fraction ?? 0 });
             }}>取消</Button>
-          </Space>
+          </Space>}
         </Space>
       ) : (
         <Space direction="vertical">
@@ -794,7 +818,7 @@ function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
                 {status.accelerator === "CPU" ? "CPU Runtime" : "CUDA Runtime"}
               </Tag>
               <Tag color={status.models_ok ? "green" : "default"}>CosyVoice2 模型</Tag>
-              <Tag color={status.smoke_ok ? "green" : "default"}>模型加载验证</Tag>
+              <Tag color={status.smoke_ok ? "green" : status.state === "validation_failed" ? "red" : "default"}>实际合成验证</Tag>
             </Space>
           ))}
           {statusError && <Text type="danger">状态读取失败：{statusError}。请刷新页面或检查服务日志。</Text>}
@@ -803,14 +827,24 @@ function CosyVoiceSetup({ onSuccess }: { onSuccess: () => void }) {
               ? `CosyVoice 已通过运行验证${status.device_name || status.gpu_name ? `（${status.device_name || status.gpu_name}）` : ""}。`
               : status?.asset_available === false
                 ? "当前没有适配此平台的可下载 runtime 资产；模型与 API 字段无需手动配置。"
-                : `下载安装独立${status?.accelerator === "CPU" ? " CPU" : " CUDA"} Runtime 与约 4.9GB 模型，支持断点续传。`}
+                : status?.installed
+                  ? "Runtime 与模型均已安装；只需重新运行实际合成验证，不会重复下载。"
+                  : `下载安装独立${status?.accelerator === "CPU" ? " CPU" : " CUDA"} Runtime 与约 4.9GB 模型，支持断点续传。`}
           </Text>
-          {!status?.ready && status?.reason && <Text type="danger">{status.reason}</Text>}
+          {!status?.ready && (latestFailure || status?.reason) && (
+            <Text type="danger" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {latestFailure || status?.reason}
+            </Text>
+          )}
           {status?.performance_warning && <Text type="warning">{status.performance_warning}</Text>}
           <Space>
-            {!status?.ready && <Button type="primary" icon={<DownloadOutlined />}
-              disabled={!status || !(status.installable ?? status.gpu_ok)} onClick={install}>
-              下载安装 Runtime 与模型
+            {!status?.ready && <Button type="primary"
+              icon={status?.retry_validation || status?.installed ? <ReloadOutlined /> : <DownloadOutlined />}
+              disabled={!status || !(status.installable ?? status.gpu_ok)}
+              onClick={() => install(!!(status?.retry_validation || status?.installed))}>
+              {status?.retry_validation || status?.installed
+                ? "重新运行合成验证"
+                : "下载安装 Runtime 与模型"}
             </Button>}
             {status?.ready && (
               <Button icon={<ReloadOutlined />} onClick={async () => {

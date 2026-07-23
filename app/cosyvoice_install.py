@@ -13,6 +13,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import tarfile
 import threading
 import time
@@ -38,7 +39,10 @@ MODEL_REQUIRED = (
 )
 
 Progress = Callable[[str, float], None]
-_SMOKE_CACHE: dict[tuple[str, int, bool], tuple[bool, str]] = {}
+_SMOKE_CACHE: dict[tuple[str, bool], tuple[bool, str]] = {}
+_SMOKE_SCHEMA = 2
+_GPU_SMOKE_TIMEOUT = 300
+_CPU_SMOKE_TIMEOUT = 900
 
 
 def runtime_target(system: str | None = None,
@@ -65,6 +69,14 @@ def runtime_python(data_dir: Path) -> Path:
 
 def runtime_worker(data_dir: Path) -> Path:
     return runtime_dir(data_dir) / "cosyvoice-worker.py"
+
+
+def control_worker(data_dir: Path) -> Path:
+    """Prefer the app-bundled worker so installed payloads need no replacement."""
+    bundle_root = Path(getattr(
+        sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+    bundled = bundle_root / "packaging" / "cosyvoice_worker.py"
+    return bundled if bundled.is_file() else runtime_worker(data_dir)
 
 
 def runtime_source(data_dir: Path) -> Path:
@@ -155,15 +167,27 @@ def models_ready(data_dir: Path) -> bool:
     return True
 
 
+def _file_identity(path: Path) -> dict[str, int]:
+    try:
+        stat = path.stat()
+        return {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    except OSError:
+        return {"size": 0, "mtime_ns": 0}
+
+
 def _fingerprint(data_dir: Path) -> dict[str, Any]:
     target = runtime_target()
     return {
+        "schema": _SMOKE_SCHEMA,
         "runtime": (
             runtime_asset("cosyvoice", target) if target else RUNTIME_ASSET),
         "model_repo": MODEL_REPO,
-        "files": {
-            name: (model_dir(data_dir) / name).stat().st_size
-            if (model_dir(data_dir) / name).is_file() else 0
+        "python": _file_identity(runtime_python(data_dir)),
+        "worker": _file_identity(control_worker(data_dir)),
+        "source": _file_identity(
+            runtime_source(data_dir) / "cosyvoice" / "cli" / "cosyvoice.py"),
+        "models": {
+            name: _file_identity(model_dir(data_dir) / name)
             for name in MODEL_REQUIRED
         },
     }
@@ -177,45 +201,191 @@ def _deep_smoke_ready(data_dir: Path) -> bool:
         return False
 
 
-def runtime_smoke(data_dir: Path, *, deep: bool = False,
-                  timeout: int = 1200) -> tuple[bool, str]:
+def _smoke_failure_path(data_dir: Path) -> Path:
+    return runtime_dir(data_dir) / ".model-smoke-failure.json"
+
+
+def _last_smoke_failure(data_dir: Path) -> str:
+    try:
+        saved = json.loads(_smoke_failure_path(data_dir).read_text(
+            encoding="utf-8"))
+        if saved.get("fingerprint") == _fingerprint(data_dir):
+            return str(saved.get("reason") or "").strip()
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return ""
+
+
+def _subprocess_reason(
+    process: subprocess.CompletedProcess[str], fallback: str,
+) -> str:
+    sections = []
+    if (process.stdout or "").strip():
+        sections.append(f"stdout:\n{process.stdout.strip()}")
+    if (process.stderr or "").strip():
+        sections.append(f"stderr:\n{process.stderr.strip()}")
+    return "\n\n".join(sections) or fallback
+
+
+def _output_text(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
+
+
+def _smoke_stage(output: str) -> tuple[str, float]:
+    stages = (
+        ("validating_audio", "解码并检查验证音频", .92),
+        ("synthesizing", "运行最短零样本语音合成", .72),
+        ("model_loaded", "模型已加载到预期设备", .48),
+        ("loading_model", "加载 CosyVoice2 模型", .25),
+        ("checking_imports", "检查 runtime 依赖", .1),
+    )
+    for marker, message, fraction in stages:
+        if marker in output:
+            return message, fraction
+    return "启动 CosyVoice runtime", .05
+
+
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    if os.name == "nt" and getattr(process, "pid", None):
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=15, check=False)
+    elif getattr(process, "pid", None):
+        import signal
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            process.kill()
+    else:
+        process.kill()
+
+
+def _run_smoke_process(
+    command: list[str], *, cwd: Path, env: dict[str, str], timeout: int,
+    progress_cb: Progress | None,
+) -> tuple[subprocess.CompletedProcess[str], float, bool]:
+    """Run the worker with heartbeats, complete output, and a tree timeout."""
+    started = time.monotonic()
+    creationflags = (
+        (getattr(subprocess, "CREATE_NO_WINDOW", 0)
+         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+        if os.name == "nt" else 0)
+    process = subprocess.Popen(
+        command, cwd=str(cwd), env=env, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, encoding="utf-8",
+        errors="replace", creationflags=creationflags,
+        start_new_session=(os.name != "nt"))
+    partial_stdout = ""
+    partial_stderr = ""
+    timed_out = False
+    while True:
+        elapsed = time.monotonic() - started
+        remaining = timeout - elapsed
+        if remaining <= 0:
+            timed_out = True
+            _terminate_process_tree(process)
+            stdout, stderr = process.communicate()
+            break
+        try:
+            stdout, stderr = process.communicate(timeout=min(5, remaining))
+            break
+        except subprocess.TimeoutExpired as exc:
+            partial_stdout = _output_text(exc.stdout or exc.output)
+            partial_stderr = _output_text(exc.stderr)
+            stage, fraction = _smoke_stage(
+                partial_stdout + "\n" + partial_stderr)
+            _emit(
+                progress_cb,
+                f"{stage}（已用时 {int(time.monotonic() - started)} 秒）…",
+                fraction)
+    elapsed = time.monotonic() - started
+    completed = subprocess.CompletedProcess(
+        command, process.returncode,
+        _output_text(stdout) or partial_stdout,
+        _output_text(stderr) or partial_stderr)
+    return completed, elapsed, timed_out
+
+
+def runtime_smoke(
+    data_dir: Path, *, deep: bool = False, timeout: int | None = None,
+    progress_cb: Progress | None = None,
+) -> tuple[bool, str]:
     if not runtime_files_ready(data_dir):
         return False, "CosyVoice runtime 文件不完整"
     if not models_ready(data_dir):
         return False, "CosyVoice2 模型文件不完整"
     if deep and _deep_smoke_ready(data_dir):
+        _emit(progress_cb, "已使用通过验证的 runtime/model/source 缓存", 1.0)
         return True, ""
     py = runtime_python(data_dir)
-    key = (str(py), py.stat().st_mtime_ns, deep)
+    key = (
+        str(Path(data_dir).resolve()) + "\0"
+        + json.dumps(_fingerprint(data_dir), sort_keys=True),
+        deep,
+    )
     if key in _SMOKE_CACHE:
         return _SMOKE_CACHE[key]
     command = [
-        str(py), str(runtime_worker(data_dir)), "smoke",
+        str(py), str(control_worker(data_dir)), "smoke",
         "--model-dir", str(model_dir(data_dir)),
     ]
     if deep:
         command.append("--deep")
     env = os.environ.copy()
     env["PYTHONPATH"] = str(runtime_source(data_dir))
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
     target = runtime_target()
-    if target is not None and not target.requires_gpu:
-        env["MEDIA_AGENT_TORCH_DEVICE"] = "cpu"
-        timeout = max(timeout, 3600)
+    if target is None:
+        return False, "当前平台不支持 CosyVoice managed runtime"
+    env["MEDIA_AGENT_TORCH_DEVICE"] = target.device
+    if timeout is None:
+        timeout = _CPU_SMOKE_TIMEOUT if target.slow else _GPU_SMOKE_TIMEOUT
     try:
-        proc = subprocess.run(
-            command, cwd=str(runtime_dir(data_dir)), env=env,
-            capture_output=True, text=True, timeout=timeout, check=False)
-        if proc.returncode:
-            result = (False, (proc.stderr or proc.stdout or
-                              "CosyVoice smoke failed").strip()[-1600:])
+        _emit(progress_cb, f"检查 {target.accelerator} runtime 与依赖…", .02)
+        proc, elapsed, timed_out = _run_smoke_process(
+            command, cwd=runtime_dir(data_dir), env=env, timeout=timeout,
+            progress_cb=progress_cb)
+        expected = f'"device": "{target.device}"'
+        if timed_out:
+            result = (
+                False,
+                f"CosyVoice 验证超过 {timeout} 秒，已终止整个进程树"
+                f"（实际用时 {elapsed:.1f} 秒）\n"
+                + _subprocess_reason(proc, "无子进程输出"))
+        elif proc.returncode:
+            result = (
+                False,
+                f"CosyVoice 验证失败（用时 {elapsed:.1f} 秒）\n"
+                + _subprocess_reason(proc, "CosyVoice smoke failed"))
+        elif expected not in (proc.stdout or ""):
+            result = (
+                False,
+                "CosyVoice 未确认使用预期设备，拒绝标记为已就绪\n"
+                + _subprocess_reason(proc, "缺少设备确认输出"))
         else:
             if deep:
                 _smoke_path(data_dir).write_text(
                     json.dumps(_fingerprint(data_dir), indent=2),
                     encoding="utf-8")
+                _smoke_failure_path(data_dir).unlink(missing_ok=True)
+                _emit(
+                    progress_cb,
+                    f"实际合成与音频验证通过（用时 {elapsed:.1f} 秒）", 1.0)
             result = (True, "")
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except OSError as exc:
         result = (False, str(exc))
+    if deep and not result[0]:
+        _smoke_failure_path(data_dir).parent.mkdir(parents=True, exist_ok=True)
+        _smoke_failure_path(data_dir).write_text(json.dumps({
+            "fingerprint": _fingerprint(data_dir),
+            "reason": result[1],
+            "failed_at": int(time.time()),
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
     _SMOKE_CACHE[key] = result
     return result
 
@@ -232,8 +402,9 @@ def setup_status(data_dir: Path) -> dict[str, Any]:
         target is not None and (not target.requires_gpu or gpu["ok"]))
     asset_available = target is not None
     installable = bool(asset_available and hardware_ok)
-    smoke_ok = bool(
-        runtime_ok and models_ok and hardware_ok and _deep_smoke_ready(data_dir))
+    installed = bool(runtime_ok and models_ok)
+    smoke_ok = bool(installed and hardware_ok and _deep_smoke_ready(data_dir))
+    smoke_failure = _last_smoke_failure(data_dir) if installed else ""
     if target is None or (not asset_available and not runtime_ok):
         reason = _unsupported_reason(target)
     elif not hardware_ok:
@@ -243,11 +414,28 @@ def setup_status(data_dir: Path) -> dict[str, Any]:
     elif not models_ok:
         reason = "CosyVoice2 模型文件不完整"
     elif not smoke_ok:
-        reason = "尚未完成 CosyVoice 模型加载验证"
+        reason = smoke_failure or "尚未完成 CosyVoice 实际合成验证"
     else:
         reason = ""
+    if smoke_ok:
+        state = "ready"
+    elif target is None:
+        state = "unsupported"
+    elif not hardware_ok:
+        state = "device_unavailable"
+    elif installed and smoke_failure:
+        state = "validation_failed"
+    elif installed:
+        state = "validation_pending"
+    elif runtime_ok or models_ok:
+        state = "partially_installed"
+    else:
+        state = "not_installed"
     return {
         "ready": bool(runtime_ok and models_ok and hardware_ok and smoke_ok),
+        "installed": installed,
+        "state": state,
+        "retry_validation": bool(installed and hardware_ok and not smoke_ok),
         "supported": target is not None,
         "asset_available": asset_available,
         "installable": installable,
@@ -561,39 +749,57 @@ def download_models(data_dir: Path, *, proxy: str | None = None,
 def run_setup(data_dir: Path, *, proxy: str | None = None,
               progress_cb: Progress | None = None,
               cancel_event: threading.Event | None = None,
-              pause_event: threading.Event | None = None) -> dict[str, Any]:
+              pause_event: threading.Event | None = None,
+              validation_only: bool = False) -> dict[str, Any]:
     current = setup_status(data_dir)
     if not current["installable"]:
         return {"ok": False, "message": current["reason"], **current}
-    try:
-        _install_runtime(
-            data_dir, proxy=proxy,
-            progress_cb=(lambda msg, frac: _emit(
-                progress_cb, msg, min(max(frac, 0) * .5, .5))),
-            cancel_event=cancel_event, pause_event=pause_event)
-    except Exception as exc:
-        return {"ok": False, "message": str(exc), **setup_status(data_dir)}
-    model_fraction = 0.0
+    if validation_only:
+        if not current["runtime_ok"] or not current["models_ok"]:
+            return {
+                **current, "ok": False,
+                "message": "Runtime 或模型尚未完整安装，无法仅重试合成验证",
+            }
+    else:
+        try:
+            _install_runtime(
+                data_dir, proxy=proxy,
+                progress_cb=(lambda msg, frac: _emit(
+                    progress_cb, msg, min(max(frac, 0) * .5, .5))),
+                cancel_event=cancel_event, pause_event=pause_event)
+        except Exception as exc:
+            return {"ok": False, "message": str(exc), **setup_status(data_dir)}
+        model_fraction = 0.0
 
-    def model_progress(message: str, fraction: float) -> None:
-        nonlocal model_fraction
-        if fraction < 0:
-            _emit(progress_cb, message, fraction)
-            return
-        model_fraction = max(model_fraction, min(fraction, 1.0))
-        _emit(progress_cb, message, .5 + model_fraction * .4)
+        def model_progress(message: str, fraction: float) -> None:
+            nonlocal model_fraction
+            if fraction < 0:
+                _emit(progress_cb, message, fraction)
+                return
+            model_fraction = max(model_fraction, min(fraction, 1.0))
+            _emit(progress_cb, message, .5 + model_fraction * .4)
 
-    if not download_models(
-            data_dir, proxy=proxy, progress_cb=model_progress,
-            cancel_event=cancel_event, pause_event=pause_event):
-        return {"ok": False, "message": "CosyVoice2 模型下载失败",
-                **setup_status(data_dir)}
+        if not download_models(
+                data_dir, proxy=proxy, progress_cb=model_progress,
+                cancel_event=cancel_event, pause_event=pause_event):
+            return {"ok": False, "message": "CosyVoice2 模型下载失败",
+                    **setup_status(data_dir)}
     accelerator = current["accelerator"] or "runtime"
-    _emit(progress_cb, f"加载模型并验证 {accelerator}（首次可能需要数分钟）…", .95)
+    _emit(
+        progress_cb,
+        f"运行 CosyVoice 最短实际合成验证（{accelerator}"
+        + ("，CPU 预计数分钟" if current.get("performance_warning") else "")
+        + "）…",
+        .95)
     _SMOKE_CACHE.clear()
-    ok, reason = runtime_smoke(data_dir, deep=True)
+
+    def smoke_progress(message: str, fraction: float) -> None:
+        _emit(progress_cb, message, .95 + min(max(fraction, 0), 1) * .049)
+
+    ok, reason = runtime_smoke(
+        data_dir, deep=True, progress_cb=smoke_progress)
     if not ok:
-        return {"ok": False, "message": f"runtime 验证失败：{reason}",
+        return {"ok": False, "message": f"runtime 验证失败：\n{reason}",
                 **setup_status(data_dir)}
     status = setup_status(data_dir)
     _emit(progress_cb, "CosyVoice runtime 与模型安装完成！", 1.0)

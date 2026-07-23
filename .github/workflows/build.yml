@@ -90,6 +90,7 @@ jobs:
             --hidden-import "lxml" `
             --hidden-import "trafilatura" `
             --hidden-import "curl_cffi" `
+            --add-data "packaging/cosyvoice_worker.py;packaging" `
             --collect-all "playwright" `
             --console `
             packaging/run_app.py
@@ -223,6 +224,7 @@ jobs:
             --hidden-import "lxml" \
             --hidden-import "trafilatura" \
             --hidden-import "curl_cffi" \
+            --add-data "packaging/cosyvoice_worker.py:packaging" \
             --collect-all "playwright" \
             --console \
             packaging/run_app.py

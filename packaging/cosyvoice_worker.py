@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import traceback
@@ -16,6 +17,22 @@ from pathlib import Path
 def _emit(payload: dict) -> None:
     print("MEDIA_AGENT_JSON:" + json.dumps(
         payload, ensure_ascii=False), flush=True)
+
+
+def _validate_audio(audio, sample_rate: int) -> tuple[bool, dict]:
+    if getattr(audio, "ndim", 1) > 1:
+        audio = audio.mean(axis=1)
+    duration = len(audio) / max(sample_rate, 1)
+    peak = float(abs(audio).max()) if len(audio) else 0.0
+    rms = float((audio ** 2).mean() ** 0.5) if len(audio) else 0.0
+    finite = math.isfinite(peak) and math.isfinite(rms)
+    info = {
+        "rate": sample_rate, "duration": duration, "finite": finite,
+        "peak": peak, "rms": rms,
+    }
+    return bool(
+        finite and 0.08 <= duration <= 12.0
+        and peak >= 1e-3 and rms >= 1e-4), info
 
 
 def _install_meta_patch() -> None:
@@ -54,15 +71,20 @@ class Engine:
         from cosyvoice.cli.cosyvoice import CosyVoice2
 
         requested = os.environ.get("MEDIA_AGENT_TORCH_DEVICE", "").lower()
+        if requested not in {"cpu", "cuda"}:
+            raise RuntimeError(
+                "MEDIA_AGENT_TORCH_DEVICE must explicitly select cpu or cuda")
         if requested == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("CUDA unavailable in CosyVoice runtime")
-        self.device = "cuda" if torch.cuda.is_available() and requested != "cpu" \
-            else "cpu"
+        self.device = requested
         _install_meta_patch()
         self.torch = torch
         self.model = CosyVoice2(
             str(model_dir), load_jit=False, load_trt=False,
             fp16=self.device == "cuda")
+        if self.device == "cuda" and torch.cuda.memory_allocated() <= 0:
+            raise RuntimeError(
+                "CosyVoice requested CUDA but loaded no model data on GPU")
         self.whisper = None
 
     def transcribe(self, wav: str) -> str:
@@ -116,7 +138,7 @@ def serve(model_dir: Path) -> int:
                 _emit({"ok": False, "error": f"unknown command: {command}"})
         except Exception as exc:
             _emit({"ok": False, "error": str(exc),
-                   "traceback": traceback.format_exc()[-2000:]})
+                   "traceback": traceback.format_exc()})
     return 0
 
 
@@ -172,37 +194,60 @@ def download_model(model_dir: Path, repo: str) -> int:
 def smoke(model_dir: Path, deep: bool = False) -> int:
     import tempfile
     import torch
+    _emit({"event": "stage", "stage": "checking_imports"})
     import onnxruntime
     import soundfile
     import whisper
     from cosyvoice.cli.cosyvoice import CosyVoice2
 
-    del onnxruntime, soundfile, whisper, CosyVoice2
+    del onnxruntime, whisper, CosyVoice2
     requested = os.environ.get("MEDIA_AGENT_TORCH_DEVICE", "").lower()
+    if requested not in {"cpu", "cuda"}:
+        raise RuntimeError(
+            "MEDIA_AGENT_TORCH_DEVICE must explicitly select cpu or cuda")
     if requested == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA unavailable in CosyVoice runtime")
-    device = "cuda" if torch.cuda.is_available() and requested != "cpu" \
-        else "cpu"
+    device = requested
     synthesized = False
     if deep:
+        _emit({"event": "stage", "stage": "loading_model",
+               "expected_device": requested})
         engine = Engine(model_dir)
-        sample = Path(__file__).resolve().parent / "cosyvoice-src" / "asset" / \
-            "zero_shot_prompt.wav"
+        _emit({"event": "stage", "stage": "model_loaded",
+               "device": engine.device, "fp16": engine.device == "cuda"})
+        source = Path(
+            os.environ.get("PYTHONPATH", "").split(os.pathsep)[0]
+            or Path.cwd() / "cosyvoice-src")
+        sample = source / "asset" / "zero_shot_prompt.wav"
         if not sample.is_file():
             raise RuntimeError("CosyVoice runtime 缺少真实合成验证音频")
         with tempfile.TemporaryDirectory() as directory:
+            short_sample = Path(directory) / "prompt.wav"
+            prompt_audio, prompt_rate = soundfile.read(
+                str(sample), dtype="float32", always_2d=False)
+            # Two seconds is enough to exercise prompt feature extraction while
+            # avoiding the much longer bundled reference in the smoke path.
+            prompt_audio = prompt_audio[:max(1, int(prompt_rate * 2.0))]
+            soundfile.write(str(short_sample), prompt_audio, prompt_rate)
             output = Path(directory) / "smoke.wav"
+            _emit({"event": "stage", "stage": "synthesizing"})
             engine.synthesize({
-                "text": "你好，这是声音合成运行验证。",
-                "prompt_wav": str(sample),
-                "prompt_text": "希望你以后能够做的比我还好呦。",
+                "text": "你好。",
+                "prompt_wav": str(short_sample),
+                "prompt_text": "希望你以后",
                 "output": str(output),
             })
-            synthesized = output.stat().st_size > 44
+            _emit({"event": "stage", "stage": "validating_audio"})
+            audio, sample_rate = soundfile.read(
+                str(output), dtype="float32", always_2d=False)
+            synthesized, audio_info = _validate_audio(audio, sample_rate)
+            if not synthesized:
+                raise RuntimeError(
+                    f"CosyVoice 验证音频内容无效：{audio_info}")
         if not synthesized:
             raise RuntimeError("CosyVoice 真实合成验证未生成有效音频")
     device_name = torch.cuda.get_device_name(0) if device == "cuda" else "CPU"
-    _emit({"ok": True, "device": device_name, "deep": deep,
+    _emit({"ok": True, "device": device, "device_name": device_name, "deep": deep,
            "synthesized": synthesized})
     return 0
 
@@ -236,5 +281,5 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except Exception as exc:
         _emit({"ok": False, "error": str(exc),
-               "traceback": traceback.format_exc()[-3000:]})
+               "traceback": traceback.format_exc()})
         raise SystemExit(1)

@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from app.cosyvoice_install import (
-    model_dir, runtime_dir, runtime_files_ready, runtime_python,
-    runtime_worker, models_ready, runtime_target,
+    control_worker, model_dir, runtime_dir, runtime_files_ready, runtime_python,
+    models_ready, runtime_target,
 )
 
 _PROCESS: subprocess.Popen[str] | None = None
@@ -65,11 +65,14 @@ def _worker(data_dir: Path) -> subprocess.Popen[str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(runtime_dir(data_dir) / "cosyvoice-src")
     target = runtime_target()
-    if target is not None and not target.requires_gpu:
-        env["MEDIA_AGENT_TORCH_DEVICE"] = "cpu"
+    if target is not None:
+        env["MEDIA_AGENT_TORCH_DEVICE"] = target.device
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
     process = subprocess.Popen(
         [
-            str(runtime_python(data_dir)), "-u", str(runtime_worker(data_dir)),
+            str(runtime_python(data_dir)), "-u", str(control_worker(data_dir)),
             "serve", "--model-dir", str(model_dir(data_dir)),
         ],
         cwd=str(runtime_dir(data_dir)), env=env,

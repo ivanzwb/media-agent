@@ -10,6 +10,7 @@ datas = [
     ("app/web/templates", "app/web/templates"),
     ("app/web/static", "app/web/static"),
     ("app/licensing/public_key.b64", "app/licensing"),
+    ("packaging/cosyvoice_worker.py", "packaging"),
 ]
 hiddenimports = []
 d, _b, h = collect_all("app")
