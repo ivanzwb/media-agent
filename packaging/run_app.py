@@ -39,6 +39,9 @@ def _check_module(name: str) -> int:
         importlib.import_module(name)
         return 0
     except ImportError:
+        import traceback
+
+        traceback.print_exc()
         return 1
 
 

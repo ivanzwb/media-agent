@@ -34,6 +34,7 @@ jobs:
         shell: pwsh
         run: |
           pyinstaller --onedir `
+            --paths "." `
             --collect-all "app" `
             --name "media-agent" `
             --add-data "app/web/static;app/web/static" `
@@ -82,7 +83,6 @@ jobs:
             --hidden-import "httpx" `
             --hidden-import "playwright" `
             --hidden-import "readability" `
-            --hidden-import "readability-lxml" `
             --hidden-import "feedparser" `
             --hidden-import "dateparser" `
             --hidden-import "ddgs" `
@@ -171,6 +171,7 @@ jobs:
       - name: Build
         run: |
           pyinstaller --onedir \
+            --paths "." \
             --collect-all "app" \
             --name "media-agent" \
             --add-data "app/web/static:app/web/static" \
@@ -219,7 +220,6 @@ jobs:
             --hidden-import "httpx" \
             --hidden-import "playwright" \
             --hidden-import "readability" \
-            --hidden-import "readability-lxml" \
             --hidden-import "feedparser" \
             --hidden-import "dateparser" \
             --hidden-import "ddgs" \
