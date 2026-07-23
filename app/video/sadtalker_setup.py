@@ -270,6 +270,10 @@ _SMOKE_CACHE: dict[tuple[str, int, int, bool, bool], tuple[bool, str]] = {}
 _SMOKE_SCHEMA = 2
 _GPU_SMOKE_TIMEOUT = 300
 _CPU_SMOKE_TIMEOUT = 1800
+# After all known stages appear in output, give the process this many
+# seconds to finish video encoding before killing it.  SadTalker can
+# hang indefinitely on GPU cleanup / ffmpeg after inference completes.
+_POST_STAGES_GRACE = 120
 _SMOKE_AUDIO_SECONDS = 1.0
 
 
@@ -439,6 +443,12 @@ def _inference_stage(output: str) -> tuple[str, float]:
     return "启动 SadTalker runtime", 0.2
 
 
+def _all_stages_seen(output: str) -> bool:
+    """Return True when all visible inference stages have appeared in output."""
+    _, fraction = _inference_stage(output)
+    return fraction >= 0.7
+
+
 def _run_smoke_process(
     command: list[str],
     *,
@@ -461,23 +471,28 @@ def _run_smoke_process(
     partial_stdout = ""
     partial_stderr = ""
     timed_out = False
+    stages_seen_at: float | None = None  # when all inference stages first seen
+
+    def _kill() -> None:
+        if os.name == "nt" and getattr(process, "pid", None):
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True, text=True, timeout=15, check=False)
+        elif getattr(process, "pid", None):
+            import signal
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                process.kill()
+        else:
+            process.kill()
+
     while True:
         elapsed = time.monotonic() - started
         remaining = timeout - elapsed
         if remaining <= 0:
             timed_out = True
-            if os.name == "nt" and getattr(process, "pid", None):
-                subprocess.run(
-                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                    capture_output=True, text=True, timeout=15, check=False)
-            elif getattr(process, "pid", None):
-                import signal
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except OSError:
-                    process.kill()
-            else:
-                process.kill()
+            _kill()
             stdout, stderr = process.communicate()
             break
         try:
@@ -486,14 +501,32 @@ def _run_smoke_process(
         except subprocess.TimeoutExpired as exc:
             partial_stdout = _output_text(exc.stdout or exc.output)
             partial_stderr = _output_text(exc.stderr)
+            combined = partial_stdout + "\n" + partial_stderr
             elapsed = time.monotonic() - started
-            stage, fraction = _inference_stage(
-                partial_stdout + "\n" + partial_stderr)
+            stage, fraction = _inference_stage(combined)
             _emit_smoke_progress(
                 progress_cb,
                 f"{stage}（已用时 {int(elapsed)} 秒）…",
                 fraction,
             )
+            # Grace-period exit: if all visible stages have completed,
+            # the process is likely stuck in video encoding / GPU cleanup.
+            # Kill it after _POST_STAGES_GRACE seconds — inference itself
+            # succeeded, so treat this as NOT timed out.
+            if _all_stages_seen(combined):
+                if stages_seen_at is None:
+                    stages_seen_at = time.monotonic()
+                elif (time.monotonic() - stages_seen_at) > _POST_STAGES_GRACE:
+                    _emit_smoke_progress(
+                        progress_cb,
+                        f"推理已完成，编码进程超时（{int(elapsed)} 秒），终止中…",
+                        0.9,
+                    )
+                    _kill()
+                    stdout, stderr = process.communicate()
+                    break
+            else:
+                stages_seen_at = None  # reset if new output reverses
     elapsed = time.monotonic() - started
     stdout = _output_text(stdout) or partial_stdout
     stderr = _output_text(stderr) or partial_stderr

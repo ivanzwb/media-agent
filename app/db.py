@@ -105,6 +105,14 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
             ("github_mirror", "https://ghproxy.net/"))
+    # Migrate: set default huggingface_mirror if not configured
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key='huggingface_mirror'"
+    ).fetchone()
+    if not row or not (row[0] or "").strip():
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            ("huggingface_mirror", "https://hf-mirror.com"))
     conn.commit()
 
 

@@ -63,7 +63,9 @@ def _worker(data_dir: Path) -> subprocess.Popen[str]:
         return _PROCESS
     _stop_worker()
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(runtime_dir(data_dir) / "cosyvoice-src")
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(runtime_dir(data_dir) / "cosyvoice-src"),
+         str(runtime_dir(data_dir) / "cosyvoice-src" / "third_party" / "Matcha-TTS")])
     target = runtime_target()
     if target is not None:
         env["MEDIA_AGENT_TORCH_DEVICE"] = target.device

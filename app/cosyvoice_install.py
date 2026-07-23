@@ -83,6 +83,16 @@ def runtime_source(data_dir: Path) -> Path:
     return runtime_dir(data_dir) / "cosyvoice-src"
 
 
+def _runtime_pythonpath(data_dir: Path) -> str:
+    """Return PYTHONPATH with both cosyvoice-src and Matcha-TTS on the path."""
+    src = runtime_source(data_dir)
+    matcha = src / "third_party" / "Matcha-TTS"
+    parts = [str(src)]
+    if matcha.is_dir():
+        parts.append(str(matcha))
+    return os.pathsep.join(parts)
+
+
 def model_dir(data_dir: Path) -> Path:
     return Path(data_dir) / "models" / "cosyvoice" / MODEL_NAME
 
@@ -335,7 +345,7 @@ def runtime_smoke(
     if deep:
         command.append("--deep")
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(runtime_source(data_dir))
+    env["PYTHONPATH"] = _runtime_pythonpath(data_dir)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
@@ -694,10 +704,13 @@ def download_models(data_dir: Path, *, proxy: str | None = None,
     if models_ready(data_dir):
         return True
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(runtime_source(data_dir))
+    env["PYTHONPATH"] = _runtime_pythonpath(data_dir)
     env["HF_HUB_DISABLE_XET"] = "1"
     env["HF_XET_DISABLE"] = "1"
     env["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
+    hf_mirror = os.environ.get("MEDIA_AGENT_HUGGINGFACE_MIRROR", "").strip()
+    if hf_mirror:
+        env["HF_ENDPOINT"] = hf_mirror
     if proxy:
         env["HTTP_PROXY"] = proxy
         env["HTTPS_PROXY"] = proxy

@@ -301,6 +301,71 @@ def test_smoke_process_timeout_is_bounded_and_keeps_output(
     assert "last CUDA diagnostic" in result.stderr
 
 
+def test_smoke_process_grace_kills_after_stages_seen(
+        monkeypatch, tmp_path: Path):
+    """When all inference stages complete but process hangs, the grace
+    period should kill it without marking it as timed out."""
+    # Ticks consumed by time.monotonic():
+    # 0: started (L461)
+    # 1: iter1 top L491 (elapsed)
+    # 2: iter1 except L505 (elapsed)
+    # 3: iter2 top L491
+    # 4: iter2 except L505 → fraction=0.7, all stages seen
+    # 5: iter2 L518 stages_seen_at = time.monotonic()
+    # 6: iter3 top L491 (remaining must be > 0)
+    # 7: iter3 except L505 (elapsed)
+    # 8: iter3 L519 grace check → must be > tick5 + 120
+    # 9: post-loop L530 (elapsed = time.monotonic() - started)
+    ticks = iter([0.0, 8.0, 16.0, 24.0, 32.0, 33.0, 154.0, 162.0, 260.0, 261.0])
+    calls = 0
+    stage1 = (
+        b"[media-agent] selected_device=cuda\n"
+        b"3DMM Extraction for source image\n")
+    stage_all = (
+        b"[media-agent] selected_device=cuda\n"
+        b"3DMM Extraction for source image\n"
+        b"mel: 100% 0:00:01\n"
+        b"audio2exp:: 100% 0:00:05\n")
+
+    class Process:
+        returncode = 0
+        killed = False
+
+        def communicate(self, timeout=None):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise st.subprocess.TimeoutExpired(
+                    [], timeout, output=stage1)
+            if calls <= 3:
+                raise st.subprocess.TimeoutExpired(
+                    [], timeout, output=stage_all)
+            # Post-kill: must have been killed by grace logic
+            assert self.killed
+            return (
+                "[media-agent] selected_device=cuda\n"
+                "3DMM Extraction for source image\n"
+                "mel: 100% 0:00:01\n"
+                "audio2exp:: 100% 0:00:05\n", "")
+
+        def kill(self):
+            self.killed = True
+
+    monkeypatch.setattr(st.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(st.subprocess, "Popen", lambda *_a, **_k: Process())
+
+    progress = []
+    result, elapsed, timed_out = st._run_smoke_process(
+        ["python"], cwd=tmp_path, env={}, timeout=300,
+        progress_cb=lambda message, fraction: progress.append(
+            (message, fraction)))
+
+    # Process was killed by grace logic, NOT by the 300s timeout
+    assert timed_out is False
+    assert result.returncode == 0
+    assert any("推理已完成" in m for m, _ in progress)
+
+
 def test_deep_smoke_cache_skips_process_for_matching_fingerprint(
         tmp_path: Path, monkeypatch):
     monkeypatch.setattr(st, "runtime_files_ready", lambda _: True)

@@ -76,6 +76,7 @@ class Config:
     cli_timeout: int = 500               # CLI agent timeout in seconds
     fetch_proxy: str | None = None       # HTTP proxy for RSS/scraper fetches (e.g. http://127.0.0.1:7890)
     github_mirror: str | None = None     # GitHub 镜像前缀
+    huggingface_mirror: str | None = None  # HuggingFace 镜像前缀 (HF_ENDPOINT)
 
     @property
     def archive_dir(self) -> Path:
@@ -164,6 +165,7 @@ class Config:
             cli_timeout=_int_env("MEDIA_AGENT_CLI_TIMEOUT") or 500,
             fetch_proxy=os.environ.get("MEDIA_AGENT_FETCH_PROXY"),
             github_mirror=os.environ.get("MEDIA_AGENT_GITHUB_MIRROR"),
+            huggingface_mirror=os.environ.get("MEDIA_AGENT_HUGGINGFACE_MIRROR"),
         )
         if store is not None:
             config._apply_db_overrides(store)
@@ -206,6 +208,7 @@ class Config:
             "rewrite_priority": "rewrite_priority",
             "fetch_proxy": "fetch_proxy",
             "github_mirror": "github_mirror",
+            "huggingface_mirror": "huggingface_mirror",
         }
         for attr, db_key in str_overrides.items():
             val = store.get_setting(db_key)

@@ -85,6 +85,7 @@ export default function Settings() {
 
         fetch_proxy: data.fetch_proxy,
         github_mirror: data.github_mirror,
+        huggingface_mirror: data.huggingface_mirror,
         sensitive_level: data.sensitive_level, sensitive_words: data.sensitive_words,
         promotion_footer: data.promotion_footer,
         wechat_appid: data.wechat_appid, wechat_author: data.wechat_author,
@@ -345,6 +346,12 @@ export default function Settings() {
                   <Form.Item name="github_mirror" label="GitHub 镜像前缀"
                     tooltip="下载 GitHub Release 资源时使用此镜像前缀加速；留空则直连 GitHub（MEDIA_AGENT_GITHUB_MIRROR）">
                     <Input placeholder="如 https://ghproxy.net/" />
+                  </Form.Item>
+                </Card>
+                <Card title="HuggingFace 镜像" size="small" style={{ marginBottom: 16 }}>
+                  <Form.Item name="huggingface_mirror" label="HuggingFace 镜像地址"
+                    tooltip="CosyVoice 模型下载使用此镜像加速；留空则直连 HuggingFace（MEDIA_AGENT_HUGGINGFACE_MIRROR / HF_ENDPOINT）">
+                    <Input placeholder="如 https://hf-mirror.com" />
                   </Form.Item>
                 </Card>
                 <Card title="导出 / 导入配置" size="small">

@@ -3665,6 +3665,7 @@ def create_app(config: Config | None = None,
             "rewrite_priority": _get("rewrite_priority") or config.rewrite_priority,
             "fetch_proxy": _get("fetch_proxy") or (config.fetch_proxy or ""),
             "github_mirror": _get("github_mirror") or (config.github_mirror or ""),
+            "huggingface_mirror": _get("huggingface_mirror") or (config.huggingface_mirror or ""),
             "download_images": (store.get_setting("download_images") or "1") not in ("0", "false", "no", ""),
             "download_videos": (store.get_setting("download_videos") or "1") not in ("0", "false", "no", ""),
             "relevance_filter": (store.get_setting("relevance_filter") or "1") not in ("0", "false", "no", ""),
@@ -3721,8 +3722,9 @@ def create_app(config: Config | None = None,
                        relevance_filter: str = Form("0"),
                         cli_tool: str = Form(""),
                         rewrite_priority: str = Form(""),
-                         fetch_proxy: str = Form(""),
-                         github_mirror: str = Form(""),
+                          fetch_proxy: str = Form(""),
+                          github_mirror: str = Form(""),
+                          huggingface_mirror: str = Form(""),
                         rewrite_style: str = Form(""),
                         schedule_cron: str = Form(""),
                        schedule_enabled: str = Form("0")):
@@ -3758,6 +3760,7 @@ def create_app(config: Config | None = None,
             "rewrite_priority": rewrite_priority.strip(),
             "fetch_proxy": fetch_proxy.strip(),
             "github_mirror": github_mirror.strip(),
+            "huggingface_mirror": huggingface_mirror.strip(),
         }
         for db_key, value in str_fields.items():
             if value:
@@ -3940,6 +3943,8 @@ def create_app(config: Config | None = None,
             try:
                 if setup_config.github_mirror:
                     os.environ["MEDIA_AGENT_GITHUB_MIRROR"] = setup_config.github_mirror
+                if setup_config.huggingface_mirror:
+                    os.environ["MEDIA_AGENT_HUGGINGFACE_MIRROR"] = setup_config.huggingface_mirror
                 result = run_setup(
                     config.data_dir, proxy=setup_config.fetch_proxy,
                     progress_cb=on_progress, cancel_event=cancel,
@@ -3975,7 +3980,7 @@ def create_app(config: Config | None = None,
                     break
 
         return StreamingResponse(
-            stream(), media_type="text/event-stream",
+            stream(), media_type="text/event-stream; charset=utf-8",
             headers={"X-Accel-Buffering": "no"})
 
     # ── SadTalker one-click setup ───────────────────────────────────────────
@@ -4038,6 +4043,8 @@ def create_app(config: Config | None = None,
             try:
                 if setup_config.github_mirror:
                     os.environ["MEDIA_AGENT_GITHUB_MIRROR"] = setup_config.github_mirror
+                if setup_config.huggingface_mirror:
+                    os.environ["MEDIA_AGENT_HUGGINGFACE_MIRROR"] = setup_config.huggingface_mirror
                 result = run_setup(
                     config.data_dir,
                     mirror=mirror,
@@ -4089,7 +4096,7 @@ def create_app(config: Config | None = None,
                 if item["event"] in {"done", "error"}:
                     break
 
-        return StreamingResponse(_stream(), media_type="text/event-stream",
+        return StreamingResponse(_stream(), media_type="text/event-stream; charset=utf-8",
                                  headers={"X-Accel-Buffering": "no"})
 
     # ── Pause / Resume / Cancel for running installs ───────────────────────
