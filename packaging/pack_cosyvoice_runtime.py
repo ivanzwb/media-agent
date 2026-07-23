@@ -13,6 +13,7 @@ ASSET_NAME = "cosyvoice-runtime-win64-cuda121.tar.gz"
 MANIFEST_NAME = "cosyvoice-runtime-win64-cuda121.manifest.json"
 PART_BYTES = 1800 * 1024 * 1024
 COPY_BYTES = 8 * 1024 * 1024
+MATCHA_DATA_LINK = "cosyvoice-src/third_party/Matcha-TTS/data"
 
 
 def _sha256(path: Path) -> str:
@@ -32,7 +33,10 @@ def pack_runtime(prefix: Path, output_dir: Path, *, worker: Path,
     archive = output_dir / asset_name
     conda_pack.pack(
         prefix=str(prefix), output=str(archive.resolve()), format="tar.gz",
-        compress_level=6, force=True, ignore_missing_files=True)
+        compress_level=6, force=True, ignore_missing_files=True,
+        # Upstream commits this training-data path as an absolute symlink to
+        # the maintainer's machine. Windows tar packing dereferences links.
+        filters=[("exclude", MATCHA_DATA_LINK)])
     parts: list[dict[str, object]] = []
     paths: list[Path] = []
     with archive.open("rb") as source:

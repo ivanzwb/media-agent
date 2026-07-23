@@ -10,6 +10,10 @@ hydra-core==1.3.2
 HyperPyYAML==1.2.3
 inflect==7.3.1
 librosa==0.10.2
+# This pair publishes CPython 3.10 wheels for macOS x86_64/arm64 and Windows.
+# Pin both to prevent newer releases from falling back to LLVM source builds.
+numba==0.59.1
+llvmlite==0.42.0
 lightning==2.2.4
 matplotlib==3.7.5
 networkx==3.1
