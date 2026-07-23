@@ -46,7 +46,7 @@ def detect_runtime_platform(
 
 def runtime_asset(kind: str, target: RuntimePlatform) -> str:
     if target.key == "windows-cuda":
-        suffix = "win64-cuda118" if kind == "sadtalker" else "win64-cuda121"
+        suffix = "win64-cuda118" if kind == "sadtalker" else "win64-cuda128"
     else:
         suffix = f"macos-{'arm64' if target.arch == 'arm64' else 'x64'}-cpu"
     return f"{kind}-runtime-{suffix}.tar.gz"

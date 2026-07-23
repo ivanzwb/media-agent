@@ -32,8 +32,8 @@ jobs:
         run: |
           set -euxo pipefail
           python -m pip install --upgrade "pip<25" "setuptools<81" wheel
-          python -m pip install torch==2.3.1 torchaudio==2.3.1 \
-            --index-url https://download.pytorch.org/whl/cu121
+          python -m pip install torch==2.6.1 torchaudio==2.6.1 \
+            --index-url https://download.pytorch.org/whl/cu128
           python -m pip install \
             -r packaging/cosyvoice-runtime-requirements.txt
 
@@ -64,11 +64,11 @@ jobs:
           set -euxo pipefail
           gh release create "$RUNTIME_TAG" --repo ivanzwb/release \
             --title "CosyVoice Windows CUDA Runtime" \
-            --notes "Pinned Windows x64 CosyVoice runtime for media-agent. NVIDIA CUDA 12.1; CosyVoice2 model downloads separately." \
+            --notes "Pinned Windows x64 CosyVoice runtime for media-agent. NVIDIA CUDA 12.8; CosyVoice2 model downloads separately." \
             2>/dev/null || true
           gh release upload "$RUNTIME_TAG" \
-            cosyvoice-runtime-win64-cuda121.manifest.json \
-            cosyvoice-runtime-win64-cuda121.tar.gz.part* \
+            cosyvoice-runtime-win64-cuda128.manifest.json \
+            cosyvoice-runtime-win64-cuda128.tar.gz.part* \
             --repo ivanzwb/release --clobber
 
   macos-cpu:

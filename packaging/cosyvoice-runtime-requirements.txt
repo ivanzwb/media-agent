@@ -1,6 +1,6 @@
 # Runtime-only subset pinned from FunAudioLLM/CosyVoice at
 # 074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc. Torch is installed separately:
-# CUDA 12.1 wheels on Windows and CPU wheels on macOS.
+# CUDA 12.8 wheels on Windows and CPU wheels on macOS.
 conformer==0.3.2
 diffusers==0.29.0
 gdown==5.1.0

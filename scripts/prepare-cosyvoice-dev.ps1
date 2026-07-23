@@ -91,13 +91,13 @@ $env:PYTHONPATH = $SourceDir
 & $EnvPython -c "import torch, onnxruntime, whisper; from cosyvoice.cli.cosyvoice import CosyVoice2; assert torch.version.cuda; print(torch.__version__, torch.version.cuda)"
 if ($LASTEXITCODE -ne 0) { throw "CosyVoice runtime import check failed" }
 
-Remove-Item (Join-Path $ArtifactDir "cosyvoice-runtime-win64-cuda121*") `
+Remove-Item (Join-Path $ArtifactDir "cosyvoice-runtime-win64-cuda128*") `
     -Force -ErrorAction SilentlyContinue
 & $EnvPython (Join-Path $Root "packaging\pack_cosyvoice_runtime.py") `
     --prefix $EnvDir --output-dir $ArtifactDir --keep-archive
 if ($LASTEXITCODE -ne 0) { throw "Runtime packing failed" }
 
-$Archive = Join-Path $ArtifactDir "cosyvoice-runtime-win64-cuda121.tar.gz"
+$Archive = Join-Path $ArtifactDir "cosyvoice-runtime-win64-cuda128.tar.gz"
 $ProjectPython = Join-Path $Root ".venv\Scripts\python.exe"
 if (-not (Test-Path $ProjectPython)) { $ProjectPython = "python" }
 $Args = @(

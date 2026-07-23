@@ -9,8 +9,8 @@ from pathlib import Path
 
 import conda_pack
 
-ASSET_NAME = "cosyvoice-runtime-win64-cuda121.tar.gz"
-MANIFEST_NAME = "cosyvoice-runtime-win64-cuda121.manifest.json"
+ASSET_NAME = "cosyvoice-runtime-win64-cuda128.tar.gz"
+MANIFEST_NAME = "cosyvoice-runtime-win64-cuda128.manifest.json"
 PART_BYTES = 1800 * 1024 * 1024
 COPY_BYTES = 8 * 1024 * 1024
 MATCHA_DATA_LINK = "cosyvoice-src/third_party/Matcha-TTS/data"

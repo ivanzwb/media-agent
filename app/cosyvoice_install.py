@@ -27,8 +27,8 @@ from app.runtime_platform import (
     runtime_asset, runtime_manifest)
 
 RUNTIME_TAG = "cosyvoice-runtime-v1"
-RUNTIME_ASSET = "cosyvoice-runtime-win64-cuda121.tar.gz"
-RUNTIME_MANIFEST = "cosyvoice-runtime-win64-cuda121.manifest.json"
+RUNTIME_ASSET = "cosyvoice-runtime-win64-cuda128.tar.gz"
+RUNTIME_MANIFEST = "cosyvoice-runtime-win64-cuda128.manifest.json"
 RUNTIME_RELEASE_BASE = (
     f"https://github.com/ivanzwb/release/releases/download/{RUNTIME_TAG}")
 MODEL_REPO = "FunAudioLLM/CosyVoice2-0.5B"
