@@ -47,7 +47,7 @@ export default function Archive() {
   const entries = rewriteState?.entries || [];
   useEffect(() => {
     if (entries.length && entries.some((e) => !e.done)) setPolling(true);
-    else if (polling && entries.every((e) => e.done)) {
+    else if (polling && entries.length > 0 && entries.every((e) => e.done)) {
       setPolling(false);
       qc.invalidateQueries({ queryKey: ["archive"] });
     }
@@ -55,15 +55,31 @@ export default function Archive() {
 
   const draftMap = data?.draft_map || {};
 
-  async function rewrite(id: number, isRewrite: boolean) {
+  async function rewrite(article: Article, isRewrite: boolean) {
     if (isRewrite && !confirm("重写会覆盖该文章已有的主稿草稿，确定吗？")) return;
+    const id = article.id;
+    const optimisticEntry: RewriteEntry = {
+      article_id: id, title: article.title, running: true, done: false,
+      error: null, draft_id: null, logs: ["正在提交转写任务…"],
+    };
+    qc.setQueryData<{ entries: RewriteEntry[] }>(["rewrite-all-status"], (current) => ({
+      entries: [
+        optimisticEntry,
+        ...(current?.entries || []).filter((entry) => entry.article_id !== id),
+      ],
+    }));
+    setPolling(true);
     try {
       const r = await postForm<{ started?: boolean; running?: boolean; message?: string }>(
         `/archive/${id}/rewrite`, style ? { style } : {});
       if (r.started === false) { message.info(r.message || "该文章已有转写任务"); }
-      setPolling(true);
-      qc.invalidateQueries({ queryKey: ["rewrite-all-status"] });
-    } catch { message.error("转写请求失败"); }
+      await qc.refetchQueries({ queryKey: ["rewrite-all-status"] });
+    } catch {
+      qc.setQueryData<{ entries: RewriteEntry[] }>(["rewrite-all-status"], (current) => ({
+        entries: (current?.entries || []).filter((entry) => entry.article_id !== id),
+      }));
+      message.error("转写请求失败");
+    }
   }
 
   function batchDelete() {
@@ -100,6 +116,8 @@ export default function Archive() {
     { title: "抓取时间", width: 110, render: (_: any, a: Article) => a.fetched_at?.slice(0, 10) },
     { title: "转写", width: 300, render: (_: any, a: Article) => {
       const draftId = draftMap[String(a.id)];
+      const rewriteEntry = entries.find((entry) => entry.article_id === a.id);
+      const isRewriting = Boolean(rewriteEntry && !rewriteEntry.done);
       return (
         <Space wrap>
           <Button size="small" onClick={() => setViewId(a.id)}>查看原文</Button>
@@ -107,8 +125,14 @@ export default function Archive() {
           {draftId ? <>
             <Tag color="green">✓ 已转写</Tag>
             <Link to={`/drafts/${draftId}/edit?from=archive`}><Button size="small">查看草稿</Button></Link>
-            <Button size="small" onClick={() => rewrite(a.id, true)}>重写</Button>
-          </> : <Button size="small" type="primary" onClick={() => rewrite(a.id, false)}>转写</Button>}
+            <Button size="small" loading={isRewriting} disabled={isRewriting}
+              onClick={() => rewrite(a, true)}>
+              {isRewriting ? "重写中…" : "重写"}
+            </Button>
+          </> : <Button size="small" type="primary" loading={isRewriting}
+            disabled={isRewriting} onClick={() => rewrite(a, false)}>
+            {isRewriting ? "转写中…" : "转写"}
+          </Button>}
         </Space>
       );
     } },
