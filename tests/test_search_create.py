@@ -15,8 +15,8 @@ from app.pipeline.search_create import (
     rank_by_topic, run_search_create, scrape_search_hits)
 from app.pipeline.synthesizer import synthesize
 from app.sources.web_search import (
-    SearchHit, merge_search_hits, normalize_search_url, search_ddgs_text,
-    search_query)
+    SearchHit, merge_search_hits, normalize_search_url, search_bing_text,
+    search_ddgs_text, search_query)
 from app.sources.dedup import dedup_near_content
 from app.store import Store
 
@@ -50,6 +50,7 @@ def test_search_url_and_cross_query_dedup():
 
 
 def test_ddgs_failure_falls_back(monkeypatch):
+    monkeypatch.setattr("app.sources.web_search.time.sleep", lambda *_: None)
     monkeypatch.setattr(
         "app.sources.web_search.search_ddgs_text",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("down")))
@@ -59,7 +60,10 @@ def test_ddgs_failure_falls_back(monkeypatch):
             "https://fallback.test/a?utm_campaign=x",
             "https://fallback.test/a",
         ])
-    hits = search_query("topic")
+    monkeypatch.setattr(
+        "app.sources.web_search.search_bing_text",
+        lambda *args, **kwargs: [])
+    hits = search_query("topic", engines=["duckduckgo"])
     assert len(hits) == 2  # fallback preserves discovery output; merge removes it
     assert merge_search_hits([hits]) == [
         SearchHit("https://fallback.test/a?utm_campaign=x",
@@ -70,15 +74,90 @@ def test_ddgs_uses_selected_search_engines(monkeypatch):
     captured = {}
 
     class FakeDDGS:
+        def __init__(self, **kwargs):
+            captured["client"] = kwargs
+
         def text(self, query, **kwargs):
             captured.update(kwargs)
             return [{"title": "A", "href": "https://example.test/a"}]
 
     monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=FakeDDGS))
     hits = search_ddgs_text(
-        "topic", engines=["duckduckgo", "google"], max_results=5)
+        "topic", engines=["duckduckgo", "google"], max_results=5,
+        proxy="http://127.0.0.1:7890", timeout=7)
     assert hits[0].url == "https://example.test/a"
     assert captured["backend"] == "duckduckgo,google"
+    assert captured["client"] == {
+        "proxy": "http://127.0.0.1:7890", "timeout": 7}
+
+
+def test_bing_result_short_circuits_blocked_engines(monkeypatch):
+    expected = SearchHit("Bing result", "https://example.test/bing")
+    monkeypatch.setattr(
+        "app.sources.web_search.search_bing_text",
+        lambda *args, **kwargs: [expected])
+    monkeypatch.setattr(
+        "app.sources.web_search.search_ddgs_text",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("DDGS should not run after Bing succeeds")))
+    assert search_query(
+        "topic", region="cn-zh", engines=["duckduckgo"]) == [expected]
+
+
+def test_search_retries_three_times_before_success(monkeypatch):
+    calls = {"count": 0}
+    delays = []
+    expected = SearchHit("Recovered", "https://example.test/recovered")
+
+    def flaky_bing(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] <= 3:
+            raise TimeoutError("temporary timeout")
+        return [expected]
+
+    monkeypatch.setattr(
+        "app.sources.web_search.search_bing_text", flaky_bing)
+    monkeypatch.setattr(
+        "app.sources.web_search.time.sleep", delays.append)
+    assert search_query(
+        "topic", region="cn-zh", engines=["duckduckgo"]) == [expected]
+    assert calls["count"] == 4  # initial attempt + three retries
+    assert delays == [0.4, 0.8, 1.6]
+
+
+def test_bing_html_search_parses_results(monkeypatch):
+    page = """
+    <ol>
+      <li class="b_algo"><h2><a href="https://news.test/a?utm_source=bing">
+      Result A</a></h2><div><p>Useful summary.</p></div></li>
+    </ol>
+    """
+
+    class Response:
+        text = page
+
+        def raise_for_status(self):
+            return None
+
+    class Client:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def get(self, url, params):
+            assert url == "https://cn.bing.com/search"
+            assert params["setlang"] == "zh-hans"
+            return Response()
+
+    monkeypatch.setattr("app.sources.web_search.httpx.Client", Client)
+    hits = search_bing_text("topic", region="cn-zh")
+    assert hits == [
+        SearchHit("Result A", "https://news.test/a", "Useful summary.")]
 
 
 def test_query_expansion_parses_json_and_has_fallback():

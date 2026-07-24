@@ -2560,7 +2560,7 @@ def create_app(config: Config | None = None,
             ref_count = int(payload.get("ref_count", 10))
             style_id = str(payload.get("style_id") or "").strip() or None
             raw_engines = payload.get(
-                "engines", ["duckduckgo", "google", "brave"])
+                "engines", ["bing", "duckduckgo", "google", "brave"])
             if not isinstance(raw_engines, list):
                 raise ValueError("搜索引擎必须为数组")
             engines = [str(engine) for engine in raw_engines]
@@ -2672,6 +2672,12 @@ def create_app(config: Config | None = None,
                         status="cancelled", error=None,
                         detail="搜索创作已取消")
                 cancel_op(op_conn, op_id)
+            except ValueError as exc:
+                logger.warning("search-create stopped: %s", exc)
+                with search_create_lock:
+                    search_create_state.update(
+                        status="error", error=str(exc), detail="任务失败")
+                fail_op(op_conn, op_id, str(exc))
             except Exception as exc:  # noqa: BLE001
                 logger.exception("search-create failed")
                 with search_create_lock:

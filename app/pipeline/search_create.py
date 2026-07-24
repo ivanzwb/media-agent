@@ -35,6 +35,7 @@ class SearchCreateOptions:
     engines: tuple[str, ...] | list[str] = DEFAULT_SEARCH_ENGINES
     max_results_per_query: int = 8
     workers: int = 6
+    search_timeout: int = 8
     scrape_timeout: float = 25.0
     proxy: str | None = None
 
@@ -131,6 +132,8 @@ def search_queries(queries: list[str], options: SearchCreateOptions, *,
                 timelimit=_search_timelimit(options.time_range_days),
                 region=_search_region(options.lang),
                 engines=options.engines,
+                proxy=options.proxy,
+                timeout=options.search_timeout,
             ): index
             for index, query in enumerate(queries)
         }

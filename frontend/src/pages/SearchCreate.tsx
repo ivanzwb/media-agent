@@ -44,7 +44,7 @@ interface SearchCreateForm {
   time_range_days: 7 | 30 | 90 | 0;
   ref_count: 5 | 10 | 20;
   style: string;
-  engines: Array<"duckduckgo" | "google" | "brave">;
+  engines: Array<"bing" | "duckduckgo" | "google" | "brave">;
 }
 
 const STAGES = [
@@ -101,7 +101,7 @@ export default function SearchCreate() {
     queryKey: ["search-create-status"],
     queryFn: () => getJson<SearchCreateStatus>("/api/search-create/status"),
     retry: false,
-    refetchInterval: (query) => isActive(query.state.data) ? 1200 : false,
+    refetchInterval: (query) => isActive(query.state.data) ? 2000 : false,
   });
   const status = statusQuery.data;
   const active = isActive(status);
@@ -202,7 +202,7 @@ export default function SearchCreate() {
         <Form<SearchCreateForm> form={form} layout="vertical" onFinish={start}
           initialValues={{
             lang: "zh", time_range_days: 30, ref_count: 10, style: "",
-            engines: ["duckduckgo", "google", "brave"],
+            engines: ["bing", "duckduckgo", "google", "brave"],
           }}
           disabled={active || (!isPro && !!license)}>
           <Form.Item name="topic" label="创作主题"
@@ -244,6 +244,7 @@ export default function SearchCreate() {
             <Form.Item name="engines" label="搜索引擎" style={{ minWidth: 300 }}
               rules={[{ required: true, message: "请至少选择一个搜索引擎" }]}>
               <Select mode="multiple" maxTagCount="responsive" options={[
+                { value: "bing", label: "Bing（国内优先）" },
                 { value: "duckduckgo", label: "DuckDuckGo" },
                 { value: "google", label: "Google" },
                 { value: "brave", label: "Brave" },
