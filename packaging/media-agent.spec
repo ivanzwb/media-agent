@@ -18,7 +18,7 @@ datas += d
 hiddenimports += h
 hiddenimports += collect_submodules("uvicorn")
 for pkg in ("trafilatura", "lxml", "cryptography", "readability",
-            "feedparser", "fastapi", "starlette", "frontmatter"):
+            "feedparser", "fastapi", "starlette", "frontmatter", "resvg_py"):
     d, _b, h = collect_all(pkg)
     datas += d
     hiddenimports += h

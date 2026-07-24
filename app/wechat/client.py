@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import time
 from pathlib import Path
 
@@ -82,7 +83,9 @@ class WeChatClient:
                    data: dict | None = None) -> dict:
         fp = Path(file_path)
         with fp.open("rb") as fh:
-            files = {"media": (fp.name, fh)}
+            content_type = (
+                mimetypes.guess_type(fp.name)[0] or "application/octet-stream")
+            files = {"media": (fp.name, fh, content_type)}
             resp = httpx.post(
                 f"{_API}/{path}",
                 params={"access_token": self.access_token(), **(params or {})},

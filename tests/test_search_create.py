@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import sys
+import types
 
 import pytest
 
@@ -13,7 +15,9 @@ from app.pipeline.search_create import (
     rank_by_topic, run_search_create, scrape_search_hits)
 from app.pipeline.synthesizer import synthesize
 from app.sources.web_search import (
-    SearchHit, merge_search_hits, normalize_search_url, search_query)
+    SearchHit, merge_search_hits, normalize_search_url, search_ddgs_text,
+    search_query)
+from app.sources.dedup import dedup_near_content
 from app.store import Store
 
 
@@ -62,6 +66,21 @@ def test_ddgs_failure_falls_back(monkeypatch):
                   "https://fallback.test/a", "")]
 
 
+def test_ddgs_uses_selected_search_engines(monkeypatch):
+    captured = {}
+
+    class FakeDDGS:
+        def text(self, query, **kwargs):
+            captured.update(kwargs)
+            return [{"title": "A", "href": "https://example.test/a"}]
+
+    monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=FakeDDGS))
+    hits = search_ddgs_text(
+        "topic", engines=["duckduckgo", "google"], max_results=5)
+    assert hits[0].url == "https://example.test/a"
+    assert captured["backend"] == "duckduckgo,google"
+
+
 def test_query_expansion_parses_json_and_has_fallback():
     provider = MockProvider(['{"queries":["AI research","AI news","AI news"]}'])
     assert expand_search_queries("AI", "en", provider) == [
@@ -99,6 +118,31 @@ def test_rank_by_topic_uses_scores():
     assert [row.id for row in rank_by_topic(rows, "AI", provider, 2)] == [2, 3]
 
 
+def test_rank_by_topic_falls_back_to_lexical_and_diversifies_sources():
+    rows = [article(1), article(2), article(3)]
+    rows[0].title = "Unrelated"
+    rows[0].source_name = "same.example"
+    rows[1].title = "Quantum computing breakthrough"
+    rows[1].source_name = "same.example"
+    rows[2].title = "Quantum computing industry analysis"
+    rows[2].source_name = "other.example"
+    ranked = rank_by_topic(
+        rows, "quantum computing", MockProvider(["invalid"]), 2)
+    assert [row.id for row in ranked] == [2, 3]
+
+
+def test_near_content_dedup_keeps_richer_copy():
+    first = article(1)
+    second = article(2)
+    first.title = second.title = "Same report"
+    first.content_md = "shared research result " * 80
+    second.content_md = first.content_md + "additional detail " * 10
+    unique = article(3)
+    unique.content_md = "completely different subject " * 30
+    result = dedup_near_content([first, second, unique])
+    assert [row.id for row in result] == [2, 3]
+
+
 def test_synthesize_retries_links_citations_and_fact_checks():
     provider = MockProvider([
         "invalid",
@@ -120,6 +164,24 @@ def test_synthesize_requires_multiple_sources():
         synthesize("AI", [article(1)], MockProvider())
 
 
+def test_synthesize_applies_requested_output_language():
+    class CaptureProvider(MockProvider):
+        def __init__(self):
+            super().__init__([
+                '{"title_candidates":["Title"],"body_md":"## Body\\nFact [1]."}',
+                '{"flagged_claims":[]}',
+            ])
+            self.calls = []
+
+        def chat(self, messages, **opts):
+            self.calls.append(messages)
+            return super().chat(messages, **opts)
+
+    provider = CaptureProvider()
+    synthesize("AI", [article(1), article(2)], provider, lang="en")
+    assert "输出语言：English" in provider.calls[0][-1].content
+
+
 def test_run_search_create_mock_end_to_end(tmp_path, monkeypatch):
     config = Config(data_dir=tmp_path)
     config.ensure_dirs()
@@ -138,6 +200,7 @@ def test_run_search_create_mock_end_to_end(tmp_path, monkeypatch):
     provider = MockProvider([
         '{"queries":["AI research"]}',
         "[0,1]",
+        '{"scores":[{"index":0,"score":90},{"index":1,"score":80}]}',
         '{"title_candidates":["综合标题"],'
         '"body_md":"## 正文\\n事实 [1] 和事实 [2]。",'
         '"citations":[{"claim":"事实","source_indexes":[1,2]}]}',

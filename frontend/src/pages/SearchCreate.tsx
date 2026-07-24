@@ -35,6 +35,7 @@ interface SearchCreateStatus {
   draft_id?: number | null;
   result?: { draft_id?: number | null } | null;
   topic?: string;
+  request?: Partial<SearchCreateForm> & { style_id?: string | null };
 }
 
 interface SearchCreateForm {
@@ -43,6 +44,7 @@ interface SearchCreateForm {
   time_range_days: 7 | 30 | 90 | 0;
   ref_count: 5 | 10 | 20;
   style: string;
+  engines: Array<"duckduckgo" | "google" | "brave">;
 }
 
 const STAGES = [
@@ -119,8 +121,24 @@ export default function SearchCreate() {
   }, [active, currentStage, draftId, state, status?.current, status?.progress, status?.total]);
 
   useEffect(() => {
-    if (status?.topic && !form.isFieldTouched("topic")) form.setFieldValue("topic", status.topic);
-  }, [form, status?.topic]);
+    const saved = status?.request;
+    if (!saved) {
+      if (status?.topic && !form.isFieldTouched("topic")) form.setFieldValue("topic", status.topic);
+      return;
+    }
+    if (saved.topic && !form.isFieldTouched("topic")) form.setFieldValue("topic", saved.topic);
+    if (saved.lang && !form.isFieldTouched("lang")) form.setFieldValue("lang", saved.lang);
+    if (saved.time_range_days !== undefined && !form.isFieldTouched("time_range_days")) {
+      form.setFieldValue("time_range_days", saved.time_range_days);
+    }
+    if (saved.ref_count && !form.isFieldTouched("ref_count")) form.setFieldValue("ref_count", saved.ref_count);
+    if (saved.style_id !== undefined && !form.isFieldTouched("style")) {
+      form.setFieldValue("style", saved.style_id || "");
+    }
+    if (saved.engines?.length && !form.isFieldTouched("engines")) {
+      form.setFieldValue("engines", saved.engines);
+    }
+  }, [form, status?.request, status?.topic]);
 
   async function start(values: SearchCreateForm) {
     if (!isPro) { openLicenseGuide(); return; }
@@ -132,6 +150,7 @@ export default function SearchCreate() {
         time_range_days: values.time_range_days,
         ref_count: values.ref_count,
         style_id: values.style || null,
+        engines: values.engines,
       });
       message.success("搜索创作已开始");
       await qc.invalidateQueries({ queryKey: ["search-create-status"] });
@@ -181,7 +200,10 @@ export default function SearchCreate() {
 
       <Card title="创作选项" style={{ borderColor: "#d9f7be" }}>
         <Form<SearchCreateForm> form={form} layout="vertical" onFinish={start}
-          initialValues={{ lang: "zh", time_range_days: 30, ref_count: 10, style: "" }}
+          initialValues={{
+            lang: "zh", time_range_days: 30, ref_count: 10, style: "",
+            engines: ["duckduckgo", "google", "brave"],
+          }}
           disabled={active || (!isPro && !!license)}>
           <Form.Item name="topic" label="创作主题"
             rules={[
@@ -217,6 +239,14 @@ export default function SearchCreate() {
                   value: item.id,
                   label: item.name + (item.is_builtin === false ? "（自定义）" : ""),
                 })),
+              ]} />
+            </Form.Item>
+            <Form.Item name="engines" label="搜索引擎" style={{ minWidth: 300 }}
+              rules={[{ required: true, message: "请至少选择一个搜索引擎" }]}>
+              <Select mode="multiple" maxTagCount="responsive" options={[
+                { value: "duckduckgo", label: "DuckDuckGo" },
+                { value: "google", label: "Google" },
+                { value: "brave", label: "Brave" },
               ]} />
             </Form.Item>
           </Space>

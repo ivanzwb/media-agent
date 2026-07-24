@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+import re
 from typing import Callable
 from urllib.parse import urlsplit
 
@@ -11,9 +12,11 @@ from app.pipeline.orchestrator import filter_by_age
 from app.pipeline.relevance import filter_relevant
 from app.pipeline.rewriter import _extract_json
 from app.pipeline.synthesizer import synthesize
-from app.sources.dedup import dedup
+from app.sources.dedup import dedup, dedup_near_content
 from app.sources.scraper import scrape_single
-from app.sources.web_search import SearchHit, merge_search_hits, search_query
+from app.sources.web_search import (
+    AVAILABLE_SEARCH_ENGINES, DEFAULT_SEARCH_ENGINES, SearchHit,
+    merge_search_hits, search_query)
 
 ProgressCallback = Callable[[dict], None]
 
@@ -29,6 +32,7 @@ class SearchCreateOptions:
     time_range_days: int | None = 30
     ref_count: int = 10
     style_id: str | None = None
+    engines: tuple[str, ...] | list[str] = DEFAULT_SEARCH_ENGINES
     max_results_per_query: int = 8
     workers: int = 6
     scrape_timeout: float = 25.0
@@ -46,6 +50,16 @@ class SearchCreateOptions:
             raise ValueError("时间范围必须为 7、30、90 天或不限")
         if self.ref_count not in (5, 10, 20):
             raise ValueError("参考文章数量必须为 5、10 或 20")
+        selected = list(dict.fromkeys(
+            str(engine).strip().lower() for engine in self.engines
+            if str(engine).strip()))
+        invalid = [engine for engine in selected
+                   if engine not in AVAILABLE_SEARCH_ENGINES]
+        if invalid:
+            raise ValueError(f"不支持的搜索引擎：{', '.join(invalid)}")
+        if not selected:
+            raise ValueError("请至少选择一个搜索引擎")
+        self.engines = tuple(selected)
         self.workers = max(1, min(int(self.workers or 1), 12))
 
 
@@ -116,6 +130,7 @@ def search_queries(queries: list[str], options: SearchCreateOptions, *,
                 max_results=options.max_results_per_query,
                 timelimit=_search_timelimit(options.time_range_days),
                 region=_search_region(options.lang),
+                engines=options.engines,
             ): index
             for index, query in enumerate(queries)
         }
@@ -172,10 +187,46 @@ def scrape_search_hits(hits: list[SearchHit], options: SearchCreateOptions, *,
     return articles
 
 
+def _topic_terms(topic: str) -> set[str]:
+    lowered = topic.lower()
+    words = set(re.findall(r"[a-z0-9]{2,}", lowered))
+    cjk = "".join(re.findall(r"[\u3400-\u9fff]", lowered))
+    words.update(cjk[index:index + 2] for index in range(max(0, len(cjk) - 1)))
+    if cjk:
+        words.update(cjk)
+    return words
+
+
+def _lexical_topic_score(article: Article, terms: set[str]) -> float:
+    title = (article.title or "").lower()
+    body = (article.content_md or article.raw_summary or "").lower()[:4000]
+    relevance = sum(title.count(term) * 8 + body.count(term)
+                    for term in terms)
+    richness = min(len(body) / 1000, 4)
+    return relevance + richness
+
+
+def _select_source_diverse(ranked: list[Article], limit: int) -> list[Article]:
+    selected: list[Article] = []
+    deferred: list[Article] = []
+    source_counts: dict[str, int] = {}
+    for article in ranked:
+        source = (article.source_name or urlsplit(article.url).netloc).lower()
+        if source_counts.get(source, 0) >= 2:
+            deferred.append(article)
+            continue
+        selected.append(article)
+        source_counts[source] = source_counts.get(source, 0) + 1
+        if len(selected) >= limit:
+            return selected
+    selected.extend(deferred[:max(0, limit - len(selected))])
+    return selected[:limit]
+
+
 def rank_by_topic(articles: list[Article], topic: str, provider: LLMProvider,
                   limit: int) -> list[Article]:
-    if len(articles) <= limit:
-        return articles
+    if not articles:
+        return []
     listing = "\n\n".join(
         f"[{index}] {article.title}\n{(article.content_md or '')[:500]}"
         for index, article in enumerate(articles)
@@ -196,16 +247,19 @@ def rank_by_topic(articles: list[Article], topic: str, provider: LLMProvider,
             index = int(item.get("index"))
             if 0 <= index < len(articles):
                 scores[index] = float(item.get("score", 0))
-        if scores:
-            ranked = sorted(
-                enumerate(articles),
-                key=lambda pair: scores.get(pair[0], 0),
-                reverse=True,
-            )
-            return [article for _, article in ranked[:limit]]
     except Exception:  # noqa: BLE001
-        pass
-    return articles[:limit]
+        scores = {}
+    terms = _topic_terms(topic)
+    ranked = sorted(
+        enumerate(articles),
+        key=lambda pair: (
+            scores.get(pair[0], 0),
+            _lexical_topic_score(pair[1], terms),
+        ),
+        reverse=True,
+    )
+    return _select_source_diverse(
+        [article for _, article in ranked], limit)
 
 
 def run_search_create(store, provider: LLMProvider,
@@ -214,9 +268,16 @@ def run_search_create(store, provider: LLMProvider,
                       should_stop: Callable[[], bool] | None = None) -> dict:
     options.validate()
     stats = {
+        "topic": options.topic,
+        "lang": options.lang,
+        "time_range_days": options.time_range_days or 0,
+        "ref_count": options.ref_count,
+        "style_id": options.style_id,
+        "engines": list(options.engines),
         "queries": 0,
         "urls": 0,
         "scraped": 0,
+        "near_duplicates": 0,
         "kept": 0,
         "draft_id": None,
     }
@@ -241,6 +302,14 @@ def run_search_create(store, provider: LLMProvider,
     articles = scrape_search_hits(
         hits, options, progress=progress, should_stop=should_stop, stats=stats)
     articles = dedup(articles)
+    before_near_dedup = len(articles)
+    articles = dedup_near_content(articles)
+    stats["near_duplicates"] = before_near_dedup - len(articles)
+    if stats["near_duplicates"]:
+        _emit(
+            progress, "filter",
+            f"内容近重：移除 {stats['near_duplicates']} 篇转载或近似页面",
+            stats=stats)
 
     _check_cancel(should_stop)
     _emit(progress, "filter", "正在过滤低质量和不相关内容…", stats=stats)
@@ -266,7 +335,9 @@ def run_search_create(store, provider: LLMProvider,
     _check_cancel(should_stop)
     _emit(progress, "synthesize", f"正在综合 {len(saved_articles)} 篇资料…",
           stats=stats)
-    result = synthesize(options.topic, saved_articles, provider, style=style)
+    result = synthesize(
+        options.topic, saved_articles, provider,
+        style=style, lang=options.lang)
 
     _check_cancel(should_stop)
     _emit(progress, "fact_check", "多源事实校验完成，正在保存草稿…",
@@ -304,6 +375,7 @@ def run_search_create(store, provider: LLMProvider,
             "time_range_days": options.time_range_days or 0,
             "ref_count": options.ref_count,
             "style_id": options.style_id,
+            "engines": list(options.engines),
         },
     )
     saved_draft = store.save_draft(draft)

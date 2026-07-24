@@ -91,8 +91,10 @@ jobs:
             --hidden-import "lxml" `
             --hidden-import "trafilatura" `
             --hidden-import "curl_cffi" `
+            --hidden-import "resvg_py" `
             --add-data "packaging/cosyvoice_worker.py;packaging" `
             --collect-all "playwright" `
+            --collect-all "resvg_py" `
             --console `
             packaging/run_app.py
           dist/media-agent/media-agent.exe --check-module app.web.server
@@ -228,8 +230,10 @@ jobs:
             --hidden-import "lxml" \
             --hidden-import "trafilatura" \
             --hidden-import "curl_cffi" \
+            --hidden-import "resvg_py" \
             --add-data "packaging/cosyvoice_worker.py:packaging" \
             --collect-all "playwright" \
+            --collect-all "resvg_py" \
             --console \
             packaging/run_app.py
           dist/media-agent/media-agent --check-module app.web.server

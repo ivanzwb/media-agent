@@ -99,7 +99,7 @@ def fact_check_multi(body_md: str, articles: list[Article],
 
 
 def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
-               *, style=None) -> SynthesisResult:
+               *, style=None, lang: str = "zh") -> SynthesisResult:
     if len(articles) < 2:
         raise ValueError("多源综合至少需要 2 篇有效参考资料")
 
@@ -112,9 +112,15 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
         "所有事实只能来自编号参考资料。关键数据、判断和引语后必须标注 [n]，"
         "n 是支持该事实的资料编号。不同来源观点冲突时要明确说明，禁止自行补全。"
     )
+    output_language = {
+        "zh": "简体中文",
+        "en": "English",
+        "bilingual": "中英双语（先中文后英文，两版使用相同的资料编号）",
+    }.get(lang, "简体中文")
     prompt = (
         f"围绕主题「{topic}」综合下面的多篇资料，写成一篇完整的新文章。"
         "不要逐篇摘要，要按论点组织并交叉印证。\n\n"
+        f"输出语言：{output_language}。\n\n"
         "只输出 JSON 对象，字段：\n"
         '- "title_candidates": 3 个不夸大的中文标题\n'
         '- "body_md": Markdown 正文，关键事实后使用 [1]、[2] 等引用标记\n'

@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App as AntApp, Button, Card, Col, Row, Select, Space, Tabs, Tag, Typography,
   Input, Collapse, Modal, Drawer, Tooltip, Divider, FloatButton, ColorPicker,
-  Popover, Segmented,
+  Popover, Segmented, Descriptions,
 } from "antd";
 import {
   RobotOutlined, HighlightOutlined, FontColorsOutlined,
@@ -85,6 +85,10 @@ interface DraftData {
     source_title?: string; source_name?: string;
     url?: string; source_url?: string; index?: number;
   }>;
+  search_meta?: {
+    lang?: string; time_range_days?: number; ref_count?: number;
+    style_id?: string | null; engines?: string[]; queries?: string[];
+  };
   sensitive_hits: string[]; article_id: number | null;
   article_published_at: string | null; article_title: string;
   has_video: boolean; has_narration: boolean; video_brand_name: string;
@@ -806,6 +810,35 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
                 <Text type="secondary">暂无来源信息</Text>
               )}
             </Card>
+            {isSearchDraft && data.search_meta && (
+              <Card size="small" title="搜索参数" style={{ marginTop: 12 }}>
+                <Descriptions size="small" column={1}>
+                  <Descriptions.Item label="语言">
+                    {({ zh: "中文", en: "English", bilingual: "中英双语" } as Record<string, string>)[data.search_meta.lang || ""] || data.search_meta.lang || "—"}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="时间范围">
+                    {data.search_meta.time_range_days
+                      ? `最近 ${data.search_meta.time_range_days} 天`
+                      : "不限"}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="参考篇数">
+                    {data.search_meta.ref_count || searchSources.length}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="搜索引擎">
+                    <Space size={[4, 4]} wrap>
+                      {(data.search_meta.engines || ["duckduckgo"]).map((engine: string) => (
+                        <Tag key={engine}>{engine}</Tag>
+                      ))}
+                    </Space>
+                  </Descriptions.Item>
+                  {data.search_meta.style_id && (
+                    <Descriptions.Item label="写作风格">
+                      {data.search_meta.style_id}
+                    </Descriptions.Item>
+                  )}
+                </Descriptions>
+              </Card>
+            )}
             {isSearchDraft && citations.length > 0 && (
               <Card size="small" title={`引用（${citations.length}）`} style={{ marginTop: 12 }}>
                 <Space direction="vertical" size={10} style={{ width: "100%" }}>

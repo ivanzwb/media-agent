@@ -8,6 +8,9 @@ from app.discovery import search_web
 
 logger = logging.getLogger(__name__)
 
+AVAILABLE_SEARCH_ENGINES = ("duckduckgo", "google", "brave")
+DEFAULT_SEARCH_ENGINES = ("duckduckgo", "google", "brave")
+
 _TRACKING = {
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
     "ref", "ref_src", "spm",
@@ -35,14 +38,18 @@ def normalize_search_url(url: str) -> str:
 
 def search_ddgs_text(query: str, *, max_results: int = 10,
                      timelimit: str | None = None,
-                     region: str | None = None) -> list[SearchHit]:
+                     region: str | None = None,
+                     engines: tuple[str, ...] | list[str] | None = None
+                     ) -> list[SearchHit]:
     from ddgs import DDGS
 
+    selected = tuple(engines or DEFAULT_SEARCH_ENGINES)
     rows = DDGS().text(
         query,
         region=region or "wt-wt",
         timelimit=timelimit,
         max_results=max_results,
+        backend=",".join(selected),
     )
     hits: list[SearchHit] = []
     seen: set[str] = set()
@@ -63,10 +70,13 @@ def search_ddgs_text(query: str, *, max_results: int = 10,
 
 def search_query(query: str, *, max_results: int = 10,
                  timelimit: str | None = None,
-                 region: str | None = None) -> list[SearchHit]:
+                 region: str | None = None,
+                 engines: tuple[str, ...] | list[str] | None = None
+                 ) -> list[SearchHit]:
     try:
         hits = search_ddgs_text(
-            query, max_results=max_results, timelimit=timelimit, region=region)
+            query, max_results=max_results, timelimit=timelimit, region=region,
+            engines=engines)
         if hits:
             return hits
     except Exception as exc:  # noqa: BLE001

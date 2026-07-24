@@ -345,6 +345,7 @@ def create_app(config: Config | None = None,
         "detail": None, "current": 0, "total": 0, "stats": {},
         "logs": [], "error": None, "draft_id": None, "op_id": None,
         "started_at": None, "finished_at": None, "cancel_requested": False,
+        "request": {},
     }
     _SOURCE_PROG_RE = re.compile(r"抓取来源 \[(\d+)/(\d+)\]")
 
@@ -2540,6 +2541,8 @@ def create_app(config: Config | None = None,
                 "op_id": search_create_state["op_id"],
                 "started_at": search_create_state["started_at"],
                 "finished_at": search_create_state["finished_at"],
+                "request": dict(search_create_state["request"]),
+                "topic": search_create_state["request"].get("topic"),
             }
 
     @app.post("/api/search-create")
@@ -2556,12 +2559,18 @@ def create_app(config: Config | None = None,
             time_range_days = int(payload.get("time_range_days", 30))
             ref_count = int(payload.get("ref_count", 10))
             style_id = str(payload.get("style_id") or "").strip() or None
+            raw_engines = payload.get(
+                "engines", ["duckduckgo", "google", "brave"])
+            if not isinstance(raw_engines, list):
+                raise ValueError("搜索引擎必须为数组")
+            engines = [str(engine) for engine in raw_engines]
             options = SearchCreateOptions(
                 topic=topic,
                 lang=lang,
                 time_range_days=time_range_days,
                 ref_count=ref_count,
                 style_id=style_id,
+                engines=engines,
                 workers=config.workers,
                 proxy=config.fetch_proxy,
             )
@@ -2570,6 +2579,14 @@ def create_app(config: Config | None = None,
             if style_id and rewrite_styles.get_style(
                     style_id, validation_store) is None:
                 raise ValueError("写作风格不存在")
+            request_snapshot = {
+                "topic": options.topic,
+                "lang": options.lang,
+                "time_range_days": options.time_range_days or 0,
+                "ref_count": options.ref_count,
+                "style_id": options.style_id,
+                "engines": list(options.engines),
+            }
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400)
@@ -2584,7 +2601,8 @@ def create_app(config: Config | None = None,
                 detail="任务已启动", current=0, total=0, stats={}, logs=[],
                 error=None, draft_id=None, op_id=None,
                 started_at=datetime.now(timezone.utc).isoformat(),
-                finished_at=None, cancel_requested=False)
+                finished_at=None, cancel_requested=False,
+                request=request_snapshot)
 
         def worker() -> None:
             op_conn = _db_conn()
@@ -2695,6 +2713,13 @@ def create_app(config: Config | None = None,
                     "op_id": latest.get("id"),
                     "started_at": latest.get("started_at"),
                     "finished_at": latest.get("finished_at"),
+                    "request": op_stats.get("request") or {
+                        key: op_stats.get(key) for key in (
+                            "topic", "lang", "time_range_days", "ref_count",
+                            "style_id", "engines")
+                        if op_stats.get(key) is not None
+                    },
+                    "topic": op_stats.get("topic"),
                 })
         return {"ok": True, **state}
 
@@ -3700,7 +3725,7 @@ def create_app(config: Config | None = None,
         title = (meta.get("title_cn") or (titles[0] if titles else "")).strip()
         body_md = _absolutize_body_md(meta.get("body_md", ""))
         html = render_styled_html(body_md, platform=platform, theme=theme)
-        html = inline_images_base64(html, run_config)
+        html = inline_images_base64(html, run_config, platform=platform)
         return JSONResponse({"ok": True, "title": title, "html": html,
                              "platform": platform, "theme": theme,
                              "themes": list_themes(platform)})

@@ -1,6 +1,8 @@
 import types
 from pathlib import Path
 
+from PIL import Image
+
 from app.wechat import html as H
 from app.wechat import client as C
 from app.wechat import publish as P
@@ -131,11 +133,15 @@ class _DummyClient:
     def __init__(self):
         self.drafts = []
         self.published = []
+        self.uploaded_images = []
+        self.material_paths = []
 
     def upload_article_image(self, path):
+        self.uploaded_images.append(Path(path))
         return "https://w/body-" + Path(path).name
 
     def add_material(self, mtype, path, title=None, introduction=None):
+        self.material_paths.append(Path(path))
         return {"media_id": "COVER", "url": "https://w/c.png"}
 
     def add_draft(self, articles):
@@ -157,8 +163,10 @@ def _cfg(tmp_path):
 
 def test_publish_article_draft_and_publish(tmp_path):
     cfg = _cfg(tmp_path)
-    (cfg.images_dir / "pic.png").write_bytes(b"\x89PNG" + b"0" * 50)
-    (cfg.images_dir / "cover.png").write_bytes(b"\x89PNG" + b"0" * 50)
+    Image.new("RGB", (200, 120), "blue").save(
+        cfg.images_dir / "pic.png", "PNG")
+    Image.new("RGB", (900, 500), "green").save(
+        cfg.images_dir / "cover.png", "PNG")
     meta = {"title_candidates": ["原"], "title_cn": "中文标题",
             "body_md": "# H\n\n正文 **强**\n\n![](/images/pic.png)\n",
             "cover_image": "cover.png", "source_url": "https://x.com/a"}
@@ -173,6 +181,36 @@ def test_publish_article_draft_and_publish(tmp_path):
 
     res2 = P.publish_article(cli, cfg, meta, mode="publish")
     assert res2["publish_id"] == "PUB1"
+
+
+def test_publish_converts_body_and_cover_webp(tmp_path):
+    cfg = _cfg(tmp_path)
+    Image.new("RGB", (240, 160), "blue").save(
+        cfg.images_dir / "body.webp", "WEBP")
+    Image.new("RGB", (900, 500), "green").save(
+        cfg.images_dir / "cover.webp", "WEBP")
+    meta = {
+        "title_candidates": ["格式转换"],
+        "body_md": "正文\n\n![](/images/body.webp)",
+        "cover_image": "cover.webp",
+    }
+    client = _DummyClient()
+    result = P.publish_article(client, cfg, meta)
+    assert result["ok"] is True
+    assert client.uploaded_images[0].suffix == ".jpg"
+    assert client.material_paths[0].suffix == ".jpg"
+    assert "https://w/body-media-agent-publish-" in (
+        client.drafts[0][0]["content"])
+
+
+def test_inline_images_converts_for_manual_platform_publish(tmp_path):
+    cfg = _cfg(tmp_path)
+    Image.new("RGB", (160, 90), "purple").save(
+        cfg.images_dir / "manual.webp", "WEBP")
+    html = '<p><img src="/images/manual.webp" alt="image"/></p>'
+    result = P.inline_images_base64(html, cfg, platform="toutiao")
+    assert "data:image/jpeg;base64," in result
+    assert "manual.webp" not in result
 
 
 def test_wait_for_publish_requires_terminal_success():

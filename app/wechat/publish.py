@@ -15,6 +15,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.platforms.image_compat import (
+    ImageConversionError, prepare_platform_image)
 from app.wechat.client import WeChatClient, WeChatError
 from app.wechat.html import markdown_to_html, image_srcs, replace_image_srcs
 from app.wechat.formatter import render_styled_html
@@ -135,24 +137,40 @@ def _resolve_to_file(url: str, config) -> tuple[Path | None, bool]:
     return None, False
 
 
-def inline_images_base64(html: str, config) -> str:
-    """Replace local <img> srcs with base64 data URLs so the HTML can be
-    copy-pasted into a platform editor (头条/公众号) with images intact.
-    Remote (http/data) srcs are left as-is; unresolvable locals are dropped.
+def inline_images_base64(html: str, config, *,
+                         platform: str = "wechat") -> str:
+    """Replace images with platform-compatible base64 data URLs.
+
+    Local and remote images are normalized to JPEG/PNG before embedding so
+    copy-paste publishing does not depend on WebP/GIF/BMP/SVG support.
     """
     import base64
     import mimetypes
     mapping: dict[str, str] = {}
     for src in image_srcs(html):
-        if src.startswith(("http://", "https://", "data:")):
+        if src.startswith("data:"):
             continue
         path, is_temp = _resolve_to_file(src, config)
         if not (path and path.exists()):
             mapping[src] = ""       # drop broken image
             continue
-        mime = mimetypes.guess_type(str(path))[0] or "image/png"
-        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
-        mapping[src] = f"data:{mime};base64,{b64}"
+        prepared = None
+        try:
+            prepared = prepare_platform_image(path, platform=platform)
+            mime = (mimetypes.guess_type(str(prepared.path))[0]
+                    or "image/jpeg")
+            b64 = base64.b64encode(prepared.path.read_bytes()).decode("ascii")
+            mapping[src] = f"data:{mime};base64,{b64}"
+        except ImageConversionError as exc:
+            logger.warning("%s image conversion failed for %s: %s",
+                           platform, src, exc)
+            mapping[src] = ""
+        finally:
+            if prepared and prepared.is_temp:
+                try:
+                    prepared.path.unlink()
+                except OSError:
+                    pass
         if is_temp:
             try:
                 path.unlink()
@@ -203,7 +221,19 @@ def publish_article(client: WeChatClient, config, meta: dict,
         path, is_temp = _resolve_to_file(src, config)
         if is_temp and path:
             temps.append(path)
-        mapping[src] = _upload_body_image(client, path) or "" if path else ""
+        if not path:
+            mapping[src] = ""
+            continue
+        try:
+            prepared = prepare_platform_image(
+                path, platform="wechat", max_bytes=_UPLOADIMG_MAX)
+            if prepared.is_temp:
+                temps.append(prepared.path)
+            mapping[src] = _upload_body_image(client, prepared.path) or ""
+        except ImageConversionError as exc:
+            logger.warning("wechat body image conversion failed for %s: %s",
+                           src, exc)
+            mapping[src] = ""
     html = replace_image_srcs(html, mapping)
 
     # 2. Cover (thumb) — required by draft/add. Prefer draft.cover_image,
@@ -214,9 +244,7 @@ def publish_article(client: WeChatClient, config, meta: dict,
     cover_path = None
     if cover_name:
         cand = (config.images_dir / cover_name).resolve()
-        # Tiny images (< 10 KB) are likely mock-generated placeholders
-        # that WeChat's content filter rejects; treat as missing.
-        if cand.exists() and cand.stat().st_size >= 10_000:
+        if cand.exists():
             cover_path = cand
     if cover_path is None:
         for src in image_srcs(markdown_to_html(body_md)):
@@ -306,6 +334,19 @@ def publish_article(client: WeChatClient, config, meta: dict,
             temps.append(cover_path)
         except Exception:
             pass  # if PIL isn't available, give up
+
+    if cover_path is not None:
+        try:
+            prepared_cover = prepare_platform_image(
+                cover_path, platform="wechat",
+                max_bytes=_MATERIAL_IMG_MAX)
+            cover_path = prepared_cover.path
+            if prepared_cover.is_temp:
+                temps.append(prepared_cover.path)
+        except ImageConversionError as exc:
+            cover_error = f"封面格式转换失败：{exc}"
+            logger.warning("wechat cover conversion failed: %s", exc)
+            cover_path = None
 
     if cover_path is not None and cover_path.stat().st_size <= _MATERIAL_IMG_MAX:
         try:

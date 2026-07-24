@@ -40,6 +40,7 @@ def valid_payload() -> dict:
         "time_range_days": 30,
         "ref_count": 5,
         "style_id": "deep-tech",
+        "engines": ["duckduckgo", "google"],
     }
 
 
@@ -56,10 +57,17 @@ def test_search_create_validates_request(tmp_path):
         "/api/search-create",
         json={**valid_payload(), "ref_count": 7})
     assert response.status_code == 400
+    bad_engine = client.post(
+        "/api/search-create",
+        json={**valid_payload(), "engines": ["bing"]})
+    assert bad_engine.status_code == 400
 
 
 def test_search_create_start_and_status(tmp_path, monkeypatch):
+    captured = {}
+
     def fake_run(store, provider, options, **kwargs):
+        captured["options"] = options
         kwargs["progress"]({
             "stage": "synthesize", "detail": "正在综合",
             "current": 1, "total": 1, "stats": {"kept": 3},
@@ -74,6 +82,10 @@ def test_search_create_start_and_status(tmp_path, monkeypatch):
     assert state["status"] == "done"
     assert state["draft_id"] == 42
     assert state["stats"]["kept"] == 3
+    assert state["request"]["lang"] == "bilingual"
+    assert state["request"]["engines"] == ["duckduckgo", "google"]
+    assert captured["options"].style_id == "deep-tech"
+    assert captured["options"].time_range_days == 30
 
 
 def test_search_create_single_flight_and_cancel(tmp_path, monkeypatch):
