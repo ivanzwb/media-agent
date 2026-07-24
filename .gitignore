@@ -41,3 +41,5 @@ SadTalker/
 sadtalker_src/
 .runtime-build/
 prepare-*-dev.log
+.tmp-pip-macos-x64/*
+.tmp-pip-win64/*
