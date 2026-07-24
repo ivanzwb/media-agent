@@ -82,6 +82,7 @@ export default function Sources() {
   const [addingTopics, setAddingTopics] = useState<Set<string>>(new Set());
   const [batchAdding, setBatchAdding] = useState(false);
   const [batchDiscovering, setBatchDiscovering] = useState(false);
+  const [batchAddingSources, setBatchAddingSources] = useState(false);
   const [selectingAllSub, setSelectingAllSub] = useState(false);
 
   // edit modals
@@ -503,6 +504,45 @@ export default function Sources() {
       setBatchDiscovering(false);
     }
   }
+  async function batchAddDiscoveredSources() {
+    if (batchAddingSources || !selTopics.length) return;
+    const byUrl = new Map<string, { name: string; url: string; type: string; topics: string[] }>();
+    for (const topic of selTopics) {
+      const st = discover[topic];
+      if (!st) continue;
+      for (const c of st.cands) {
+        if (!st.sel.has(c.url)) continue;
+        const existing = byUrl.get(c.url);
+        if (existing) {
+          if (!existing.topics.includes(topic)) existing.topics.push(topic);
+        } else {
+          byUrl.set(c.url, {
+            name: c.name,
+            url: c.url,
+            type: c.type || "rss",
+            topics: [topic],
+          });
+        }
+      }
+    }
+    const items = [...byUrl.values()];
+    if (!items.length) { message.warning("没有已选择的发现来源"); return; }
+    setBatchAddingSources(true);
+    try {
+      const r = await api.post("/sources/batch-discover-add", { items });
+      message.success(`新增 ${r.data.added}/${r.data.total} 个来源`);
+      setDiscover((d) => {
+        const next = { ...d };
+        for (const topic of selTopics) delete next[topic];
+        return next;
+      });
+      refetch();
+    } catch {
+      message.error("批量添加来源失败");
+    } finally {
+      setBatchAddingSources(false);
+    }
+  }
 
   // Resume reachability polling on mount if backend check is still running
   useEffect(() => {
@@ -524,6 +564,12 @@ export default function Sources() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const topicOptions = topics.map((t) => ({ value: t.name, label: t.name }));
+  const batchDiscoveredSourceCount = new Set(
+    selTopics.flatMap((topic) => {
+      const st = discover[topic];
+      return st ? [...st.sel] : [];
+    }),
+  ).size;
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
@@ -589,6 +635,9 @@ export default function Sources() {
           {selTopics.length > 0 && <>
             <Button danger size="small" disabled={batchDiscovering} onClick={batchDeleteTopics}>批量删除</Button>
             <Button type="primary" size="small" loading={batchDiscovering} disabled={batchDiscovering} onClick={batchDiscoverSelected}>批量发现来源</Button>
+            <Button type="primary" size="small" loading={batchAddingSources}
+              disabled={batchDiscovering || batchAddingSources || batchDiscoveredSourceCount === 0}
+              onClick={batchAddDiscoveredSources}>批量添加来源{batchDiscoveredSourceCount > 0 ? ` (${batchDiscoveredSourceCount})` : ""}</Button>
           </>}
         </Space>
         <Table rowKey="name" size="small" pagination={false} dataSource={topics}
