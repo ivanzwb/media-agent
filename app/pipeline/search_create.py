@@ -1,0 +1,318 @@
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from typing import Callable
+from urllib.parse import urlsplit
+
+from app.llm.base import LLMProvider, Message
+from app.models import Article, Draft
+from app.pipeline.orchestrator import filter_by_age
+from app.pipeline.relevance import filter_relevant
+from app.pipeline.rewriter import _extract_json
+from app.pipeline.synthesizer import synthesize
+from app.sources.dedup import dedup
+from app.sources.scraper import scrape_single
+from app.sources.web_search import SearchHit, merge_search_hits, search_query
+
+ProgressCallback = Callable[[dict], None]
+
+
+class SearchCreateCancelled(RuntimeError):
+    pass
+
+
+@dataclass
+class SearchCreateOptions:
+    topic: str
+    lang: str = "zh"
+    time_range_days: int | None = 30
+    ref_count: int = 10
+    style_id: str | None = None
+    max_results_per_query: int = 8
+    workers: int = 6
+    scrape_timeout: float = 25.0
+    proxy: str | None = None
+
+    def validate(self) -> None:
+        self.topic = self.topic.strip()
+        if not self.topic:
+            raise ValueError("请输入搜索创作主题")
+        if len(self.topic) > 200:
+            raise ValueError("搜索创作主题不能超过 200 个字符")
+        if self.lang not in ("zh", "en", "bilingual"):
+            raise ValueError("搜索语言必须为 zh、en 或 bilingual")
+        if self.time_range_days not in (None, 0, 7, 30, 90):
+            raise ValueError("时间范围必须为 7、30、90 天或不限")
+        if self.ref_count not in (5, 10, 20):
+            raise ValueError("参考文章数量必须为 5、10 或 20")
+        self.workers = max(1, min(int(self.workers or 1), 12))
+
+
+def _check_cancel(should_stop: Callable[[], bool] | None) -> None:
+    if should_stop and should_stop():
+        raise SearchCreateCancelled("搜索创作已取消")
+
+
+def _emit(progress: ProgressCallback | None, stage: str, detail: str, *,
+          current: int = 0, total: int = 0, stats: dict | None = None) -> None:
+    if progress:
+        progress({
+            "stage": stage,
+            "detail": detail,
+            "current": current,
+            "total": total,
+            "stats": dict(stats or {}),
+        })
+
+
+def expand_search_queries(topic: str, lang: str,
+                          provider: LLMProvider) -> list[str]:
+    language = {
+        "zh": "以中文检索词为主",
+        "en": "只使用英文检索词",
+        "bilingual": "同时给出中文和英文检索词",
+    }[lang]
+    prompt = (
+        f"为主题「{topic}」生成 3-5 个适合查找高质量新闻、研究和深度文章的"
+        f"搜索引擎检索词。{language}。覆盖最新进展、关键数据和争议观点。"
+        '只输出 JSON：{"queries":["..."]}。'
+    )
+    try:
+        raw = provider.chat([Message(role="user", content=prompt)])
+        parsed = _extract_json(raw) or {}
+        queries = parsed.get("queries") or []
+        cleaned = [str(query).strip() for query in queries if str(query).strip()]
+        if cleaned:
+            return list(dict.fromkeys(cleaned))[:5]
+    except Exception:  # noqa: BLE001
+        pass
+
+    if lang == "en":
+        return [topic, f"{topic} latest research", f"{topic} analysis"]
+    if lang == "bilingual":
+        return [topic, f"{topic} 最新进展", f"{topic} research review"]
+    return [topic, f"{topic} 最新进展", f"{topic} 深度分析"]
+
+
+def _search_timelimit(days: int | None) -> str | None:
+    return {7: "w", 30: "m", 90: "y"}.get(days or 0)
+
+
+def _search_region(lang: str) -> str:
+    return {"zh": "cn-zh", "en": "us-en"}.get(lang, "wt-wt")
+
+
+def search_queries(queries: list[str], options: SearchCreateOptions, *,
+                   progress: ProgressCallback | None = None,
+                   should_stop: Callable[[], bool] | None = None,
+                   stats: dict | None = None) -> list[SearchHit]:
+    groups: list[list[SearchHit]] = [[] for _ in queries]
+    with ThreadPoolExecutor(max_workers=min(4, len(queries) or 1)) as executor:
+        futures = {
+            executor.submit(
+                search_query,
+                query,
+                max_results=options.max_results_per_query,
+                timelimit=_search_timelimit(options.time_range_days),
+                region=_search_region(options.lang),
+            ): index
+            for index, query in enumerate(queries)
+        }
+        done = 0
+        for future in as_completed(futures):
+            _check_cancel(should_stop)
+            index = futures[future]
+            try:
+                groups[index] = future.result()
+            except Exception:  # noqa: BLE001
+                groups[index] = []
+            done += 1
+            _emit(progress, "search", f"已完成检索：{queries[index]}",
+                  current=done, total=len(queries), stats=stats)
+    return merge_search_hits(groups)
+
+
+def scrape_search_hits(hits: list[SearchHit], options: SearchCreateOptions, *,
+                       progress: ProgressCallback | None = None,
+                       should_stop: Callable[[], bool] | None = None,
+                       stats: dict | None = None) -> list[Article]:
+    articles: list[Article] = []
+
+    def scrape(hit: SearchHit) -> Article | None:
+        host = urlsplit(hit.url).netloc.removeprefix("www.") or hit.title
+        return scrape_single(
+            hit.url,
+            host,
+            timeout=options.scrape_timeout,
+            render_js=False,
+            proxy=options.proxy,
+        )
+
+    executor = ThreadPoolExecutor(max_workers=options.workers)
+    futures = {executor.submit(scrape, hit): hit for hit in hits}
+    done = 0
+    try:
+        for future in as_completed(futures):
+            _check_cancel(should_stop)
+            hit = futures[future]
+            try:
+                article = future.result()
+                if article is not None:
+                    articles.append(article)
+            except Exception:  # noqa: BLE001
+                pass
+            done += 1
+            if stats is not None:
+                stats["scraped"] = len(articles)
+            _emit(progress, "scrape", f"正在抓取：{urlsplit(hit.url).netloc}",
+                  current=done, total=len(hits), stats=stats)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    return articles
+
+
+def rank_by_topic(articles: list[Article], topic: str, provider: LLMProvider,
+                  limit: int) -> list[Article]:
+    if len(articles) <= limit:
+        return articles
+    listing = "\n\n".join(
+        f"[{index}] {article.title}\n{(article.content_md or '')[:500]}"
+        for index, article in enumerate(articles)
+    )
+    prompt = (
+        f"按与主题「{topic}」的相关性、信息密度和可信度为候选文章评分。"
+        '只输出 JSON：{"scores":[{"index":0,"score":95}]}，必须包含每个编号。'
+        f"\n\n{listing}"
+    )
+    try:
+        parsed = _extract_json(
+            provider.chat([Message(role="user", content=prompt)])) or {}
+        raw_scores = parsed.get("scores") or []
+        scores: dict[int, float] = {}
+        for item in raw_scores:
+            if not isinstance(item, dict):
+                continue
+            index = int(item.get("index"))
+            if 0 <= index < len(articles):
+                scores[index] = float(item.get("score", 0))
+        if scores:
+            ranked = sorted(
+                enumerate(articles),
+                key=lambda pair: scores.get(pair[0], 0),
+                reverse=True,
+            )
+            return [article for _, article in ranked[:limit]]
+    except Exception:  # noqa: BLE001
+        pass
+    return articles[:limit]
+
+
+def run_search_create(store, provider: LLMProvider,
+                      options: SearchCreateOptions, *, style=None,
+                      progress: ProgressCallback | None = None,
+                      should_stop: Callable[[], bool] | None = None) -> dict:
+    options.validate()
+    stats = {
+        "queries": 0,
+        "urls": 0,
+        "scraped": 0,
+        "kept": 0,
+        "draft_id": None,
+    }
+
+    _check_cancel(should_stop)
+    _emit(progress, "expand", "正在扩展检索词…", stats=stats)
+    queries = expand_search_queries(options.topic, options.lang, provider)
+    stats["queries"] = len(queries)
+
+    _check_cancel(should_stop)
+    _emit(progress, "search", "正在搜索相关文章…",
+          total=len(queries), stats=stats)
+    hits = search_queries(
+        queries, options, progress=progress, should_stop=should_stop, stats=stats)
+    stats["urls"] = len(hits)
+    if not hits:
+        raise ValueError("没有搜索到可用的文章链接")
+
+    _check_cancel(should_stop)
+    _emit(progress, "scrape", f"准备抓取 {len(hits)} 个页面…",
+          total=len(hits), stats=stats)
+    articles = scrape_search_hits(
+        hits, options, progress=progress, should_stop=should_stop, stats=stats)
+    articles = dedup(articles)
+
+    _check_cancel(should_stop)
+    _emit(progress, "filter", "正在过滤低质量和不相关内容…", stats=stats)
+    articles = filter_by_age(
+        articles, options.time_range_days,
+        progress=lambda message: _emit(
+            progress, "filter", message, stats=stats))
+    articles = filter_relevant(
+        articles, provider, enabled=True,
+        progress=lambda message: _emit(
+            progress, "filter", message, stats=stats))
+    articles = rank_by_topic(articles, options.topic, provider, options.ref_count)
+    if len(articles) < 2:
+        raise ValueError("有效参考资料不足 2 篇，请调整主题或时间范围后重试")
+    stats["kept"] = len(articles)
+
+    saved_articles: list[Article] = []
+    for article in articles:
+        _check_cancel(should_stop)
+        article.topic = options.topic
+        saved_articles.append(store.save_article(article))
+
+    _check_cancel(should_stop)
+    _emit(progress, "synthesize", f"正在综合 {len(saved_articles)} 篇资料…",
+          stats=stats)
+    result = synthesize(options.topic, saved_articles, provider, style=style)
+
+    _check_cancel(should_stop)
+    _emit(progress, "fact_check", "多源事实校验完成，正在保存草稿…",
+          stats=stats)
+    primary = saved_articles[0]
+    source_refs = [
+        {
+            "article_id": article.id,
+            "title": article.title,
+            "url": article.url,
+            "source_name": article.source_name,
+            "published_at": (
+                article.published_at.isoformat() if article.published_at else None
+            ),
+            "rank": index,
+            "role": "primary" if index == 1 else "source",
+        }
+        for index, article in enumerate(saved_articles, 1)
+    ]
+    draft = Draft(
+        article_id=primary.id or 0,
+        title_candidates=result.title_candidates,
+        body_md=result.body_md,
+        topic=options.topic,
+        source_url=primary.url,
+        source_name=primary.source_name,
+        flagged_claims=result.flagged_claims,
+        origin="search_create",
+        sources=source_refs,
+        citations=result.citations,
+        search_meta={
+            "topic": options.topic,
+            "queries": queries,
+            "lang": options.lang,
+            "time_range_days": options.time_range_days or 0,
+            "ref_count": options.ref_count,
+            "style_id": options.style_id,
+        },
+    )
+    saved_draft = store.save_draft(draft)
+    stats["draft_id"] = saved_draft.id
+    _emit(progress, "done", f"已保存草稿 #{saved_draft.id}", stats=stats)
+    return {
+        "draft_id": saved_draft.id,
+        "article_ids": [article.id for article in saved_articles],
+        "queries": queries,
+        "sources": source_refs,
+        "stats": stats,
+    }

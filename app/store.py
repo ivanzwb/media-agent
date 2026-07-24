@@ -164,9 +164,13 @@ class Store:
             return article
 
         topic = article.topic or "uncategorized"
+        topic_dir = str(topic).replace("/", "_").replace("\\", "_").strip(" .")
+        topic_dir = topic_dir or "uncategorized"
         date = (article.published_at or article.fetched_at).strftime("%Y%m%d")
         slug = _slug(article.title)[:60]
-        rel = Path("archive") / topic / f"{date}-{slug}.md"
+        if slug == "untitled":
+            slug = f"untitled-{article.fingerprint()[:8]}"
+        rel = Path("archive") / topic_dir / f"{date}-{slug}.md"
         abs_path = self.config.data_dir / rel
         abs_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -204,9 +208,11 @@ class Store:
 
     def save_draft(self, draft: Draft) -> Draft:
         topic = draft.topic or "uncategorized"
+        topic_dir = str(topic).replace("/", "_").replace("\\", "_").strip(" .")
+        topic_dir = topic_dir or "uncategorized"
         slug = _slug(draft.title_candidates[0] if draft.title_candidates
                      else "draft")[:60]
-        rel = Path("drafts") / topic / f"{draft.article_id}-{slug}.md"
+        rel = Path("drafts") / topic_dir / f"{draft.article_id}-{slug}.md"
         abs_path = self.config.data_dir / rel
         abs_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -219,7 +225,14 @@ class Store:
             "flagged_claims": draft.flagged_claims,
             "sensitive_hits": getattr(draft, "sensitive_hits", []) or [],
             "status": draft.status,
+            "origin": getattr(draft, "origin", "rewrite") or "rewrite",
         }
+        if getattr(draft, "sources", None):
+            meta["sources"] = draft.sources
+        if getattr(draft, "citations", None):
+            meta["citations"] = draft.citations
+        if getattr(draft, "search_meta", None):
+            meta["search_meta"] = draft.search_meta
         if draft.title_cn:
             meta["title_cn"] = draft.title_cn
         if draft.score is not None:
@@ -249,21 +262,37 @@ class Store:
         if getattr(draft, "id", None):
             self.conn.execute(
                 """UPDATE drafts SET article_id=?, draft_path=?,
-                   cover_image=?, title_cn=?, status=?, updated_at=?, score=?
+                   cover_image=?, title_cn=?, status=?, updated_at=?, score=?,
+                   origin=?
                    WHERE id=?""",
                 (draft.article_id, draft.draft_path,
                  draft.cover_image, draft.title_cn, draft.status,
-                 now_iso, draft.score, draft.id))
+                 now_iso, draft.score, getattr(draft, "origin", "rewrite"),
+                 draft.id))
         else:
             cur = self.conn.execute(
                 """INSERT INTO drafts
                 (article_id, draft_path, cover_image, title_cn,
-                 status, updated_at, score)
-                VALUES (?,?,?,?,?,?,?)""",
+                 status, updated_at, score, origin)
+                VALUES (?,?,?,?,?,?,?,?)""",
                 (draft.article_id, draft.draft_path,
                  draft.cover_image, draft.title_cn, draft.status,
-                 now_iso, draft.score))
+                 now_iso, draft.score, getattr(draft, "origin", "rewrite")))
             draft.id = cur.lastrowid
+        if draft.id is not None:
+            self.conn.execute(
+                "DELETE FROM draft_articles WHERE draft_id=?", (draft.id,))
+            for index, source in enumerate(
+                    getattr(draft, "sources", None) or [], 1):
+                article_id = source.get("article_id") if isinstance(source, dict) else None
+                if not article_id:
+                    continue
+                self.conn.execute(
+                    """INSERT OR IGNORE INTO draft_articles
+                       (draft_id, article_id, rank, role) VALUES (?, ?, ?, ?)""",
+                    (draft.id, int(article_id),
+                     int(source.get("rank") or index),
+                     str(source.get("role") or "source")))
         self.conn.commit()
         return draft
 

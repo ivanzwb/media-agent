@@ -70,6 +70,21 @@ interface DraftData {
   ok: boolean; id: number; status: string; title_cn: string;
   title_candidates: string[]; body_md: string; cover_image: string | null;
   source_url: string; source_name: string; flagged_claims: string[];
+  origin?: string;
+  sources?: Array<{
+    title?: string; name?: string; source_name?: string; url?: string; source_url?: string;
+    published_at?: string | null;
+  }>;
+  citations?: Array<string | {
+    claim?: string; text?: string; title?: string;
+    source_title?: string; source_name?: string;
+    url?: string; source_url?: string; index?: number;
+    source_indexes?: number[]; quote?: string;
+  }> | Record<string, string | {
+    claim?: string; text?: string; title?: string;
+    source_title?: string; source_name?: string;
+    url?: string; source_url?: string; index?: number;
+  }>;
   sensitive_hits: string[]; article_id: number | null;
   article_published_at: string | null; article_title: string;
   has_video: boolean; has_narration: boolean; video_brand_name: string;
@@ -147,7 +162,10 @@ export default function DraftEdit() {
   return (
     <div ref={draftRef} className="ma-draft-edit">
       <Space style={{ justifyContent: "space-between", width: "100%", flexShrink: 0 }}>
-        <Title level={2} style={{ margin: 0 }}>编辑草稿 #{draftId}</Title>
+        <Space>
+          <Title level={2} style={{ margin: 0 }}>编辑草稿 #{draftId}</Title>
+          {data.origin === "search_create" && <Tag color="green">搜索创作</Tag>}
+        </Space>
         <Button onClick={() => navigate(-1)}>返回列表</Button>
       </Space>
 
@@ -186,6 +204,14 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   const [wechatPublishing, setWechatPublishing] = useState<"draft" | "publish" | null>(null);
   const [coverCollapsed, setCoverCollapsed] = useLocalState<boolean>("draftedit-coverCollapsed", false);
   const TOUTIAO_URL = "https://mp.toutiao.com/profile_v4/graphic/publish";
+  const isSearchDraft = data.origin === "search_create";
+  const searchSources = Array.isArray(data.sources) ? data.sources : [];
+  const citations = Array.isArray(data.citations)
+    ? data.citations
+    : data.citations && typeof data.citations === "object"
+      ? Object.entries(data.citations).map(([claim, value]: [string, any]) =>
+        typeof value === "string" ? { claim, source_url: value } : { claim, ...value })
+      : [];
 
   // Track active poll interval so we can clear on unmount
   const rewritePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -752,9 +778,82 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
                 <Button size="small" onClick={() => cover("generate")}>AI 生成</Button>
               </Space>
             </Card>
-            <Card size="small" title="来源" style={{ marginTop: 12 }}>
-              <a href={data.source_url} target="_blank" rel="noopener">{data.source_name}</a>
+            <Card size="small" title={isSearchDraft ? `参考来源（${searchSources.length}）` : "来源"}
+              style={{ marginTop: 12 }}>
+              {isSearchDraft && searchSources.length > 0 ? (
+                <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                  {searchSources.map((source: any, index: number) => {
+                    const url = source.url || source.source_url || "";
+                    const label = source.title || source.source_name || source.name || url || `来源 ${index + 1}`;
+                    return (
+                      <div key={`${url}-${index}`} style={{ lineHeight: 1.35 }}>
+                        <Text type="secondary" style={{ marginRight: 5 }}>[{index + 1}]</Text>
+                        {url
+                          ? <a href={url} target="_blank" rel="noopener noreferrer">{label}</a>
+                          : <Text>{label}</Text>}
+                        {source.published_at && (
+                          <div><Text type="secondary" style={{ fontSize: 11 }}>{source.published_at}</Text></div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </Space>
+              ) : data.source_url ? (
+                <a href={data.source_url} target="_blank" rel="noopener noreferrer">
+                  {data.source_name || data.source_url}
+                </a>
+              ) : (
+                <Text type="secondary">暂无来源信息</Text>
+              )}
             </Card>
+            {isSearchDraft && citations.length > 0 && (
+              <Card size="small" title={`引用（${citations.length}）`} style={{ marginTop: 12 }}>
+                <Space direction="vertical" size={10} style={{ width: "100%" }}>
+                  {citations.map((citation: any, index: number) => {
+                    if (typeof citation === "string") return <Text key={index}>{citation}</Text>;
+                    const url = citation.url || citation.source_url || "";
+                    const claim = citation.claim || citation.text || citation.title || `引用 ${index + 1}`;
+                    const sourceLabel = citation.source_title || citation.source_name || url;
+                    const sourceIndexes = Array.isArray(citation.source_indexes)
+                      ? citation.source_indexes.filter((value: unknown) => Number.isInteger(value))
+                      : [];
+                    return (
+                      <div key={`${url}-${index}`} style={{ fontSize: 12, lineHeight: 1.5 }}>
+                        <Text>{claim}</Text>
+                        {citation.quote && (
+                          <div><Text type="secondary">“{citation.quote}”</Text></div>
+                        )}
+                        {sourceIndexes.length > 0 && (
+                          <div>
+                            <Text type="secondary">来源：</Text>
+                            {sourceIndexes.map((sourceIndex: number, sourcePosition: number) => {
+                              const source = searchSources[sourceIndex - 1];
+                              const sourceUrl = source?.url || source?.source_url || "";
+                              return (
+                                <span key={`${sourceIndex}-${sourcePosition}`}>
+                                  {sourcePosition > 0 && "、"}
+                                  {sourceUrl
+                                    ? <a href={sourceUrl} target="_blank" rel="noopener noreferrer">[{sourceIndex}]</a>
+                                    : <Text type="secondary">[{sourceIndex}]</Text>}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {sourceLabel && (
+                          <div>
+                            <Text type="secondary">来源：</Text>
+                            {url
+                              ? <a href={url} target="_blank" rel="noopener noreferrer">{sourceLabel}</a>
+                              : <Text type="secondary">{sourceLabel}</Text>}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </Space>
+              </Card>
+            )}
             {data.article_id && (
               <Card size="small" title="操作" style={{ marginTop: 12 }}>
                 <Space direction="vertical" style={{ width: "100%" }}>

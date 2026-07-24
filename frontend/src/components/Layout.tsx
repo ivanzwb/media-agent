@@ -1,5 +1,5 @@
 import { Layout as AntLayout, Menu, Button, Tag, Modal } from "antd";
-import { PlayCircleOutlined } from "@ant-design/icons";
+import { PlayCircleOutlined, SearchOutlined } from "@ant-design/icons";
 import { Link, useLocation, useNavigate, Outlet } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -59,6 +59,11 @@ export default function Layout() {
     qc.invalidateQueries({ queryKey: ["run-status"] });
   }
 
+  function openSearchCreate() {
+    if (lic?.active || lic?.dev) navigate("/search-create");
+    else setGuideOpen(true);
+  }
+
   return (
     <AntLayout style={{ minHeight: "100vh" }}>
       <Header style={{ display: "flex", alignItems: "center", gap: 16,
@@ -73,6 +78,9 @@ export default function Layout() {
           onClick={(e) => navigate(e.key)}
           items={NAV.map((n) => ({ key: n.key, label: n.label }))} />
         <Link to="/settings" title="授权状态">{licTag}</Link>
+        <Button icon={<SearchOutlined />} onClick={openSearchCreate}>
+          搜索创作 <Tag color="gold" bordered={false} style={{ marginInlineEnd: 0 }}>Pro</Tag>
+        </Button>
         <Button type="primary" icon={<PlayCircleOutlined />} onClick={startRun}>
           立即运行
         </Button>
@@ -96,6 +104,7 @@ export default function Layout() {
         <p>Pro 版额外解锁：</p>
         <ul style={{ lineHeight: 2, color: "#555" }}>
           <li>无限 LLM 改写（含套用模板重写文章）</li>
+          <li>搜索多方资料并生成带引用的主题文章</li>
           <li>AI 智能推荐与一键 / 批量发现来源</li>
           <li>讲解视频生成（含数字人主播）</li>
           <li>平台同步 / 一键发布（公众号 / 头条 / 视频号）</li>

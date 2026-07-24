@@ -34,7 +34,17 @@ CREATE TABLE IF NOT EXISTS drafts (
     title_cn TEXT,
     status TEXT NOT NULL DEFAULT 'drafted',
     updated_at TEXT NOT NULL,
-    FOREIGN KEY(article_id) REFERENCES articles(id)
+    origin TEXT NOT NULL DEFAULT 'rewrite',
+    FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS draft_articles (
+    draft_id INTEGER NOT NULL,
+    article_id INTEGER NOT NULL,
+    rank INTEGER NOT NULL DEFAULT 0,
+    role TEXT NOT NULL DEFAULT 'source',
+    PRIMARY KEY (draft_id, article_id),
+    FOREIGN KEY(draft_id) REFERENCES drafts(id) ON DELETE CASCADE,
+    FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,6 +95,21 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE drafts ADD COLUMN score REAL")
     except sqlite3.OperationalError:
         pass  # column already exists
+    # Migrate: identify drafts generated from search-driven multi-source runs.
+    try:
+        conn.execute(
+            "ALTER TABLE drafts ADD COLUMN origin TEXT NOT NULL DEFAULT 'rewrite'")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    conn.execute("""CREATE TABLE IF NOT EXISTS draft_articles (
+        draft_id INTEGER NOT NULL,
+        article_id INTEGER NOT NULL,
+        rank INTEGER NOT NULL DEFAULT 0,
+        role TEXT NOT NULL DEFAULT 'source',
+        PRIMARY KEY (draft_id, article_id),
+        FOREIGN KEY(draft_id) REFERENCES drafts(id) ON DELETE CASCADE,
+        FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
+    )""")
     # Migrate: add operations table (for state that survives page refreshes)
     conn.execute("""CREATE TABLE IF NOT EXISTS operations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -170,6 +195,42 @@ def fail_op(conn: sqlite3.Connection, op_id: int, error: str) -> None:
         (now, error, op_id),
     )
     conn.commit()
+
+
+def update_op(conn: sqlite3.Connection, op_id: int, *,
+              stats: dict | None = None, target_id: int | None = None) -> None:
+    assignments: list[str] = []
+    params: list[object] = []
+    if stats is not None:
+        assignments.append("stats_json=?")
+        params.append(_json.dumps(stats, ensure_ascii=False))
+    if target_id is not None:
+        assignments.append("target_id=?")
+        params.append(target_id)
+    if not assignments:
+        return
+    params.append(op_id)
+    conn.execute(
+        f"UPDATE operations SET {', '.join(assignments)} WHERE id=?", params)
+    conn.commit()
+
+
+def cancel_op(conn: sqlite3.Connection, op_id: int) -> None:
+    now = _dt.now(_tz.utc).isoformat()
+    conn.execute(
+        "UPDATE operations SET status='cancelled', finished_at=?, "
+        "error='cancelled' WHERE id=?",
+        (now, op_id),
+    )
+    conn.commit()
+
+
+def get_latest_op(conn: sqlite3.Connection, op_type: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM operations WHERE op_type=? ORDER BY id DESC LIMIT 1",
+        (op_type,),
+    ).fetchone()
+    return _op_row_to_dict(row) if row else None
 
 
 def get_running_ops(conn: sqlite3.Connection) -> list[dict]:

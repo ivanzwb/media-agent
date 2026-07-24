@@ -74,3 +74,7 @@ class Draft:
     id: int | None = None
     sensitive_hits: list[str] = field(default_factory=list)
     score: float | None = None
+    origin: str = "rewrite"
+    sources: list[dict] = field(default_factory=list)
+    citations: list[dict] = field(default_factory=list)
+    search_meta: dict = field(default_factory=dict)

@@ -9,6 +9,7 @@ const { Title } = Typography;
 interface Draft {
   id: number; status: string; title_cn: string | null;
   display_title: string | null; score: number | null;
+  origin?: string;
   draft_filename: string; draft_path: string;
   article_published_at: string | null; updated_at: string;
 }
@@ -98,7 +99,12 @@ export default function Drafts() {
           { title: "#", dataIndex: "id", width: 60 },
           { title: "状态", dataIndex: "status", width: 100,
             render: (v) => <Tag color={STATUS_COLOR[v] || "default"}>{v}</Tag> },
-          { title: "中文标题", render: (_, d) => d.title_cn || d.display_title || "—" },
+          { title: "中文标题", render: (_, d) => (
+            <Space size={6}>
+              <span>{d.title_cn || d.display_title || "—"}</span>
+              {d.origin === "search_create" && <Tag color="green">搜索创作</Tag>}
+            </Space>
+          ) },
           { title: "评分", dataIndex: "score", width: 80, render: (v) =>
             v == null ? <span style={{ color: "#999" }}>—</span>
             : <Tag color={v >= 80 ? "green" : v >= 50 ? "gold" : "red"}>{Math.round(v)}</Tag> },

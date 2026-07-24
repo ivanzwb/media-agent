@@ -46,6 +46,8 @@ from app.pipeline.score import compute_draft_score
 from app.pipeline.localize import (
     localize_one, localize_article, content_images, content_videos)
 from app.pipeline.rewriter import rewrite
+from app.pipeline.search_create import (
+    SearchCreateCancelled, SearchCreateOptions, run_search_create)
 from app.pipeline import styles as rewrite_styles
 from app.wechat import components as editor_components
 from app.pipeline.sanitizer import load_words, sanitize_draft
@@ -337,13 +339,22 @@ def create_app(config: Config | None = None,
         "paused": False, "stop_requested": False, "stopped": False,
         "source_current": 0, "source_total": 0,
     }
+    search_create_lock = threading.Lock()
+    search_create_state = {
+        "running": False, "status": "idle", "stage": None,
+        "detail": None, "current": 0, "total": 0, "stats": {},
+        "logs": [], "error": None, "draft_id": None, "op_id": None,
+        "started_at": None, "finished_at": None, "cancel_requested": False,
+    }
     _SOURCE_PROG_RE = re.compile(r"抓取来源 \[(\d+)/(\d+)\]")
 
     # ---- reachability check progress ----
     check_progress = {"running": False, "current": 0, "total": 0, "disabled": 0, "results": []}
 
     # ---- operations DB-backed registry (survives page refresh) ----
-    from app.db import start_op, finish_op, fail_op, _op_log, get_running_ops
+    from app.db import (
+        start_op, finish_op, fail_op, update_op, cancel_op, get_latest_op,
+        _op_log, get_running_ops)
 
     class _Ops:
         """Thin wrapper that mirrors log lines to a DB operations record so
@@ -969,6 +980,7 @@ def create_app(config: Config | None = None,
                 "title_cn": item.get("title_cn"),
                 "display_title": item.get("display_title"),
                 "score": item.get("score"),
+                "origin": item.get("origin") or "rewrite",
                 "draft_filename": item.get("draft_filename"),
                 "draft_path": item.get("draft_path"),
                 "article_published_at": item.get("article_published_at"),
@@ -999,6 +1011,10 @@ def create_app(config: Config | None = None,
             "source_name": body.get("source_name", ""),
             "flagged_claims": body.get("flagged_claims", []) or [],
             "sensitive_hits": body.get("sensitive_hits", []) or [],
+            "origin": body.get("origin") or row["origin"] or "rewrite",
+            "sources": body.get("sources", []) or [],
+            "citations": body.get("citations", []) or [],
+            "search_meta": body.get("search_meta", {}) or {},
             "article_id": row["article_id"],
             "article_published_at": article["published_at"] if article else None,
             "article_title": title_candidates[0] if title_candidates else "",
@@ -2507,6 +2523,194 @@ def create_app(config: Config | None = None,
             "removed": removed_count,
             "results": results,
         }
+
+    def _search_create_public_state() -> dict:
+        with search_create_lock:
+            return {
+                "running": search_create_state["running"],
+                "status": search_create_state["status"],
+                "stage": search_create_state["stage"],
+                "detail": search_create_state["detail"],
+                "current": search_create_state["current"],
+                "total": search_create_state["total"],
+                "stats": dict(search_create_state["stats"]),
+                "logs": list(search_create_state["logs"]),
+                "error": search_create_state["error"],
+                "draft_id": search_create_state["draft_id"],
+                "op_id": search_create_state["op_id"],
+                "started_at": search_create_state["started_at"],
+                "finished_at": search_create_state["finished_at"],
+            }
+
+    @app.post("/api/search-create")
+    async def api_search_create(request: Request):
+        denied = LG.require(license_mgr, LF.SEARCH_CREATE)
+        if denied is not None:
+            return denied
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise ValueError("请求体必须为 JSON 对象")
+            topic = str(payload.get("topic") or "").strip()
+            lang = str(payload.get("lang") or "zh")
+            time_range_days = int(payload.get("time_range_days", 30))
+            ref_count = int(payload.get("ref_count", 10))
+            style_id = str(payload.get("style_id") or "").strip() or None
+            options = SearchCreateOptions(
+                topic=topic,
+                lang=lang,
+                time_range_days=time_range_days,
+                ref_count=ref_count,
+                style_id=style_id,
+                workers=config.workers,
+                proxy=config.fetch_proxy,
+            )
+            options.validate()
+            validation_store = get_store()
+            if style_id and rewrite_styles.get_style(
+                    style_id, validation_store) is None:
+                raise ValueError("写作风格不存在")
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400)
+
+        with search_create_lock:
+            if search_create_state["running"]:
+                return JSONResponse(
+                    {"ok": False, "error": "已有搜索创作任务正在进行"},
+                    status_code=409)
+            search_create_state.update(
+                running=True, status="running", stage="expand",
+                detail="任务已启动", current=0, total=0, stats={}, logs=[],
+                error=None, draft_id=None, op_id=None,
+                started_at=datetime.now(timezone.utc).isoformat(),
+                finished_at=None, cancel_requested=False)
+
+        def worker() -> None:
+            op_conn = _db_conn()
+            op_id = start_op(op_conn, "search_create", 0)
+            with search_create_lock:
+                search_create_state["op_id"] = op_id
+            store = Store(op_conn, config)
+            run_config = _current_config(store)
+            options.workers = run_config.workers
+            options.proxy = run_config.fetch_proxy
+            provider = get_rewrite_provider(
+                run_config.llm_provider, run_config.llm_api_key,
+                run_config.llm_model,
+                llm_api_base=run_config.llm_api_base,
+                cli_tool=run_config.cli_tool,
+                timeout=run_config.cli_timeout,
+                priority=run_config.rewrite_priority)
+            style = rewrite_styles.resolve_style(options.style_id, store)
+            last_detail = None
+
+            def cancelled() -> bool:
+                with search_create_lock:
+                    return bool(search_create_state["cancel_requested"])
+
+            def progress(event: dict) -> None:
+                nonlocal last_detail
+                detail = str(event.get("detail") or "")
+                stats = dict(event.get("stats") or {})
+                with search_create_lock:
+                    search_create_state.update(
+                        stage=event.get("stage"),
+                        detail=detail,
+                        current=int(event.get("current") or 0),
+                        total=int(event.get("total") or 0),
+                        stats=stats,
+                    )
+                    if detail and detail != last_detail:
+                        line = (
+                            f"{datetime.now().strftime('%H:%M:%S')} {detail}")
+                        search_create_state["logs"].append(line)
+                        if len(search_create_state["logs"]) > 500:
+                            del search_create_state["logs"][:-500]
+                if detail and detail != last_detail:
+                    _op_log(op_conn, op_id, detail)
+                    last_detail = detail
+                update_op(op_conn, op_id, stats={
+                    "stage": event.get("stage"),
+                    "current": event.get("current", 0),
+                    "total": event.get("total", 0),
+                    **stats,
+                })
+
+            try:
+                result = run_search_create(
+                    store, provider, options, style=style,
+                    progress=progress, should_stop=cancelled)
+                draft_id = result.get("draft_id")
+                with search_create_lock:
+                    search_create_state.update(
+                        status="done", draft_id=draft_id,
+                        stats=dict(result.get("stats") or {}))
+                update_op(op_conn, op_id, target_id=draft_id)
+                finish_op(op_conn, op_id, result.get("stats"))
+            except SearchCreateCancelled:
+                with search_create_lock:
+                    search_create_state.update(
+                        status="cancelled", error=None,
+                        detail="搜索创作已取消")
+                cancel_op(op_conn, op_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("search-create failed")
+                with search_create_lock:
+                    search_create_state.update(
+                        status="error", error=str(exc), detail="任务失败")
+                fail_op(op_conn, op_id, str(exc))
+            finally:
+                with search_create_lock:
+                    search_create_state.update(
+                        running=False,
+                        finished_at=datetime.now(timezone.utc).isoformat())
+                op_conn.close()
+
+        threading.Thread(
+            target=worker, daemon=True, name="search-create").start()
+        return {"ok": True, "started": True, **_search_create_public_state()}
+
+    @app.get("/api/search-create/status")
+    def api_search_create_status():
+        state = _search_create_public_state()
+        if state["status"] == "idle":
+            conn = _db_conn()
+            try:
+                latest = get_latest_op(conn, "search_create")
+            finally:
+                conn.close()
+            if latest is not None:
+                op_stats = latest.get("stats") or {}
+                state.update({
+                    "status": latest["status"],
+                    "running": latest["status"] == "running",
+                    "stage": op_stats.get("stage"),
+                    "current": op_stats.get("current", 0),
+                    "total": op_stats.get("total", 0),
+                    "stats": op_stats,
+                    "logs": latest.get("logs") or [],
+                    "error": latest.get("error"),
+                    "draft_id": latest.get("target_id") or None,
+                    "op_id": latest.get("id"),
+                    "started_at": latest.get("started_at"),
+                    "finished_at": latest.get("finished_at"),
+                })
+        return {"ok": True, **state}
+
+    @app.post("/api/search-create/cancel")
+    def api_search_create_cancel():
+        denied = LG.require(license_mgr, LF.SEARCH_CREATE)
+        if denied is not None:
+            return denied
+        with search_create_lock:
+            if not search_create_state["running"]:
+                return JSONResponse(
+                    {"ok": False, "error": "没有运行中的搜索创作任务"},
+                    status_code=409)
+            search_create_state["cancel_requested"] = True
+            search_create_state["detail"] = "正在取消…"
+        return {"ok": True, "cancel_requested": True}
 
     @app.post("/run")
     def trigger_run():
