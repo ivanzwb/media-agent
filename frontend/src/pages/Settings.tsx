@@ -115,6 +115,9 @@ export default function Settings() {
                   <Form.Item name="llm_api_key" label={<>API Key {data.llm_api_key.set && <Tag color="green">已设置 {data.llm_api_key.masked}</Tag>}</>}>
                     <Input.Password placeholder={data.llm_api_key.set ? "留空则保持不变" : "输入 API Key"} />
                   </Form.Item>
+                  <Space align="end">
+                    <LlmTestButton form={form} />
+                  </Space>
                 </Card>
                 <Card title="图片" size="small" style={{ marginBottom: 16 }}>
                   <Form.Item name="image_provider" label="Provider"><Select options={["openai", "mock"].map((v) => ({ value: v }))} /></Form.Item>
@@ -675,6 +678,29 @@ function CliTestButton({ form }: { form: any }) {
   }
 
   return <Button icon={<ThunderboltOutlined />} loading={loading} onClick={testCli}>检测</Button>;
+}
+
+function LlmTestButton({ form }: { form: any }) {
+  const { message } = AntApp.useApp();
+  const [loading, setLoading] = useState(false);
+
+  async function testLlm() {
+    setLoading(true);
+    try {
+      const r = await api.post<{ ok: boolean; model?: string; latency_ms?: number; reply?: string; error?: string; note?: string }>("/api/test-llm");
+      const d = r.data;
+      if (d.ok) {
+        const extra = d.note ? `（${d.note}）` : `${d.model}，${d.latency_ms}ms`;
+        message.success(`LLM 可用：${extra}`);
+      } else {
+        message.warning(d.error || "LLM 不可用");
+      }
+    } catch (e: any) {
+      message.error("检测失败：" + (e?.message || e));
+    } finally { setLoading(false); }
+  }
+
+  return <Button icon={<ThunderboltOutlined />} loading={loading} onClick={testLlm}>检测</Button>;
 }
 
 type ManagedRuntimeStatus = {

@@ -4152,6 +4152,44 @@ def create_app(config: Config | None = None,
             "label": label,
         }
 
+    @app.post("/api/test-llm")
+    def test_llm():
+        """Test LLM connectivity by sending a minimal chat request."""
+        import time as _time
+
+        store = get_store()
+        provider = store.get_setting("llm_provider") or config.llm_provider or "mock"
+        api_key = store.get_setting("llm_api_key") or config.llm_api_key or ""
+        model = store.get_setting("llm_model") or config.llm_model or ""
+        api_base = store.get_setting("llm_api_base") or config.llm_api_base or ""
+
+        if provider in ("mock", "", None):
+            return {"ok": True, "model": "mock", "latency_ms": 0,
+                    "note": "mock 模式无需真实 API"}
+
+        if not api_key:
+            return {"ok": False, "error": "未设置 API Key"}
+
+        from app.llm.base import Message
+        from app.llm.providers.openai import OpenAIProvider
+
+        t0 = _time.monotonic()
+        try:
+            p = OpenAIProvider(
+                api_key=api_key,
+                model=model or "gpt-4o-mini",
+                base_url=api_base or None,
+                timeout=30,
+                max_retries=0,
+            )
+            reply = p.chat([Message(role="user", content="Reply with exactly: OK")])
+            latency = int((_time.monotonic() - t0) * 1000)
+            return {"ok": True, "model": model or "gpt-4o-mini",
+                    "latency_ms": latency, "reply": (reply or "")[:120]}
+        except Exception as exc:
+            latency = int((_time.monotonic() - t0) * 1000)
+            return {"ok": False, "error": str(exc)[:300], "latency_ms": latency}
+
     # ── Managed optional runtimes ───────────────────────────────────────────
     @app.get("/api/capabilities")
     def api_capabilities(refresh: bool = False):

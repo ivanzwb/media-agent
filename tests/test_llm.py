@@ -104,3 +104,39 @@ def test_rewrite_provider_openai_uses_fallback_timeout(monkeypatch):
         timeout=300, llm_timeout=None, priority="llm")
     p.chat([Message(role="user", content="hi")])
     assert captured["timeout"] == 300
+
+
+# ── /api/test-llm endpoint tests ────────────────────────────────────────────
+
+import os
+import tempfile
+
+
+def _make_test_app(**config_overrides):
+    """Create a test app with a fresh in-memory-ish temp DB."""
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from app.web.server import create_app
+    from app.config import Config
+    tmp = tempfile.mkdtemp()
+    cfg = Config(data_dir=Path(tmp), **config_overrides)
+    app = create_app(config=cfg)
+    return TestClient(app), tmp
+
+
+def test_test_llm_mock_provider():
+    """Mock provider returns ok without calling any API."""
+    client, tmp = _make_test_app(llm_provider="mock")
+    r = client.post("/api/test-llm")
+    d = r.json()
+    assert d["ok"] is True
+    assert d.get("model") == "mock"
+
+
+def test_test_llm_no_api_key():
+    """Missing API key returns error."""
+    client, tmp = _make_test_app(llm_provider="openai", llm_api_key="", llm_model="gpt-4o")
+    r = client.post("/api/test-llm")
+    d = r.json()
+    assert d["ok"] is False
+    assert "API Key" in d["error"]
