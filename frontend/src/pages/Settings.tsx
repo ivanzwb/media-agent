@@ -293,7 +293,7 @@ export default function Settings() {
                   <Form.Item name="sensitive_words" label="自定义敏感词（逗号/换行分隔）"><Input.TextArea rows={3} /></Form.Item>
                 </Card>
                 <Card title="SEO 与推广" size="small">
-                  <Form.Item name="seo_tags_enabled" label="生成文章 SEO 标签"
+                  <Form.Item name="seo_tags_enabled" label="生成文章标签"
                     valuePropName="checked"
                     tooltip="转写时根据文章内容生成 5-8 个搜索关键词，放在推广文案之前（MEDIA_AGENT_SEO_TAGS_ENABLED）">
                     <Switch checkedChildren="启用" unCheckedChildren="关闭" />
