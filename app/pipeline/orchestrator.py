@@ -304,7 +304,8 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
             emit(f"改写中：{art.title[:50]}", stats)
             try:
                 draft = rewrite(art, provider, style=style,
-                                promotion_footer=store.config.promotion_footer)
+                                promotion_footer=store.config.promotion_footer,
+                                seo_tags_enabled=store.config.seo_tags_enabled)
                 if sens_words:
                     hits = sanitize_draft(draft, sens_words)
                     if hits:

@@ -80,7 +80,8 @@ def test_deep_tech_render_matches_legacy_format():
         dt.instruction, title="T", source="SRC", manifest="MAN", content="CON")
     # legacy format() preserves {promotion_block} as literal text;
     # render_instruction strips it when no promotion is configured.
-    assert new == old.replace("{promotion_block}", "")
+    assert new == old.replace("{seo_block}", "").replace(
+        "{promotion_block}", "")
     assert dt.prompt == REWRITE_SYSTEM
 
 
@@ -113,6 +114,14 @@ def test_every_builtin_instruction_has_promotion_block():
     for s in S.builtin_styles():
         assert "{promotion_block}" in s.instruction, (
             f"Style '{s.id}' is missing {{promotion_block}} in its instruction")
+
+
+def test_every_builtin_instruction_has_seo_block_before_promotion():
+    for s in S.builtin_styles():
+        assert "{seo_block}" in s.instruction, (
+            f"Style '{s.id}' is missing {{seo_block}} in its instruction")
+        assert s.instruction.index("{seo_block}") < s.instruction.index(
+            "{promotion_block}")
 
 
 # ── Custom style CRUD ─────────────────────────────────────────────────────

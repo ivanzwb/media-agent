@@ -122,6 +122,51 @@ def test_rewrite_promotion_footer_with_style():
     assert "经济学人" in user_msg or "英式" in user_msg or "冷静" in user_msg
 
 
+def test_rewrite_seo_tags_appear_before_promotion():
+    resp = json.dumps({"title_candidates": ["标题"], "body_md": "正文"})
+    check = json.dumps({"flagged_claims": []})
+    provider = RecordingProvider([resp, check])
+    rewrite(
+        sample_article(), provider,
+        promotion_footer="关注我们，获取更多前沿资讯",
+        seo_tags_enabled=True,
+    )
+    user_msg = provider.calls[0][1].content
+    seo_idx = user_msg.index("4. **SEO 标签**")
+    promotion_idx = user_msg.index("5. **推广部分**")
+    assert seo_idx < promotion_idx
+    assert "5-8 个具体关键词" in user_msg
+    assert "**SEO 标签**：关键词1、关键词2、关键词3" in user_msg
+
+
+def test_rewrite_seo_tags_can_be_disabled():
+    resp = json.dumps({"title_candidates": ["标题"], "body_md": "正文"})
+    check = json.dumps({"flagged_claims": []})
+    provider = RecordingProvider([resp, check])
+    rewrite(
+        sample_article(), provider,
+        promotion_footer="关注我们",
+        seo_tags_enabled=False,
+    )
+    user_msg = provider.calls[0][1].content
+    assert "SEO 标签" not in user_msg
+    assert "4. **推广部分**" in user_msg
+
+
+def test_rewrite_seo_tags_work_with_legacy_custom_style():
+    from app.pipeline.styles import RewriteStyle
+
+    style = RewriteStyle(
+        id="custom", name="自定义", description="", prompt="改写文章",
+        instruction="根据原文改写：{content}",
+    )
+    resp = json.dumps({"title_candidates": ["标题"], "body_md": "正文"})
+    check = json.dumps({"flagged_claims": []})
+    provider = RecordingProvider([resp, check])
+    rewrite(sample_article(), provider, style=style, seo_tags_enabled=True)
+    assert "SEO 标签" in provider.calls[0][1].content
+
+
 def test_rewrite_promotion_footer_body_md_flow():
     """The LLM output body_md may contain promotion text (naturally integrated);
     rewrite() should pass it through without post-processing."""

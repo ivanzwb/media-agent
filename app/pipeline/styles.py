@@ -8,6 +8,7 @@ render time by :func:`app.pipeline.rewriter.render_instruction`:
     {source}    original source name
     {manifest}  media manifest describing available images/videos
     {content}   original article body (markdown)
+    {seo_block} generated SEO-tag guidance when enabled
 
 Builtin styles ship with the app.  Users can create/edit/delete their own
 styles, persisted as JSON in the ``settings`` table under the key
@@ -69,6 +70,7 @@ _COMMON_RULES = (
     "- 数据全部保留，这是硬价值。专业术语首次出现时用通俗语言解释，可括号标注英文。\n"
     "- 短句、短段落，手机友好。长难句拆成 2-3 个短句。\n"
     "- 结尾注明原文标题、来源，以及（若原文提供）日期。\n"
+    "{seo_block}\n"
     "{promotion_block}\n\n"
     + ANTI_SLOP_SYSTEM_INSTRUCTION + "\n\n"
 )

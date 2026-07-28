@@ -51,7 +51,10 @@ export default function Settings() {
       const v = await form.getFieldsValue();
       const keyFields = ["llm_api_key", "image_api_key", "tts_api_key", "wechat_appsecret"];
       const payload: Record<string, any> = {};
-      const boolFields = ["schedule_enabled", "download_images", "download_videos", "relevance_filter"];
+      const boolFields = [
+        "schedule_enabled", "download_images", "download_videos",
+        "relevance_filter", "seo_tags_enabled",
+      ];
       for (const [k, val] of Object.entries(v)) {
         if (keyFields.includes(k)) { if (val) payload[k] = val; continue; }
         if (boolFields.includes(k)) { payload[k] = val ? "1" : "0"; continue; }
@@ -88,6 +91,7 @@ export default function Settings() {
         huggingface_mirror: data.huggingface_mirror,
         sensitive_level: data.sensitive_level, sensitive_words: data.sensitive_words,
         promotion_footer: data.promotion_footer,
+        seo_tags_enabled: data.seo_tags_enabled,
         wechat_appid: data.wechat_appid, wechat_author: data.wechat_author,
         rewrite_style: data.rewrite_style,
         download_images: data.download_images, download_videos: data.download_videos,
@@ -285,8 +289,15 @@ export default function Settings() {
                   </Form.Item>
                   <Form.Item name="sensitive_words" label="自定义敏感词（逗号/换行分隔）"><Input.TextArea rows={3} /></Form.Item>
                 </Card>
-                <Card title="推广文案" size="small">
-                  <Form.Item name="promotion_footer" label="推广文案（追加到草稿末尾）"><Input.TextArea rows={3} /></Form.Item>
+                <Card title="SEO 与推广" size="small">
+                  <Form.Item name="seo_tags_enabled" label="生成文章 SEO 标签"
+                    valuePropName="checked"
+                    tooltip="转写时根据文章内容生成 5-8 个搜索关键词，放在推广文案之前（MEDIA_AGENT_SEO_TAGS_ENABLED）">
+                    <Switch checkedChildren="启用" unCheckedChildren="关闭" />
+                  </Form.Item>
+                  <Form.Item name="promotion_footer" label="推广文案参考">
+                    <Input.TextArea rows={3} />
+                  </Form.Item>
                 </Card>
               </>
             ),

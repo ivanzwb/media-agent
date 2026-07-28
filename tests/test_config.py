@@ -92,3 +92,18 @@ def test_db_override_avatar_enabled_off(monkeypatch, tmp_path):
     # DB explicitly turns it off, overriding env
     cfg = Config.load(store=_FakeStore({"avatar_enabled": "0"}))
     assert cfg.avatar_enabled is False
+
+
+def test_seo_tags_enabled_defaults_on_and_reads_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    assert Config.load().seo_tags_enabled is True
+
+    monkeypatch.setenv("MEDIA_AGENT_SEO_TAGS_ENABLED", "0")
+    assert Config.load().seo_tags_enabled is False
+
+
+def test_db_overrides_seo_tags_enabled(monkeypatch, tmp_path):
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MEDIA_AGENT_SEO_TAGS_ENABLED", "0")
+    cfg = Config.load(store=_FakeStore({"seo_tags_enabled": "1"}))
+    assert cfg.seo_tags_enabled is True

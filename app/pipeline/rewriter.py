@@ -59,6 +59,7 @@ REWRITE_INSTRUCTION = (
     "1. **总结**：全文的主线观点或启示\n"
     "2. **展望**：对未来的预测或思考（基于原文，不得编造）\n"
     "3. **原文信息**：注明原文标题、来源和日期\n"
+    "{{seo_block}}\n"
     "{{promotion_block}}\n\n"
     "### 翻译原则\n\n"
     "| 原文情况 | 处理方式 |\n"
@@ -525,6 +526,7 @@ def _inline_content(content_md: str, images: list[str],
 
 def render_instruction(template: str, *, title: str, source: str,
                        manifest: str, content: str,
+                       seo_block: str = "",
                        promotion_block: str = "") -> str:
     """Render a rewrite instruction *template* by substituting the
     placeholders.  Uses plain string replacement (not ``str.format``) so
@@ -535,11 +537,13 @@ def render_instruction(template: str, *, title: str, source: str,
             .replace("{title}", title)
             .replace("{source}", source)
             .replace("{content}", content)
+            .replace("{seo_block}", seo_block)
             .replace("{promotion_block}", promotion_block))
 
 
 def rewrite(article: Article, provider: LLMProvider, style=None,
-            promotion_footer: str | None = None) -> Draft:
+            promotion_footer: str | None = None,
+            seo_tags_enabled: bool = True) -> Draft:
     """Rewrite *article* into a Chinese self-media Draft.
 
     *style* is an optional ``app.pipeline.styles.RewriteStyle``. When None the
@@ -548,6 +552,9 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
     *promotion_footer* — when provided, tells the LLM to naturally transition
     into this promotional text at the end of the article instead of mechanically
     appending it post-rewrite.
+
+    *seo_tags_enabled* — generate a concise SEO keyword line immediately before
+    the promotional section.
     """
     images = article.images or []
     videos = getattr(article, "videos", []) or []
@@ -581,12 +588,32 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
         system_prompt = style.prompt + "\n\n" + ANTI_SLOP_SYSTEM_INSTRUCTION
         instruction_tmpl = style.instruction
 
+    # Older custom styles predate the SEO placeholder. Inject it immediately
+    # before their promotion placeholder (or at the end) so the global setting
+    # applies consistently without requiring users to edit every custom style.
+    if "{seo_block}" not in instruction_tmpl:
+        if "{promotion_block}" in instruction_tmpl:
+            instruction_tmpl = instruction_tmpl.replace(
+                "{promotion_block}", "{seo_block}\n{promotion_block}")
+        else:
+            instruction_tmpl = f"{instruction_tmpl}\n\n{{seo_block}}"
+
+    seo_block = (
+        "4. **SEO 标签**：在此处单独输出一行文章搜索关键词。\n"
+        "   - 格式固定为：`**SEO 标签**：关键词1、关键词2、关键词3`\n"
+        "   - 从本文标题和正文提取 5-8 个具体关键词，包含核心主题、"
+        "关键实体和行业术语\n"
+        "   - 不得使用正文未提及的词，不要写成句子，不要添加解释\n"
+        if seo_tags_enabled else ""
+    )
+
     # Promotion block: if provided, tells the LLM to generate a
     # context-aware promotional call-to-action based on the article's
     # actual topic/content, using the configured footer as a reference
     # for the brand name and CTA format — NOT as verbatim content.
     promotion_block = (
-        f"4. **推广部分**：写一段与本文主题相关的推广引导，包含：\n"
+        f"{'5' if seo_tags_enabled else '4'}. **推广部分**："
+        f"写一段与本文主题相关的推广引导，包含：\n"
         f"   - 一句自然的引导语（如「如果觉得有收获」）\n"
         f"   - 2-3 个互动呼吁（从点赞、关注、评论、收藏中选），"
         f"每个的文案必须基于本文实际内容，不得照抄下文的示例\n"
@@ -598,6 +625,7 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
     rewrite_prompt = render_instruction(
         instruction_tmpl, title=article.title, source=article.source_name,
         manifest=manifest, content=content,
+        seo_block=seo_block,
         promotion_block=promotion_block)
     raw = provider.chat([
         Message(role="system", content=system_prompt),

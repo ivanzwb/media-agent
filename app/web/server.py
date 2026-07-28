@@ -669,7 +669,8 @@ def create_app(config: Config | None = None,
                 _rewrite_log(article_id, f"正在调用 LLM 进行转写…（风格：{chosen_style.name}）",
                              op_key=op_key, op_conn=op_conn)
                 draft = rewrite(art, provider, style=chosen_style,
-                                promotion_footer=run_config.promotion_footer)
+                                promotion_footer=run_config.promotion_footer,
+                                seo_tags_enabled=run_config.seo_tags_enabled)
                 _rewrite_log(article_id, "转写完成，进行敏感词过滤…",
                              op_key=op_key, op_conn=op_conn)
                 sanitize_draft(draft, load_words(run_config))
@@ -1591,7 +1592,7 @@ def create_app(config: Config | None = None,
         "max_age_days", "max_per_source", "max_drafts", "download_workers",
         "video_fit", "video_brand_name",
         "sensitive_level", "sensitive_words",
-        "promotion_footer",
+        "promotion_footer", "seo_tags_enabled",
         "schedule_cron", "schedule_enabled",
     ]
 
@@ -3896,6 +3897,9 @@ def create_app(config: Config | None = None,
             "sensitive_level": _get("sensitive_level") or (config.sensitive_level or "standard"),
             "sensitive_words": _get("sensitive_words") or (config.sensitive_words or ""),
             "promotion_footer": _get("promotion_footer") or (config.promotion_footer or ""),
+            "seo_tags_enabled": (
+                store.get_setting("seo_tags_enabled") or "1"
+            ) not in ("0", "false", "no", ""),
             "cli_tool": _get("cli_tool") or (config.cli_tool or "auto"),
             "rewrite_priority": _get("rewrite_priority") or config.rewrite_priority,
             "fetch_proxy": _get("fetch_proxy") or (config.fetch_proxy or ""),
@@ -3949,6 +3953,7 @@ def create_app(config: Config | None = None,
                        sensitive_level: str = Form(""),
                        sensitive_words: str = Form(""),
                        promotion_footer: str = Form(""),
+                       seo_tags_enabled: str = Form("0"),
                        wechat_appid: str = Form(""),
                        wechat_appsecret: str = Form(""),
                        wechat_author: str = Form(""),
@@ -4077,6 +4082,9 @@ def create_app(config: Config | None = None,
                           "1" if relevance_filter in ("1", "on", "true") else "0")
         store.set_setting("avatar_enabled",
                           "1" if avatar_enabled in ("1", "on", "true") else "0")
+        store.set_setting(
+            "seo_tags_enabled",
+            "1" if seo_tags_enabled in ("1", "on", "true") else "0")
 
         # Default rewrite style: validate against the registry; empty or the
         # builtin default clears the setting (falls back to deep-tech).

@@ -64,6 +64,7 @@ class Config:
     sensitive_level: str | None = None  # off | basic | standard | strict
     sensitive_words: str | None = None  # user custom list (comma/newline)
     promotion_footer: str | None = None  # promotion footer appended to drafts
+    seo_tags_enabled: bool = True        # generate article SEO tags before promotion
     wechat_appid: str | None = None      # WeChat Official Account AppID
     wechat_appsecret: str | None = None  # WeChat Official Account AppSecret
     wechat_author: str | None = None     # default author shown on published 图文
@@ -153,6 +154,9 @@ class Config:
             sensitive_level=os.environ.get("MEDIA_AGENT_SENSITIVE_LEVEL"),
             sensitive_words=os.environ.get("MEDIA_AGENT_SENSITIVE_WORDS"),
             promotion_footer=os.environ.get("MEDIA_AGENT_PROMOTION_FOOTER"),
+            seo_tags_enabled=os.environ.get(
+                "MEDIA_AGENT_SEO_TAGS_ENABLED", "1"
+            ) not in ("0", "false", "no", ""),
             wechat_appid=os.environ.get("MEDIA_AGENT_WECHAT_APPID"),
             wechat_appsecret=os.environ.get("MEDIA_AGENT_WECHAT_APPSECRET"),
             wechat_author=os.environ.get("MEDIA_AGENT_WECHAT_AUTHOR"),
@@ -259,6 +263,10 @@ class Config:
         ae = store.get_setting("avatar_enabled")
         if ae is not None:
             self.avatar_enabled = ae.strip() not in ("0", "false", "no", "")
+        seo = store.get_setting("seo_tags_enabled")
+        if seo is not None:
+            self.seo_tags_enabled = seo.strip() not in (
+                "0", "false", "no", "")
 
     def ensure_dirs(self) -> None:
         for d in (self.archive_dir, self.drafts_dir, self.images_dir,

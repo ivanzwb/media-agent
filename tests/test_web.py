@@ -227,6 +227,24 @@ def test_settings_roundtrip_tts_and_avatar(tmp_path):
     assert store.get_setting("avatar_enabled") == "1"
 
 
+def test_settings_roundtrip_seo_tags_enabled(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    assert client.get("/api/settings").json()["seo_tags_enabled"] is True
+
+    r = client.post(
+        "/settings", data={"seo_tags_enabled": "0"},
+        follow_redirects=False)
+    assert r.status_code in (200, 303)
+    assert store.get_setting("seo_tags_enabled") == "0"
+    assert client.get("/api/settings").json()["seo_tags_enabled"] is False
+
+    client.post(
+        "/settings", data={"seo_tags_enabled": "1"},
+        follow_redirects=False)
+    assert store.get_setting("seo_tags_enabled") == "1"
+    assert client.get("/api/settings").json()["seo_tags_enabled"] is True
+
+
 def test_drafts_pagination_api(tmp_path):
     client, store, _ = make_client(tmp_path)
     art = store.save_article(Article(
