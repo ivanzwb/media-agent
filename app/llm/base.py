@@ -89,6 +89,7 @@ def get_rewrite_provider(llm_provider: str, llm_api_key: str | None = None,
                          llm_api_base: str | None = None,
                          cli_tool: str | None = None,
                          timeout: int | None = None,
+                         llm_timeout: int | None = None,
                          priority: str = "agent") -> LLMProvider:
     """Return the best available provider for article rewriting.
 
@@ -105,23 +106,28 @@ def get_rewrite_provider(llm_provider: str, llm_api_key: str | None = None,
     if priority not in ("agent", "llm"):
         priority = "agent"
 
+    # Use separate timeouts: CLI agents need long timeouts (500s default),
+    # OpenAI-compatible APIs use a shorter llm_timeout (120s default).
     cli = _resolve_cli_provider(cli_tool, timeout=timeout)
     has_real_llm = llm_provider not in ("mock", "", None)
 
     if priority == "llm":
         if has_real_llm:
             llm = _resolve_llm_provider(
-                llm_provider, llm_api_key, llm_model, llm_api_base, timeout)
+                llm_provider, llm_api_key, llm_model, llm_api_base,
+                llm_timeout or timeout)
             if llm is not None:
                 return llm
         if cli is not None:
             return cli
         return _resolve_llm_provider(
-            llm_provider, llm_api_key, llm_model, llm_api_base, timeout
+            llm_provider, llm_api_key, llm_model, llm_api_base,
+            llm_timeout or timeout
         ) or MockProvider()
 
     if cli is not None:
         return cli
     return _resolve_llm_provider(
-        llm_provider, llm_api_key, llm_model, llm_api_base, timeout
+        llm_provider, llm_api_key, llm_model, llm_api_base,
+        llm_timeout or timeout
     ) or MockProvider()

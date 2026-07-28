@@ -306,6 +306,7 @@ def create_app(config: Config | None = None,
             run_config.llm_provider, run_config.llm_api_key,
             run_config.llm_model, llm_api_base=run_config.llm_api_base,
             cli_tool=run_config.cli_tool, timeout=run_config.cli_timeout,
+            llm_timeout=run_config.llm_timeout,
             priority=run_config.rewrite_priority)
         image_provider = get_image_provider(
             run_config.image_provider,
@@ -658,6 +659,7 @@ def create_app(config: Config | None = None,
                     run_config.llm_model, llm_api_base=run_config.llm_api_base,
                     cli_tool=run_config.cli_tool,
                     timeout=run_config.cli_timeout,
+                    llm_timeout=run_config.llm_timeout,
                     priority=run_config.rewrite_priority)
                 image_provider = get_image_provider(
                     run_config.image_provider,
@@ -1769,6 +1771,7 @@ def create_app(config: Config | None = None,
             rc.llm_provider, rc.llm_api_key,
             rc.llm_model, llm_api_base=rc.llm_api_base,
             cli_tool=rc.cli_tool, timeout=rc.cli_timeout,
+            llm_timeout=rc.llm_timeout,
             priority=rc.rewrite_priority)
 
     def _build_tts(rc, tts_provider=None, tts_voice=None):
@@ -2620,6 +2623,7 @@ def create_app(config: Config | None = None,
                 llm_api_base=run_config.llm_api_base,
                 cli_tool=run_config.cli_tool,
                 timeout=run_config.cli_timeout,
+                llm_timeout=run_config.llm_timeout,
                 priority=run_config.rewrite_priority)
             style = rewrite_styles.resolve_style(options.style_id, store)
             last_detail = None
@@ -3869,6 +3873,7 @@ def create_app(config: Config | None = None,
             "llm_provider": _get("llm_provider") or config.llm_provider,
             "llm_model": _get("llm_model") or (config.llm_model or ""),
             "llm_api_base": _get("llm_api_base") or (config.llm_api_base or ""),
+            "llm_timeout": _get("llm_timeout") or (str(config.llm_timeout) if config.llm_timeout else "120"),
             "image_provider": _get("image_provider") or (config.image_provider or "mock"),
             "image_api_base": _get("image_api_base") or (config.image_api_base or ""),
             "image_model": _get("image_model") or (config.image_model or ""),
@@ -3927,6 +3932,7 @@ def create_app(config: Config | None = None,
                       llm_api_key: str = Form(""),
                       llm_model: str = Form(""),
                       llm_api_base: str = Form(""),
+                      llm_timeout: str = Form(""),
                       image_provider: str = Form(""),
                       image_api_key: str = Form(""),
                       image_api_base: str = Form(""),
@@ -4030,6 +4036,16 @@ def create_app(config: Config | None = None,
             store.set_setting("wechat_appsecret", wx_secret)
 
         # Integer fields: only save if explicitly provided
+        if llm_timeout.strip():
+            try:
+                int_val = int(llm_timeout.strip())
+                if int_val > 0:
+                    store.set_setting("llm_timeout", llm_timeout.strip())
+                else:
+                    store.delete_setting("llm_timeout")
+            except ValueError:
+                pass
+
         if max_age_days.strip():
             try:
                 int_val = int(max_age_days.strip())

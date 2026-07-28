@@ -107,3 +107,46 @@ def test_db_overrides_seo_tags_enabled(monkeypatch, tmp_path):
     monkeypatch.setenv("MEDIA_AGENT_SEO_TAGS_ENABLED", "0")
     cfg = Config.load(store=_FakeStore({"seo_tags_enabled": "1"}))
     assert cfg.seo_tags_enabled is True
+
+
+# ── llm_timeout tests ──────────────────────────────────────────────────────
+
+
+def test_llm_timeout_defaults_120(monkeypatch, tmp_path):
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    cfg = Config.load()
+    assert cfg.llm_timeout == 120
+
+
+def test_llm_timeout_reads_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MEDIA_AGENT_LLM_TIMEOUT", "240")
+    cfg = Config.load()
+    assert cfg.llm_timeout == 240
+
+
+def test_llm_timeout_db_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    cfg = Config.load(store=_FakeStore({"llm_timeout": "300"}))
+    assert cfg.llm_timeout == 300
+
+
+def test_llm_timeout_env_and_db(monkeypatch, tmp_path):
+    """DB overrides env var."""
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MEDIA_AGENT_LLM_TIMEOUT", "180")
+    cfg = Config.load(store=_FakeStore({"llm_timeout": "60"}))
+    assert cfg.llm_timeout == 60
+
+
+def test_cli_timeout_defaults_500(monkeypatch, tmp_path):
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    cfg = Config.load()
+    assert cfg.cli_timeout == 500
+
+
+def test_cli_timeout_reads_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MEDIA_AGENT_CLI_TIMEOUT", "600")
+    cfg = Config.load()
+    assert cfg.cli_timeout == 600

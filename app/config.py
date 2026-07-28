@@ -75,6 +75,7 @@ class Config:
     cli_tool: str | None = None          # "auto" | "opencode" | "codex" | "copilot" | "none"
     rewrite_priority: str = "agent"      # "agent" | "llm" — which backend wins when both are set
     cli_timeout: int = 500               # CLI agent timeout in seconds
+    llm_timeout: int = 120               # OpenAI-compatible API timeout in seconds
     fetch_proxy: str | None = None       # HTTP proxy for RSS/scraper fetches (e.g. http://127.0.0.1:7890)
     github_mirror: str | None = None     # GitHub 镜像前缀
     huggingface_mirror: str | None = None  # HuggingFace 镜像前缀 (HF_ENDPOINT)
@@ -167,6 +168,7 @@ class Config:
             cli_tool=os.environ.get("MEDIA_AGENT_CLI_TOOL", "none"),
             rewrite_priority=os.environ.get("MEDIA_AGENT_REWRITE_PRIORITY", "agent"),
             cli_timeout=_int_env("MEDIA_AGENT_CLI_TIMEOUT") or 500,
+            llm_timeout=_int_env("MEDIA_AGENT_LLM_TIMEOUT") or 120,
             fetch_proxy=os.environ.get("MEDIA_AGENT_FETCH_PROXY"),
             github_mirror=os.environ.get("MEDIA_AGENT_GITHUB_MIRROR"),
             huggingface_mirror=os.environ.get("MEDIA_AGENT_HUGGINGFACE_MIRROR"),
@@ -249,6 +251,12 @@ class Config:
             parsed = _int_str(cli_to)
             if parsed is not None:
                 self.cli_timeout = parsed
+
+        llm_to = store.get_setting("llm_timeout")
+        if llm_to is not None:
+            parsed = _int_str(llm_to)
+            if parsed is not None:
+                self.llm_timeout = parsed
 
         # Boolean fields
         di = store.get_setting("download_images")
