@@ -541,6 +541,40 @@ def render_instruction(template: str, *, title: str, source: str,
             .replace("{promotion_block}", promotion_block))
 
 
+def _normalise_tags(md: str) -> str:
+    """Normalise tag lines to ``**标签**：#tag1 #tag2`` format.
+
+    - Renames ``**SEO 标签**`` → ``**标签**``
+    - Normalises ``、``-separated (Chinese comma) to ``#``-prefixed space-separated
+    - Strips spaces within each ``#tag`` word so ``#AI 技术`` → ``#AI技术``
+    """
+    import re as _re
+
+    def _fix_tag_line(m: _re.Match) -> str:
+        line = m.group(0)
+        # Replace 、 separation with # prefix
+        if "、" in line:
+            # **标签**：关键词1、关键词2 → **标签**：#关键词1 #关键词2
+            parts = _re.split(r"[、，,]", line)
+            head = parts[0]
+            # Find the tag prefix start
+            before = _re.match(r"^.*?[：:]\s*", parts[0])
+            if before:
+                rest = line[before.end():]
+                tags = [f"#{t.strip()}" for t in _re.split(r"[、，,]", rest)]
+                line = before.group() + " ".join(tags)
+        # Strip spaces inside each #word
+        def _strip_tag(t: _re.Match) -> str:
+            return "#" + t.group(1).replace(" ", "")
+        line = _re.sub(r"#(\S[^#\s]*)", _strip_tag, line)
+        return line
+
+    # Rename **SEO 标签** → **标签**
+    md = md.replace("**SEO 标签**", "**标签**")
+    # Process tag lines
+    return _re.sub(r"^\*\*标签\*\*.*", _fix_tag_line, md, flags=_re.MULTILINE)
+
+
 def rewrite(article: Article, provider: LLMProvider, style=None,
             promotion_footer: str | None = None,
             seo_tags_enabled: bool = True) -> Draft:
@@ -599,8 +633,9 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
             instruction_tmpl = f"{instruction_tmpl}\n\n{{seo_block}}"
 
     seo_block = (
-        "4. **SEO 标签**：在此处单独输出一行文章搜索关键词。\n"
-        "   - 格式固定为：`**SEO 标签**：关键词1、关键词2、关键词3`\n"
+        "4. **标签**：在此处单独输出一行文章标签。\n"
+        "   - 格式固定为：`**标签**：#关键词1 #关键词2 #关键词3`\n"
+        "   - 每个标签以 # 开头，标签词内不要有空格\n"
         "   - 从本文标题和正文提取 5-8 个具体关键词，包含核心主题、"
         "关键实体和行业术语\n"
         "   - 不得使用正文未提及的词，不要写成句子，不要添加解释\n"
@@ -670,6 +705,10 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
 
     # Post-process: remove AI slop patterns from the LLM output
     body_md = post_process(body_md)
+
+    # Normalise tag format: strip spaces within #tag words so multi-word
+    # tags like "AI 技术" become "AI技术"
+    body_md = _normalise_tags(body_md)
 
     # Replace any stray [[IMG:N]] / [[VID:N]] tokens the LLM may have output
     body_md = _apply_placeholders(body_md, media_map)
