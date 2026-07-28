@@ -458,6 +458,8 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
       key: "wx", duration: 0,
     });
 
+    let retry = 0;
+    const MAX_RETRY = 250; // ~5 minutes at 1.2s intervals
     const poll = async () => {
       try {
         const s = await getJson<WeChatPublishStatus>(
@@ -478,13 +480,23 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
           }
           return;
         }
+        if (++retry > MAX_RETRY) {
+          finishWeChatPolling();
+          message.error({ content: "微信发布超时，请检查公众号后台确认状态", key: "wx", duration: 8 });
+          return;
+        }
         wxPollRef.current = setTimeout(poll, 1200);
       } catch (e: any) {
         // The backend workflow may still be running. Keep both actions locked
         // and retry status rather than risking a duplicate submission.
+        if (++retry > MAX_RETRY) {
+          finishWeChatPolling();
+          message.error({ content: "微信发布状态查询超时，请检查公众号后台", key: "wx", duration: 8 });
+          return;
+        }
         message.warning({
           content: e?.response?.data?.error || e?.message || "暂时无法查询微信发布状态，正在重试",
-          key: "wx-status", duration: 4,
+          key: "wx", duration: 4,
         });
         wxPollRef.current = setTimeout(poll, 2000);
       }
