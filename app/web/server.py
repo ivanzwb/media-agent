@@ -3558,6 +3558,13 @@ def create_app(config: Config | None = None,
                 continue
         return {"ok": False, "error": "未搜到可下载的封面图片"}
 
+    @app.post("/drafts/{draft_id}/cover-clear")
+    def draft_cover_clear(draft_id: int):
+        """Clear the custom cover image, reverting to the system default."""
+        store = get_store()
+        store.set_draft_cover(draft_id, None)
+        return {"ok": True}
+
     def _localize_before_publish(draft_id: int, meta: dict, run_config,
                                  store) -> dict:
         """Download the draft's remote images/videos locally and rewrite the

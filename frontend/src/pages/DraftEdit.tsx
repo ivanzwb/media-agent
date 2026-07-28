@@ -780,6 +780,13 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
               <Space style={{ marginTop: 8 }}>
                 <Button size="small" onClick={() => cover("scrape")}>网上抓取</Button>
                 <Button size="small" onClick={() => cover("generate")}>AI 生成</Button>
+                {data.cover_image && (
+                  <Button size="small" danger onClick={async () => {
+                    const r = await postForm<{ ok: boolean; error?: string }>(`/drafts/${data.id}/cover-clear`);
+                    if (r.ok) { message.success("封面已清空"); qc.invalidateQueries({ queryKey: ["draft", data.id] }); }
+                    else message.error(r.error || "清空失败");
+                  }}>清空</Button>
+                )}
               </Space>
             </Card>
             <Card size="small" title={isSearchDraft ? `参考来源（${searchSources.length}）` : "来源"}
