@@ -28,6 +28,8 @@ from app.media.strategies import (
 _MD_IMG_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
 _HTML_IMG_RE = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.I)
 _MD_VIDEO_LINK_RE = re.compile(r"\[\u25b6[^\]]*\]\(([^)\s]+)\)")
+_DIRECT_VIDEO_LINK_RE = re.compile(
+    r"\.(?:mp4|webm|ogg|ogv|mov|m4v|m3u8)(?:[?#]|$)", re.I)
 
 
 def _dedupe_keep(urls: list[str]) -> list[str]:
@@ -49,8 +51,12 @@ def content_images(content: str) -> list[str]:
 
 def content_videos(content: str) -> list[str]:
     """Videos referenced in the article body (HTML iframes/video + md links)."""
+    direct_links = [
+        url for url in _MD_VIDEO_LINK_RE.findall(content)
+        if _DIRECT_VIDEO_LINK_RE.search(url)
+    ]
     return _dedupe_keep(_videos_from_html(content)
-                        + _MD_VIDEO_LINK_RE.findall(content))
+                        + direct_links)
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")

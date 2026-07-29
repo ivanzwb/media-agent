@@ -30,6 +30,17 @@ def test_render_wraps_in_section_with_inline_styles():
     assert "<style" not in html              # no <style> blocks (inlined)
 
 
+def test_video_embed_becomes_single_source_link():
+    md = (
+        '<iframe src="https://video.example/watch/1"></iframe>\n'
+        "[▶ 视频链接](https://video.example/watch/1)"
+    )
+    html = render_styled_html(md, platform="wechat")
+    assert "<iframe" not in html
+    assert html.count("查看原视频") == 1
+    assert 'href="https://video.example/watch/1"' in html
+
+
 def test_code_block_uses_br_and_prewrap():
     html = render_styled_html(MD, platform="wechat", theme="default")
     assert "<pre style=" in html and "white-space:pre-wrap" in html

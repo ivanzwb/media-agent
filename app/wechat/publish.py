@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 _UPLOADIMG_MAX = 1_000_000      # media/uploadimg hard limit (<1MB)
 _MATERIAL_IMG_MAX = 10_000_000  # add_material image limit (10MB)
 _MATERIAL_VIDEO_MAX = 10_000_000  # add_material video limit (10MB, MP4)
+_LOCAL_VIDEO_URL_RE = re.compile(
+    r'(?<![A-Za-z0-9:/])(?:\.\./\.\./)?/?(?:media|videos)/'
+    r'[^"\'()\s<>]+\.(?:mp4|webm|ogg|ogv|mov|m4v)(?:[?#][^"\'()\s<>]*)?',
+    re.I,
+)
 
 _PUBLISH_STATUS_ERRORS = {
     2: "原创校验失败",
@@ -94,6 +99,15 @@ def _absolutize_body_md(md: str) -> str:
         url = _absolutize_media(m.group("url"))
         return f"![{alt}]({url})"
     return re.sub(r'!\[(?P<alt>[^\]]*)\]\((?P<url>[^)]+)\)', _sub, md)
+
+
+def _replace_local_video_urls(md: str, source_url: str | None) -> str:
+    """Point local-only videos at the public source article for WeChat."""
+    source_url = (source_url or "").strip()
+    parsed = urlparse(source_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return md
+    return _LOCAL_VIDEO_URL_RE.sub(lambda _match: source_url, md)
 
 
 def _plain_text(md: str) -> str:
@@ -211,6 +225,9 @@ def publish_article(client: WeChatClient, config, meta: dict,
     body_md = meta.get("body_md", "")
     # Relative paths (../../media/…) → absolute for _resolve_to_file
     body_md = _absolutize_body_md(body_md)
+    # WeChat readers cannot access this app's /media paths. Preserve a useful
+    # "查看原视频" link by pointing local videos back to the source article.
+    body_md = _replace_local_video_urls(body_md, meta.get("source_url"))
     # Themed, inline-styled HTML (spider-media style) for a polished 图文.
     html = render_styled_html(body_md, platform="wechat", theme=theme)
 

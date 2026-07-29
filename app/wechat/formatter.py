@@ -19,7 +19,8 @@ import html as _html
 import re
 
 from app.wechat.html import (
-    _IMG_RE, _LINK_RE, _BOLD_RE, _ITALIC_RE, _CODE_RE, _VIDEO_PLACEHOLDER_RE)
+    _IMG_RE, _LINK_RE, _BOLD_RE, _ITALIC_RE, _CODE_RE,
+    _VIDEO_PLACEHOLDER_RE, _video_url_from_line)
 
 # ── theme parameters ────────────────────────────────────────────────────────
 # Each theme => visual knobs; styles are generated from these so tweaks
@@ -576,6 +577,7 @@ def _render_blocks(lines: list[str], st: dict, params: dict,
     list_type: str | None = None
     ol_count = 0
     i = 0
+    seen_video_urls: set[str] = set()
     p_style = st["p"]
     if align:
         p_style = f"{p_style}text-align:{align};"
@@ -687,9 +689,16 @@ def _render_blocks(lines: list[str], st: dict, params: dict,
                        f'<code style="{st["code_block"]}">{body}</code></pre>')
             continue
 
-        if stripped.startswith("<iframe") or stripped.startswith("[▶"):
+        video_url = _video_url_from_line(stripped)
+        if video_url is not None:
             flush_para()
             flush_list()
+            if video_url and video_url not in seen_video_urls:
+                safe_url = _html.escape(video_url, quote=True)
+                out.append(
+                    f'<p style="{p_style}"><a href="{safe_url}" '
+                    f'style="{st["a"]}">▶ 查看原视频</a></p>')
+                seen_video_urls.add(video_url)
             continue
 
         m = re.match(r'^(#{1,6})\s+(.*)$', stripped)

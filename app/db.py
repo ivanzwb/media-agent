@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS articles (
     published_at TEXT,
     fetched_at TEXT NOT NULL,
     archive_path TEXT,
+    has_video INTEGER,
     fingerprint TEXT NOT NULL UNIQUE,
     status TEXT NOT NULL DEFAULT 'archived'
 );
@@ -101,6 +102,13 @@ def init_db(conn: sqlite3.Connection) -> None:
             "ALTER TABLE drafts ADD COLUMN origin TEXT NOT NULL DEFAULT 'rewrite'")
     except sqlite3.OperationalError:
         pass  # column already exists
+    # Migrate: cache whether an archived article contains video. Keep existing
+    # rows NULL so the Store can lazily inspect their front-matter once.
+    article_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(articles)").fetchall()
+    }
+    if "has_video" not in article_columns:
+        conn.execute("ALTER TABLE articles ADD COLUMN has_video INTEGER")
     conn.execute("""CREATE TABLE IF NOT EXISTS draft_articles (
         draft_id INTEGER NOT NULL,
         article_id INTEGER NOT NULL,

@@ -12,7 +12,7 @@ from app.sources.date_parser import parse_date
 _VIDEO_HINTS = (
     "youtube.com/embed", "youtube-nocookie.com", "youtu.be",
     "player.vimeo.com", "vimeo.com/video", "bilibili.com", "player.bilibili",
-    "youku.com", "dailymotion.com/embed", "/embed/", "wistia",
+    "youku.com", "dailymotion.com/embed", "wistia",
     "brightcove", "ixigua.com", "v.qq.com",
 )
 

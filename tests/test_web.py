@@ -74,6 +74,39 @@ def test_archive_lists_and_filters(tmp_path):
     assert "GPT-5 breakthrough" in titles2
 
 
+def test_archive_marks_articles_with_video(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    article = store.save_article(Article(
+        title="Video report", content_md="# Body\n[[VIDEO:0]]",
+        url="https://x.com/video", source_name="VideoSource",
+        source_type="scrape", published_at=None, images=[],
+        raw_summary=None, fetched_at=datetime.now(timezone.utc),
+        topic="AI", videos=["https://video.example/embed/1"]))
+    map_article = store.save_article(Article(
+        title="Map report",
+        content_md='<iframe src="https://maps.example/embed/1"></iframe>',
+        url="https://x.com/map", source_name="MapSource",
+        source_type="scrape", published_at=None, images=[],
+        raw_summary=None, fetched_at=datetime.now(timezone.utc),
+        topic="AI", videos=[]))
+
+    # Simulate a legacy row created before has_video was persisted. The first
+    # archive request should inspect front-matter and cache the result.
+    store.conn.execute(
+        "UPDATE articles SET has_video=NULL WHERE id IN (?, ?)",
+        (article.id, map_article.id))
+    store.conn.commit()
+
+    data = client.get("/api/archive").json()
+    rows = [a for group in data["groups"] for a in group["articles"]]
+    item = next(a for a in rows if a["id"] == article.id)
+    assert item["has_video"] is True
+    map_item = next(a for a in rows if a["id"] == map_article.id)
+    assert map_item["has_video"] is False
+    cached = store.get_article(article.id)
+    assert cached["has_video"] == 1
+
+
 def test_publish_wechat_requires_credentials(tmp_path):
     # No WeChat AppID/AppSecret configured -> 400 with a helpful message.
     client, store, _ = make_client(tmp_path)
@@ -90,6 +123,12 @@ def test_publish_wechat_article_happy_path(tmp_path, monkeypatch):
     _, draft = seed(store)
     store.set_setting("wechat_appid", "wx123")
     store.set_setting("wechat_appsecret", "secret")
+    localized = {}
+
+    def fake_localize(article, config, **kwargs):
+        localized.update(kwargs)
+
+    monkeypatch.setattr("app.web.server.localize_article", fake_localize)
 
     class FakeClient:
         def __init__(self, *a, **k):
@@ -115,6 +154,8 @@ def test_publish_wechat_article_happy_path(tmp_path, monkeypatch):
         time.sleep(0.01)
     assert status["ok"] is True
     assert status["result"]["draft_media_id"] == "DRAFT1"
+    assert localized["download_images"] is True
+    assert localized["download_videos"] is False
 
 
 def test_publish_wechat_waits_for_terminal_failure(tmp_path, monkeypatch):

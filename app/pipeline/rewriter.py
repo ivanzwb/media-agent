@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import html
 import json
 import re
+from urllib.parse import urlsplit
 
 from app.llm.base import LLMProvider, Message
 from app.models import Article, Draft
@@ -90,6 +92,8 @@ REWRITE_INSTRUCTION = (
     "在改写时，**保留这些 `![](url)` 在原文中出现的位置附近**，不要全部移到文末。\n"
     "- 保留最相关的 **2-4 张** 图片，每张插在与内容最相关的段落之间\n"
     "- 如果有原文视频（<iframe>），也必须在相关内容附近插入 `[[VID:0]]`，不要堆在开头或结尾\n"
+    "- **禁止用 `![](url)` 表示视频**；Markdown 图片语法只用于图片，"
+    "视频必须使用对应的 `[[VID:N]]` 占位符\n"
     "- 每张图/每个视频要与附近文字内容相关\n"
     "- 如果某张图/视频跟内容不相关就删掉，不要硬塞\n"
     "- 如果一个 `![](url)` 已经在正文中合适的位置，就保留它\n\n"
@@ -114,7 +118,10 @@ CHECK_INSTRUCTION = (
 
 _MAX_IMG = 12
 _MAX_VID = 8
-_PLACEHOLDER_RE = re.compile(r"\[{1,2}\s*(IMG|VID)\s*:\s*(\d+)\s*\]{1,2}", re.I)
+_PLACEHOLDER_RE = re.compile(
+    r"\[{1,2}\s*(IMG|VID|VIDEO)\s*:\s*(\d+)\s*\]{1,2}", re.I)
+_MD_IMAGE_RE = re.compile(
+    r"!\[(?P<alt>[^\]]*)\]\((?P<url>[^)\s]+)(?:\s+[^)]*)?\)")
 
 
 def _unique(items: list[str]) -> list[str]:
@@ -147,9 +154,18 @@ def _relativize_media(url: str) -> str:
 
 
 def _video_embed(url: str) -> str:
-    return (f'<iframe src="{url}" width="100%" height="420" '
-            'frameborder="0" allowfullscreen></iframe>\n'
-            f'[▶ 视频链接]({url})')
+    url = (url or "").strip()
+    if any(ord(char) < 32 for char in url):
+        return ""
+    parsed = urlsplit(url)
+    is_remote = parsed.scheme in ("http", "https") and bool(parsed.netloc)
+    is_local = url.startswith(("/media/", "/videos/", "../../media/",
+                               "../../videos/"))
+    if not (is_remote or is_local):
+        return ""
+    safe_url = html.escape(url, quote=True)
+    return (f'<iframe src="{safe_url}" width="100%" height="420" '
+            'frameborder="0" allowfullscreen></iframe>')
 
 
 def _build_manifest(images: list[str], videos: list[str]):
@@ -196,7 +212,8 @@ def _apply_placeholders(body: str, media_map: dict[str, tuple[str, str]]) -> str
     Unknown or leftover placeholders are removed.
     """
     def repl(m: re.Match) -> str:
-        tok = f"{m.group(1).upper()}{m.group(2)}"
+        kind = m.group(1).upper()
+        tok = f"{'VID' if kind == 'VIDEO' else kind}{m.group(2)}"
         item = media_map.get(tok)
         if not item:
             return ""
@@ -206,6 +223,40 @@ def _apply_placeholders(body: str, media_map: dict[str, tuple[str, str]]) -> str
         return f"\n\n{_video_embed(url)}\n\n"
 
     return _PLACEHOLDER_RE.sub(repl, body)
+
+
+def _normalize_video_markdown(body: str, videos: list[str]) -> str:
+    """Turn image-style Markdown for known videos into playable embeds.
+
+    LLMs occasionally emit ``![](clip.mp4)`` even though the prompt requests a
+    video placeholder.  Keeping that syntax produces a broken image and also
+    fools media de-duplication because the URL is already present.
+    """
+    known: set[str] = set()
+    for url in _unique(videos or []):
+        known.add(url)
+        known.add(_relativize_media(url))
+
+    def repl(match: re.Match) -> str:
+        url = match.group("url")
+        if url not in known:
+            return match.group(0)
+        return f"\n\n{_video_embed(url)}\n\n"
+
+    return _MD_IMAGE_RE.sub(repl, body)
+
+
+def _video_is_embedded(body: str, url: str) -> bool:
+    """Return whether *url* already appears in a real video/embed element."""
+    for candidate in (url, _relativize_media(url)):
+        for rendered in {candidate, html.escape(candidate, quote=True)}:
+            escaped = re.escape(rendered)
+            if re.search(
+                rf'<(?:iframe|video)\b[^>]*\bsrc=["\']{escaped}["\']',
+                body, re.I,
+            ):
+                return True
+    return False
 
 
 def _media_block(images: list[str], videos: list[str], existing: str) -> str:
@@ -218,7 +269,7 @@ def _media_block(images: list[str], videos: list[str], existing: str) -> str:
     imgs = [u for u in _unique(images or [])
             if u not in existing and _relativize_media(u) not in existing][:_MAX_IMG]
     vids = [u for u in _unique(videos or [])
-            if u not in existing and _relativize_media(u) not in existing][:_MAX_VID]
+            if not _video_is_embedded(existing, u)][:_MAX_VID]
     parts: list[str] = []
     if imgs:
         parts.extend(f"\n\n![]({_relativize_media(u)})" for u in imgs)
@@ -712,6 +763,10 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
 
     # Replace any stray [[IMG:N]] / [[VID:N]] tokens the LLM may have output
     body_md = _apply_placeholders(body_md, media_map)
+
+    # Repair a common LLM mistake: Markdown image syntax cannot represent
+    # videos. Convert known video URLs to iframe + fallback-link embeds.
+    body_md = _normalize_video_markdown(body_md, videos)
 
     # Distribute images the LLM didn't place inline across section boundaries
     # (instead of dumping them all at the end).

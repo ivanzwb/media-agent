@@ -402,6 +402,38 @@ export function remarkAppDirectives() {
     }
     node.children = next;
   };
+  const normalizeVideoUrl = (url: string) => url
+    .replace(/&amp;/gi, "&").replace(/&#0*38;/gi, "&");
+  const embeddedVideoUrls = new Set<string>();
+  const collectVideoEmbeds = (node: any) => {
+    if (!node) return;
+    if (node.type === "html" && typeof node.value === "string") {
+      for (const match of node.value.matchAll(
+        /<(?:iframe|video)\b[^>]*\bsrc=["']([^"']+)["']/gi)) {
+        embeddedVideoUrls.add(normalizeVideoUrl(match[1]));
+      }
+    }
+    if (Array.isArray(node.children)) node.children.forEach(collectVideoEmbeds);
+  };
+  const stripVideoFallbackLinks = (node: any) => {
+    if (!node || !Array.isArray(node.children)) return;
+    const next: any[] = [];
+    for (const child of node.children) {
+      stripVideoFallbackLinks(child);
+      if (child.type === "link"
+          && _nodeText(child).trim() === "▶ 视频链接"
+          && embeddedVideoUrls.has(
+            normalizeVideoUrl(String(child.url || "")))) {
+        continue;
+      }
+      if (child.type === "paragraph"
+          && Array.isArray(child.children) && child.children.length === 0) {
+        continue;
+      }
+      next.push(child);
+    }
+    node.children = next;
+  };
   return (tree: any) => {
     if (Array.isArray(tree.children)) {
       const next: any[] = [];
@@ -417,6 +449,11 @@ export function remarkAppDirectives() {
       }
       tree.children = next;
     }
+    // Legacy drafts contain an iframe followed by a redundant
+    // `[▶ 视频链接](url)`. Remove that fallback at the Markdown AST layer so
+    // it cannot leak through differences in renderer child-node structure.
+    collectVideoEmbeds(tree);
+    stripVideoFallbackLinks(tree);
     inlineVisit(tree);
   };
 }
@@ -427,19 +464,38 @@ const _DIRECT_VIDEO_RE = /\.(mp4|webm|ogg|ogv|mov|m4v)(?:[?#]|$)/i;
 function _isDirectVideo(url: string): boolean {
   return !!url && _DIRECT_VIDEO_RE.test(url);
 }
+function _isSafePreviewMediaUrl(url: string): boolean {
+  if (["/", "../", "./"].some((prefix) => url.startsWith(prefix))) return true;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+function _isLocalPreviewMediaUrl(url: string): boolean {
+  return ["/", "../", "./"].some((prefix) => url.startsWith(prefix));
+}
+function _isSafeInlineImage(url: string): boolean {
+  return _isSafePreviewMediaUrl(url)
+    || /^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(url);
+}
 const _VIDEO_STYLE: CSSProperties = {
   maxWidth: "100%", borderRadius: 8, display: "block", margin: "12px 0",
 };
 
 // Extra react-markdown component overrides used by the live preview.
 export const previewComponents = {
-  // The rewriter emits each video as an <iframe> plus a redundant
-  // `[▶ 视频链接](url)` fallback link. The iframe already renders the video,
-  // so hide the trailing link.
-  a: ({ children, ...props }: any) => {
-    const text = String(Array.isArray(children) ? children.join("") : children ?? "");
-    if (text.trim().startsWith("▶")) return null;
-    return <a {...props}>{children}</a>;
+  // Backward-compatible repair for drafts where a model emitted
+  // `![](clip.mp4)`. Markdown has no video-image syntax, so render direct
+  // video files as players instead of broken <img> elements.
+  img: ({ src, alt, ...props }: any) => {
+    const url = String(src || "");
+    if (!_isSafeInlineImage(url)) return null;
+    if (_isDirectVideo(url) && _isSafePreviewMediaUrl(url)) {
+      return <video controls preload="metadata" src={url} style={_VIDEO_STYLE} />;
+    }
+    return <img src={url} alt={alt || ""} {...props} />;
   },
   // A raw <iframe> whose src is a *direct* video file would make the browser
   // download the whole file instead of showing it. Render such sources as an
@@ -447,15 +503,21 @@ export const previewComponents = {
   // embed pages (YouTube/Bilibili/…) keep the iframe so they still play.
   iframe: ({ src, ...props }: any) => {
     const url = String(src || "");
+    if (!_isSafePreviewMediaUrl(url)) return null;
     if (_isDirectVideo(url)) {
       return <video controls preload="metadata" src={url} style={_VIDEO_STYLE} />;
     }
-    return <iframe src={url} {...props} />;
+    if (_isLocalPreviewMediaUrl(url)) return null;
+    return <iframe {...props} src={url}
+      sandbox="allow-scripts allow-same-origin allow-presentation"
+      loading="lazy" referrerPolicy="no-referrer" />;
   },
   // Any <video> in the body: force controls + preload=metadata so it displays
   // normally and never eagerly downloads the whole file.
   video: ({ src, children }: any) => (
-    <video controls preload="metadata" src={src ? String(src) : undefined} style={_VIDEO_STYLE}>
+    <video controls preload="metadata"
+      src={src && _isSafePreviewMediaUrl(String(src)) ? String(src) : undefined}
+      style={_VIDEO_STYLE}>
       {children}
     </video>
   ),

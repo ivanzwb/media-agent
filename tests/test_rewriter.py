@@ -8,7 +8,7 @@ from app.pipeline.rewriter import (
     _extract_json, _strip_code_fences, _extract_code_fenced_json,
     _repair_json_control_chars, _media_block, _relativize_media,
     _build_manifest, _apply_placeholders, _interleave_missing_images,
-    _extract_json_field, _extract_json_fallback,
+    _extract_json_field, _extract_json_fallback, _normalize_video_markdown,
 )
 
 
@@ -132,11 +132,11 @@ def test_rewrite_seo_tags_appear_before_promotion():
         seo_tags_enabled=True,
     )
     user_msg = provider.calls[0][1].content
-    seo_idx = user_msg.index("4. **SEO 标签**")
+    seo_idx = user_msg.index("4. **标签**")
     promotion_idx = user_msg.index("5. **推广部分**")
     assert seo_idx < promotion_idx
     assert "5-8 个具体关键词" in user_msg
-    assert "**SEO 标签**：关键词1、关键词2、关键词3" in user_msg
+    assert "**标签**：#关键词1 #关键词2 #关键词3" in user_msg
 
 
 def test_rewrite_seo_tags_can_be_disabled():
@@ -164,7 +164,7 @@ def test_rewrite_seo_tags_work_with_legacy_custom_style():
     check = json.dumps({"flagged_claims": []})
     provider = RecordingProvider([resp, check])
     rewrite(sample_article(), provider, style=style, seo_tags_enabled=True)
-    assert "SEO 标签" in provider.calls[0][1].content
+    assert "**标签**" in provider.calls[0][1].content
 
 
 def test_rewrite_promotion_footer_body_md_flow():
@@ -273,6 +273,14 @@ def test_inline_content_handles_videos():
     assert '<iframe' in result
     assert 'youtube.com/embed/xyz' in result
     assert result.index("text before") < result.index("<iframe") < result.index("text after")
+
+
+def test_normalize_video_markdown_converts_known_video_to_embed():
+    body = "前文\n\n![错误的视频图片](../../media/a/clip.mp4)\n\n后文"
+    result = _normalize_video_markdown(body, ["/media/a/clip.mp4"])
+    assert "![错误的视频图片]" not in result
+    assert '<iframe src="../../media/a/clip.mp4"' in result
+    assert "[▶ 视频链接]" not in result
 
 
 def test_rewrite_skips_media_already_in_body():
@@ -682,6 +690,28 @@ def test_media_block_dedupes_duplicate_images():
     assert result.count("../../media/a/pic1.png") == 1
 
 
+def test_media_block_does_not_treat_video_image_markdown_as_embed():
+    video = "/media/a/clip.mp4"
+    existing = "错误格式：![](../../media/a/clip.mp4)"
+    result = _media_block([], [video], existing)
+    assert '<iframe src="../../media/a/clip.mp4"' in result
+
+
+def test_video_embed_rejects_dangerous_urls_and_escapes_attributes():
+    assert _video_embed("javascript:alert(1)") == ""
+    embedded = _video_embed("https://video.example/watch?a=1&b=2")
+    assert 'src="https://video.example/watch?a=1&amp;b=2"' in embedded
+    assert _media_block(
+        [], ["https://video.example/watch?a=1&b=2"], embedded) == ""
+
+
+def test_media_block_does_not_treat_fallback_link_as_embed():
+    video = "/media/a/clip.mp4"
+    existing = "[▶ 视频链接](../../media/a/clip.mp4)"
+    result = _media_block([], [video], existing)
+    assert '<iframe src="../../media/a/clip.mp4"' in result
+
+
 # ═══════════════════════════════════════════════════════════════════
 # _interleave_missing_images  — position unused images before section
 # headings instead of dumping at the end
@@ -852,6 +882,13 @@ def test_apply_placeholders_replaces_vid_tokens():
     assert "[[VID:0]]" not in result
     assert "youtube.com/embed/abc" in result
     assert '<iframe' in result
+
+
+def test_apply_placeholders_accepts_extractor_video_tokens():
+    media_map = {"VID0": ("vid", "https://youtube.com/embed/abc")}
+    result = _apply_placeholders("正文\n[[VIDEO:0]]", media_map)
+    assert "[[VIDEO:0]]" not in result
+    assert '<iframe src="https://youtube.com/embed/abc"' in result
 
 
 def test_apply_placeholders_removes_unknown_tokens():

@@ -14,6 +14,19 @@ from app.models import Article, Draft, ArticleStatus, slugify as _slug
 
 _MD_IMG_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
 _HTML_IMG_RE = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.I)
+_VIDEO_PLACEHOLDER_RE = re.compile(r'\[\[(?:VID|VIDEO):\d+\]\]', re.I)
+
+
+def _has_video(content_md: str, videos: list[str] | None = None) -> bool:
+    if videos:
+        return True
+    content_md = content_md or ""
+    if _VIDEO_PLACEHOLDER_RE.search(content_md):
+        return True
+    # Use the extractor's provider/extension-aware logic so maps, ads and other
+    # non-video iframes do not receive a permanent video badge.
+    from app.sources.extractor import _videos_from_html
+    return bool(_videos_from_html(content_md))
 
 
 def _cover_is_tiny(cover_name: str, images_dir: Path) -> bool:
@@ -190,11 +203,15 @@ class Store:
         cur = self.conn.execute(
             """INSERT INTO articles
             (title, url, source_name, source_type, topic, published_at,
-             fetched_at, archive_path, fingerprint, status)
-            VALUES (?,?,?,?,?,?,?,?,?,?)""",
+             fetched_at, archive_path, has_video, fingerprint, status)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (article.title, article.url, article.source_name, article.source_type,
              article.topic, _iso(article.published_at), _iso(article.fetched_at),
-             article.archive_path, article.fingerprint(), ArticleStatus.ARCHIVED),
+             article.archive_path,
+             1 if _has_video(
+                 article.content_md, getattr(article, "videos", []) or [])
+             else 0,
+             article.fingerprint(), ArticleStatus.ARCHIVED),
         )
         self.conn.commit()
         article.id = cur.lastrowid
@@ -311,6 +328,26 @@ class Store:
                 post["score"] = score
                 abs_path.write_text(frontmatter.dumps(post), encoding="utf-8")
 
+    def article_video_flags(self, rows) -> dict[int, bool]:
+        """Return video flags, lazily backfilling legacy rows in one commit."""
+        flags: dict[int, bool] = {}
+        updates: list[tuple[int, int]] = []
+        for row in rows:
+            cached = row["has_video"] if "has_video" in row.keys() else None
+            if cached is None:
+                meta = self.read_article_body(row["id"])
+                has_video = _has_video(
+                    meta.get("content_md", ""), meta.get("videos") or [])
+                updates.append((1 if has_video else 0, row["id"]))
+            else:
+                has_video = bool(cached)
+            flags[row["id"]] = has_video
+        if updates:
+            self.conn.executemany(
+                "UPDATE articles SET has_video=? WHERE id=?", updates)
+            self.conn.commit()
+        return flags
+
     # ----- read/update helpers for the web UI -----
 
     def list_sources(self):
@@ -382,6 +419,11 @@ class Store:
                 "videos": videos,
             })
         abs_path.write_text(frontmatter.dumps(post), encoding="utf-8")
+        self.conn.execute(
+            "UPDATE articles SET has_video=? WHERE id=?",
+            (1 if _has_video(content_md, videos) else 0, article_id),
+        )
+        self.conn.commit()
 
     def drafts_by_article(self) -> dict[int, int]:
         """Map article_id -> a draft id."""

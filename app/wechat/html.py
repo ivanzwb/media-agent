@@ -2,20 +2,26 @@
 
 WeChat 图文 ``content`` is an HTML fragment. We only need the subset the
 rewriter emits: headings, paragraphs, bold/italic/code/links, images, lists,
-blockquotes, hr. Video placeholders ([[VIDEO:N]], iframes, [▶ ...]) are
-dropped from 图文 (video is handled separately).
+blockquotes, hr. WeChat 图文 cannot retain external video players, so video
+embeds are converted to a visible link instead of being silently discarded.
 """
 from __future__ import annotations
 
 import html as _html
 import re
+from urllib.parse import urlsplit
 
 _IMG_RE = re.compile(r'!\[(?P<alt>[^\]]*)\]\((?P<url>[^)\s]+)[^)]*\)')
 _LINK_RE = re.compile(r'\[(?P<text>[^\]]+)\]\((?P<url>[^)\s]+)[^)]*\)')
 _BOLD_RE = re.compile(r'\*\*(?P<t>.+?)\*\*')
 _ITALIC_RE = re.compile(r'(?<!\*)\*(?P<t>[^*]+?)\*(?!\*)')
 _CODE_RE = re.compile(r'`(?P<t>[^`]+?)`')
-_VIDEO_PLACEHOLDER_RE = re.compile(r'\[\[VIDEO:\d+\]\]')
+_VIDEO_PLACEHOLDER_RE = re.compile(r'\[\[(?:VID|VIDEO):\d+\]\]', re.I)
+_VIDEO_TAG_SRC_RE = re.compile(
+    r'^\s*<(?:iframe|video)\b[^>]*\bsrc=["\']([^"\']+)["\'][^>]*>'
+    r'(?:\s*</(?:iframe|video)>)?\s*$', re.I)
+_DIRECT_VIDEO_RE = re.compile(
+    r'\.(?:mp4|webm|ogg|ogv|mov|m4v)(?:[?#]|$)', re.I)
 
 _IMG_SRC_RE = re.compile(r'<img\b[^>]*\bsrc="([^"]+)"')
 # Full <img …> tag (any attr order, optional self-close) so we can drop/replace
@@ -23,6 +29,35 @@ _IMG_SRC_RE = re.compile(r'<img\b[^>]*\bsrc="([^"]+)"')
 # (alt/style/…) leaking as visible text when an image is dropped.
 _IMG_TAG_RE = re.compile(r'<img\b[^>]*?/?>', re.I)
 _SRC_ATTR_RE = re.compile(r'\bsrc="([^"]*)"', re.I)
+
+
+def _video_url_from_line(line: str) -> str | None:
+    """Extract a video URL from an embed, fallback link, or bad image syntax."""
+    url: str | None = None
+    tag = _VIDEO_TAG_SRC_RE.fullmatch(line)
+    if tag:
+        url = tag.group(1)
+    elif line.startswith("[▶ 视频链接]"):
+        link = _LINK_RE.fullmatch(line)
+        url = link.group("url") if link else None
+    else:
+        image = _IMG_RE.fullmatch(line)
+        if image and _DIRECT_VIDEO_RE.search(image.group("url")):
+            url = image.group("url")
+    if url is None:
+        return None
+    url = _html.unescape(url).strip()
+    if any(ord(char) < 32 for char in url):
+        return ""
+    parsed = urlsplit(url)
+    # Empty string means "recognized video line, but not a publishable URL".
+    # Callers drop it instead of emitting local or dangerous links.
+    return url if parsed.scheme in ("http", "https") and parsed.netloc else ""
+
+
+def _video_link_html(url: str) -> str:
+    safe_url = _html.escape(url, quote=True)
+    return f'<p><a href="{safe_url}">▶ 查看原视频</a></p>'
 
 
 def _inline(text: str) -> str:
@@ -64,6 +99,7 @@ def markdown_to_html(md: str) -> str:
     out: list[str] = []
     para: list[str] = []
     list_type: str | None = None  # 'ul' | 'ol'
+    seen_video_urls: set[str] = set()
 
     def flush_para():
         if para:
@@ -136,10 +172,15 @@ def markdown_to_html(md: str) -> str:
                 out.append("\n".join(parts))
                 continue
 
-        # skip leftover video embeds
-        if stripped.startswith("<iframe") or stripped.startswith("[▶"):
+        # WeChat strips external players. Preserve one clickable link per
+        # video, and collapse the iframe + fallback-link pair into one row.
+        video_url = _video_url_from_line(stripped)
+        if video_url is not None:
             flush_para()
             flush_list()
+            if video_url and video_url not in seen_video_urls:
+                out.append(_video_link_html(video_url))
+                seen_video_urls.add(video_url)
             continue
 
         m = re.match(r'^(#{1,6})\s+(.*)$', stripped)

@@ -504,6 +504,7 @@ def create_app(config: Config | None = None,
         from collections import OrderedDict
         store = get_store()
         articles = store.list_articles(limit=200, topic=topic, source=source)
+        video_flags = store.article_video_flags(articles)
         by_date: dict[str, list] = OrderedDict()
         for a in articles:
             dt = a["published_at"] or a["fetched_at"]
@@ -516,6 +517,7 @@ def create_app(config: Config | None = None,
                 "id": a["id"], "title": a["title"], "url": a["url"],
                 "topic": a["topic"], "source_name": a["source_name"],
                 "published_at": a["published_at"], "fetched_at": a["fetched_at"],
+                "has_video": video_flags.get(a["id"], False),
             } for a in day]})
         return {
             "groups": groups,
@@ -3567,8 +3569,15 @@ def create_app(config: Config | None = None,
 
     def _localize_before_publish(draft_id: int, meta: dict, run_config,
                                  store) -> dict:
-        """Download the draft's remote images/videos locally and rewrite the
-        body to /media/ paths, persisting the result, then return fresh meta.
+        """Download remote images needed by the platform before publishing.
+
+        Body videos are deliberately not downloaded here: WeChat 图文 does not
+        accept external iframe players, and the renderer preserves them as
+        source links. Downloading full videos only to discard their embeds made
+        draft publishing unnecessarily slow.
+
+        Rewrites image URLs to /media/ paths, persists the result, and returns
+        fresh metadata.
         Best-effort: on any failure the original meta is returned so the push
         can still proceed."""
         content = meta.get("body_md", "") or ""
@@ -3585,7 +3594,7 @@ def create_app(config: Config | None = None,
                 videos=list(content_videos(content)))
             localize_article(art, run_config,
                              progress=lambda m: logger.info("[publish-localize] %s", m),
-                             download_images=True, download_videos=True,
+                             download_images=True, download_videos=False,
                              relativize=False)
             if art.content_md and art.content_md != content:
                 store.update_draft_body(

@@ -13,7 +13,8 @@ from app.wechat import publish as P
 def test_markdown_to_html_covers_common_blocks():
     md = ("# T\n\nIntro **b** *i* `c`.\n\n## S\n\n- a\n- b\n\n"
           "![alt](/images/p.png)\n\n> q\n\n[[VIDEO:0]]\n"
-          '<iframe src="x"></iframe>\n')
+          '<iframe src="https://video.example/watch/1"></iframe>\n'
+          "[▶ 视频链接](https://video.example/watch/1)\n")
     out = H.markdown_to_html(md)
     assert "<h1>T</h1>" in out and "<h2>S</h2>" in out
     assert "<strong>b</strong>" in out and "<em>i</em>" in out
@@ -22,6 +23,39 @@ def test_markdown_to_html_covers_common_blocks():
     assert '<img src="/images/p.png"' in out
     assert "<blockquote>q</blockquote>" in out
     assert "[[VIDEO" not in out and "<iframe" not in out
+    assert out.count("▶ 查看原视频") == 1
+    assert 'href="https://video.example/watch/1"' in out
+
+
+def test_markdown_local_video_image_is_not_published_as_broken_link():
+    out = H.markdown_to_html("![](/media/a/clip.mp4)")
+    assert "<img" not in out
+    assert "/media/a/clip.mp4" not in out
+    assert "查看原视频" not in out
+
+
+def test_local_video_uses_public_source_article_for_wechat():
+    md = '<iframe src="../../media/a/clip.mp4"></iframe>'
+    result = P._replace_local_video_urls(md, "https://example.com/article/1")
+    out = H.markdown_to_html(result)
+    assert 'href="https://example.com/article/1"' in out
+    assert "../../media/" not in out
+    remote = '<iframe src="https://cdn.example/media/clip.mp4"></iframe>'
+    assert P._replace_local_video_urls(
+        remote, "https://example.com/article/1") == remote
+
+
+def test_wechat_drops_dangerous_video_url_and_keeps_adjacent_text():
+    dangerous = H.markdown_to_html(
+        '<iframe src="javascript:alert(1)"></iframe>')
+    assert "javascript:" not in dangerous
+    mixed = H.markdown_to_html(
+        'Caption <iframe src="https://video.example/watch/1"></iframe>')
+    assert "Caption" in mixed
+    legitimate = H.markdown_to_html(
+        "[▶ 播放介绍](https://example.com/intro)")
+    assert "播放介绍" in legitimate
+    assert 'href="https://example.com/intro"' in legitimate
 
 
 def test_image_src_helpers():

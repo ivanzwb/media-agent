@@ -12,6 +12,7 @@ const { Title, Text } = Typography;
 interface Article {
   id: number; title: string; url: string; topic: string;
   source_name: string; published_at: string | null; fetched_at: string;
+  has_video: boolean;
 }
 interface Group { date: string; articles: Article[]; }
 interface ArchiveData { groups: Group[]; topics: string[]; draft_map: Record<string, number>; }
@@ -103,13 +104,24 @@ export default function Archive() {
     message.loading({ content: "重新抓取中…", key: `rf${id}` });
     try {
       const r = await postForm<{ ok: boolean; error?: string; images?: number; videos?: number }>(`/archive/${id}/refetch`);
-      if (r.ok) message.success({ content: `抓取成功（图 ${r.images} · 视频 ${r.videos}）`, key: `rf${id}` });
+      if (r.ok) {
+        message.success({ content: `抓取成功（图 ${r.images} · 视频 ${r.videos}）`, key: `rf${id}` });
+        await Promise.all([
+          qc.invalidateQueries({ queryKey: ["archive"] }),
+          qc.invalidateQueries({ queryKey: ["article-view", id] }),
+        ]);
+      }
       else message.error({ content: r.error || "抓取失败", key: `rf${id}` });
     } catch { message.error({ content: "请求失败", key: `rf${id}` }); }
   }
 
   const columns = [
-    { title: "标题", render: (_: any, a: Article) => <a href={a.url} target="_blank" rel="noopener">{a.title}</a> },
+    { title: "标题", render: (_: any, a: Article) => (
+      <Space size={6}>
+        <a href={a.url} target="_blank" rel="noopener">{a.title}</a>
+        {a.has_video && <Tag color="purple">🎬 视频</Tag>}
+      </Space>
+    ) },
     { title: "主题", dataIndex: "topic", width: 110 },
     { title: "来源", dataIndex: "source_name", width: 140 },
     { title: "发布时间", width: 110, render: (_: any, a: Article) => a.published_at ? a.published_at.slice(0, 10) : <Text type="secondary">—</Text> },
