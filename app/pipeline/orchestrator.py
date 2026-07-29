@@ -30,7 +30,9 @@ logger = logging.getLogger(__name__)
 
 def _fetch_source(src, proxy: str | None = None) -> list[Article]:
     if src.type == "rss":
-        return fetch_feed(src.url, src.name, proxy=proxy)
+        return fetch_feed(src.url, src.name,
+                          render_js=getattr(src, "render_js", True),
+                          proxy=proxy)
     if src.type == "scrape":
         if src.mode == "list":
             return scrape_list(

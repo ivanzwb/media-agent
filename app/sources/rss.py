@@ -15,6 +15,7 @@ from urllib.parse import urljoin
 from app.models import Article
 from app.sources.date_parser import parse_date
 from app.sources.extractor import _images_from_html, _videos_from_html
+from app.sources.scraper import render_with_playwright
 
 _UA_STR = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
            "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -27,8 +28,6 @@ _ROTATED_UAS = [
     "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 Edg/124.0",
 ]
-
-_RSS_RETRIES = 3  # total attempts = 4 (first + 3 retries)
 
 
 def _to_dt(entry) -> datetime | None:
@@ -45,6 +44,7 @@ def _to_dt(entry) -> datetime | None:
 
 
 def parse_feed(xml: str, source_name: str, enrich: bool = True,
+               render_js: bool = True,
                proxy: str | None = None) -> list[Article]:
     """Parse an RSS/Atom feed and return a list of Articles.
 
@@ -55,8 +55,11 @@ def parse_feed(xml: str, source_name: str, enrich: bool = True,
     articles from feeds that only carry short summaries (e.g. NVIDIA
     Developer Blog) still get the full body.
 
+    When *render_js* is True, falls back to Playwright if the httpx request
+    for enrichment fails (e.g. blocked by Cloudflare).
+
     If *proxy* is set (e.g. ``http://127.0.0.1:7890``), all HTTP calls go
-    through that proxy — useful for bypassing Cloudflare/WAF or GFW blocks.
+    through that proxy — for bypassing Cloudflare/WAF or GFW blocks.
     """
     feed = feedparser.parse(xml)
     now = datetime.now(timezone.utc)
@@ -71,7 +74,8 @@ def parse_feed(xml: str, source_name: str, enrich: bool = True,
         # ── enrich: try to get full article from the original URL ──────
         if enrich and link:
             try:
-                full = _fetch_full_article(link, proxy=proxy)
+                full = _fetch_full_article(link, render_js=render_js,
+                                           proxy=proxy)
                 if full and len(full) > len(body_html) * 1.5:
                     body_html = full
             except Exception:
@@ -92,29 +96,73 @@ def parse_feed(xml: str, source_name: str, enrich: bool = True,
     return articles
 
 
-def _fetch_full_article(url: str, timeout: float = 15.0,
+def _fetch_url(url: str, timeout: float, render_js: bool,
+               proxy: str | None = None) -> str | None:
+    """Fetch a URL, trying httpx first; if that fails and *render_js* is
+    True, fall back to Playwright (if available).
+
+    Returns the response body as text, or None on failure.
+    """
+    # ① Try httpx with rotated User-Agents (4 attempts = 1 original + 3 retries).
+    last_exc: Exception | None = None
+    for attempt in range(4):
+        try:
+            ua = _ROTATED_UAS[attempt % len(_ROTATED_UAS)]
+            if proxy:
+                with httpx.Client(proxy=proxy, timeout=timeout,
+                                  follow_redirects=True) as client:
+                    resp = client.get(url, headers={"User-Agent": ua})
+            else:
+                resp = httpx.get(url, timeout=timeout,
+                                 follow_redirects=True,
+                                 headers={"User-Agent": ua})
+            resp.raise_for_status()
+            return resp.text
+        except (httpx.HTTPStatusError, httpx.TimeoutException,
+                httpx.ConnectError, httpx.NetworkError,
+                httpx.HTTPError, Exception) as exc:
+            last_exc = exc
+            # Permanent 4xx (except 429) — don't retry.
+            if isinstance(exc, httpx.HTTPStatusError):
+                resp = exc.response
+                if resp is not None and resp.status_code < 500 \
+                        and resp.status_code != 429:
+                    raise
+        if attempt < 3:
+            time.sleep(0.5 * (2 ** attempt))
+
+    # ② Playwright fallback (httpx failed + render_js requested).
+    if render_js and last_exc is not None:
+        pw_html = render_with_playwright(url, timeout, wait_for=3000)
+        if pw_html:
+            return pw_html
+
+    # httpx exhausted all retries and Playwright either wasn't requested or
+    # also failed — re-raise the original exception so callers can distinguish
+    # between "tried everything" and "no content" cases.
+    if last_exc is not None:
+        raise last_exc  # type: ignore[misc]
+    return None
+
+
+def _fetch_full_article(url: str, timeout: float = 30.0,
+                        render_js: bool = True,
                         proxy: str | None = None) -> str | None:
     """Download the web page at *url* and extract its main text content.
 
     Returns the extracted content as HTML (preserving structure) or None on
     failure.  Uses trafilatura (primary) with readability-lxml as fallback.
 
+    When *render_js* is True, falls back to Playwright if the httpx request
+    fails (e.g. blocked by Cloudflare).
+
     If *proxy* is set (e.g. ``http://127.0.0.1:7890``), all HTTP calls go
-    through that proxy — useful for bypassing Cloudflare/WAF or GFW blocks.
+    through that proxy — for bypassing Cloudflare/WAF or GFW blocks.
     """
     try:
-        if proxy:
-            with httpx.Client(proxy=proxy, timeout=timeout,
-                              follow_redirects=True) as client:
-                resp = client.get(url, headers={"User-Agent": _UA_STR})
-        else:
-            resp = httpx.get(url, timeout=timeout, follow_redirects=True,
-                             headers={"User-Agent": _UA_STR})
-        resp.raise_for_status()
-        html = resp.text
+        html = _fetch_url(url, timeout, render_js, proxy=proxy)
     except Exception:
         return None
-
     if not html:
         return None
 
@@ -145,13 +193,8 @@ def _fetch_full_article(url: str, timeout: float = 15.0,
     return None
 
 
-def _ua_header(attempt: int) -> dict[str, str]:
-    """Return a User-Agent header, rotating on retry to evade blocking."""
-    idx = attempt % len(_ROTATED_UAS)
-    return {"User-Agent": _ROTATED_UAS[idx]}
-
-
-def fetch_feed(url: str, source_name: str, timeout: float = 20.0,
+def fetch_feed(url: str, source_name: str, timeout: float = 30.0,
+               render_js: bool = False,
                proxy: str | None = None) -> list[Article]:
     """Fetch and parse an RSS/Atom feed, with retry+backoff on transient errors.
 
@@ -160,34 +203,15 @@ def fetch_feed(url: str, source_name: str, timeout: float = 20.0,
     (4xx other than 429) are raised immediately without retrying.
     User-Agent is rotated on each retry attempt.
 
+    When *render_js* is True, falls back to Playwright (if installed) when
+    httpx fails — useful for sites behind Cloudflare/WAF.
+
     If *proxy* is set (e.g. ``http://127.0.0.1:7890``), all HTTP calls go
-    through that proxy — useful for bypassing Cloudflare/WAF or GFW blocks.
+    through that proxy — for bypassing Cloudflare/WAF or GFW blocks.
     """
-    last_exc: Exception | None = None
-    for attempt in range(_RSS_RETRIES + 1):
-        try:
-            if proxy:
-                with httpx.Client(proxy=proxy, timeout=timeout,
-                                  follow_redirects=True) as client:
-                    resp = client.get(url, headers=_ua_header(attempt))
-            else:
-                resp = httpx.get(url, timeout=timeout, follow_redirects=True,
-                                 headers=_ua_header(attempt))
-            resp.raise_for_status()
-            return parse_feed(resp.text, source_name, proxy=proxy)
-        except httpx.HTTPStatusError as exc:
-            last_exc = exc
-            code = exc.response.status_code
-            # 4xx (except 429) are permanent — don't waste retries on them.
-            if code < 500 and code != 429:  # noqa: PLR2004
-                raise
-        except (httpx.TimeoutException, httpx.NetworkError, OSError) as exc:
-            last_exc = exc
-        except httpx.HTTPError as exc:
-            # Other HTTP-level errors (RemoteProtocolError, DecodingError, etc.)
-            last_exc = exc
-        if attempt < _RSS_RETRIES:
-            backoff = 0.5 * (2 ** attempt)  # 0.5s, 1s, 2s, …
-            time.sleep(backoff)
-    assert last_exc is not None
-    raise last_exc
+    xml = _fetch_url(url, timeout, render_js, proxy=proxy)
+    # _fetch_url raises on failure; xml is never None here (but guard for safety).
+    if xml is None:  # pragma: no cover
+        raise RuntimeError(
+            f"Failed to fetch feed: {url} after all retries and fallbacks")
+    return parse_feed(xml, source_name, render_js=render_js, proxy=proxy)

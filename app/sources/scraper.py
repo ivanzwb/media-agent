@@ -240,7 +240,7 @@ def crawl_site_links(base_url: str, *,
                      include_pattern: str | None = None,
                      exclude_pattern: str | None = None,
                      max_pages: int = 3, delay: float = 1.0,
-                     timeout: float = 20.0,
+                     timeout: float = 30.0,
                      proxy: str | None = None) -> list[str]:
     """Deep-crawl an entire site starting from ``base_url`` and return a
     deduped, normalized list of probable article URLs (multi-level).
@@ -285,7 +285,7 @@ def crawl_site_links(base_url: str, *,
     max_pages = max(1, max_pages)
     page_budget = max(max_pages * 10, 30)
     known_cap = max(page_budget * 50, 2000)
-    time_budget = min(max(page_budget * (max(delay, 0.0) + 3.0), 45.0), 240.0)
+    time_budget = min(max(page_budget * (max(delay, 0.0) + 3.0), 45.0), 360.0)
 
     cfg = use_config()
     cfg.set("DEFAULT", "SLEEP_TIME", str(max(delay, 0.0)))
@@ -330,17 +330,33 @@ def crawl_site_links(base_url: str, *,
     return out
 
 
-def _render_with_playwright(url: str, timeout: float) -> str | None:
-    """Render a JS-heavy page with Playwright if it's installed; else None.
+def render_with_playwright(url: str, timeout: float,
+                          wait_for: int = 3000) -> str | None:
+    """Render a JS-heavy page with Playwright if installed; else None.
+
+    Returns the rendered HTML, or None on failure / missing Playwright.
 
     Uses ``wait_until="load"`` (not ``"networkidle"``) because modern sites
     with analytics/tracking scripts rarely reach network-idle within a
     reasonable timeout.
+
+    Anti-detection:
+      * ``viewport`` set to a realistic desktop size.
+      * ``locale`` set to en-US so en-US sites don't redirect.
+      * ``--disable-blink-features=AutomationControlled`` hides
+        ``navigator.webdriver``.
+      * Realistic ``--window-size`` matching the viewport.
+
+    On Windows, Chrome 129+ "new" headless can flash a blank white window
+    while scraping.  The off-screen ``--window-position`` prevents the user
+    from seeing it (safe across chromium/chrome).
     """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         return None
+
+    VIEWPORT = {"width": 1280, "height": 720}
 
     def _do_launch(p, **kwargs):
         browser = p.chromium.launch(
@@ -350,14 +366,18 @@ def _render_with_playwright(url: str, timeout: float) -> str | None:
                 "--disable-gpu",
                 "--disable-dev-shm-usage",
                 "--disable-setuid-sandbox",
-                # Windows: Chrome 129+ "new" headless can flash a blank white
-                # window while scraping. Shove any stray window far off-screen
-                # so the user never sees it (safe across chromium/chrome).
+                "--disable-blink-features=AutomationControlled",
                 "--window-position=-32000,-32000",
+                f"--window-size={VIEWPORT['width']},{VIEWPORT['height']}",
             ],
             **kwargs,
         )
-        page = browser.new_page(user_agent=_UA_STR)
+        context = browser.new_context(
+            user_agent=_UA_STR,
+            viewport=VIEWPORT,
+            locale="en-US",
+        )
+        page = context.new_page()
         response = page.goto(url, wait_until="load",
                              timeout=int(timeout * 1000))
         # Reject HTTP error pages (4xx, 5xx) — Playwright renders them as
@@ -368,7 +388,8 @@ def _render_with_playwright(url: str, timeout: float) -> str | None:
             browser.close()
             return None
         # Extra wait for client-side rendering (Webflow, Next.js, etc.)
-        page.wait_for_timeout(3000)
+        if wait_for:
+            page.wait_for_timeout(wait_for)
         html = page.content()
         browser.close()
         return html
@@ -409,7 +430,7 @@ def _client_get(url: str, timeout: float, headers: dict[str, str],
 
 
 def _fetch_html(url: str, render_js: bool = False,
-                timeout: float = 20.0, retries: int = 3,
+                timeout: float = 30.0, retries: int = 3,
                 proxy: str | None = None) -> str:
     """Fetch page HTML. With render_js, use Playwright (if available) for
     SPA/SSR sites, falling back to a plain httpx request.
@@ -419,10 +440,10 @@ def _fetch_html(url: str, render_js: bool = False,
     other than 429) are raised immediately without retrying.
 
     If *proxy* is set (e.g. ``http://127.0.0.1:7890``), all HTTP calls go
-    through that proxy — useful for bypassing Cloudflare/WAF or GFW blocks.
+    through that proxy — for bypassing Cloudflare/WAF or GFW blocks.
     """
     if render_js:
-        html = _render_with_playwright(url, timeout)
+        html = render_with_playwright(url, timeout)
         if html:
             # JS rendering can strip code blocks or alter article text.
             # Always also fetch the plain HTML and keep whichever yields
@@ -489,7 +510,7 @@ def _pagination_links(html: str, base_url: str) -> list[str]:
 
 def _discover_via_feeds_and_sitemap(
         base_url: str, page_html: str, include_pattern: str | None,
-        exclude_pattern: str | None, timeout: float = 20.0,
+        exclude_pattern: str | None, timeout: float = 30.0,
         proxy: str | None = None) -> list[str]:
     """Fallback article discovery (②-2/②-3) when HTML link scraping found
     nothing: try the page's declared RSS/Atom feeds, then the site sitemap.
@@ -605,7 +626,7 @@ def _is_article_content(data: dict) -> bool:
     return True
 
 
-def scrape_single(url: str, source_name: str, timeout: float = 20.0,
+def scrape_single(url: str, source_name: str, timeout: float = 30.0,
                   render_js: bool = True,
                   proxy: str | None = None) -> Article | None:
     html = _fetch_html(url, render_js=render_js, timeout=timeout, proxy=proxy)
@@ -731,7 +752,7 @@ def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
                 exclude_pattern: str | None = None,
                 max_articles: int = 10, delay: float = 1.0,
                 max_pages: int = 3, render_js: bool = True,
-                timeout: float = 20.0,
+                timeout: float = 30.0,
                 proxy: str | None = None) -> list[Article]:
     """Deep-crawl the site at *url* to discover article pages across multiple
     levels, then extract each candidate into an :class:`Article`.

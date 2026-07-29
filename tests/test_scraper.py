@@ -517,7 +517,7 @@ def test_is_non_article_html_extension_stripping():
 
 from unittest.mock import patch
 
-@patch("app.sources.scraper._render_with_playwright")
+@patch("app.sources.scraper.render_with_playwright")
 @patch("app.sources.scraper.extract_from_html")
 def test_fetch_html_chooses_plain_when_richer(mock_extract, mock_render):
     """When plain HTML yields significantly more content, use it."""
@@ -538,7 +538,7 @@ def test_fetch_html_chooses_plain_when_richer(mock_extract, mock_render):
         assert "plain html" in result
 
 
-@patch("app.sources.scraper._render_with_playwright")
+@patch("app.sources.scraper.render_with_playwright")
 @patch("app.sources.scraper.extract_from_html")
 def test_fetch_html_keeps_rendered_when_richer(mock_extract, mock_render):
     """When rendered HTML is richer (or similar), keep it."""
@@ -557,7 +557,7 @@ def test_fetch_html_keeps_rendered_when_richer(mock_extract, mock_render):
         assert "rendered" in result
 
 
-@patch("app.sources.scraper._render_with_playwright")
+@patch("app.sources.scraper.render_with_playwright")
 def test_fetch_html_falls_back_when_playwright_fails(mock_render):
     """When Playwright returns None, fall back to plain httpx."""
     mock_render.return_value = None
@@ -569,7 +569,7 @@ def test_fetch_html_falls_back_when_playwright_fails(mock_render):
         assert "plain fallback" in result
 
 
-@patch("app.sources.scraper._render_with_playwright")
+@patch("app.sources.scraper.render_with_playwright")
 @patch("app.sources.scraper.extract_from_html")
 def test_fetch_html_keeps_rendered_when_plain_fetch_fails(mock_extract, mock_render):
     """When plain HTTP fetch fails, keep the rendered HTML."""
@@ -583,7 +583,7 @@ def test_fetch_html_keeps_rendered_when_plain_fetch_fails(mock_extract, mock_ren
         assert "rendered only" in result
 
 
-@patch("app.sources.scraper._render_with_playwright")
+@patch("app.sources.scraper.render_with_playwright")
 @patch("app.sources.scraper.extract_from_html")
 def test_fetch_html_keeps_rendered_when_similar_length(mock_extract, mock_render):
     """When plain and rendered content are similar (< 1.2x), keep rendered."""
@@ -601,7 +601,7 @@ def test_fetch_html_keeps_rendered_when_similar_length(mock_extract, mock_render
         assert "rendered" in result
 
 
-@patch("app.sources.scraper._render_with_playwright")
+@patch("app.sources.scraper.render_with_playwright")
 def test_fetch_html_no_render_js_returns_plain_directly(mock_render):
     """When render_js=False, skip Playwright entirely, just httpx."""
     from app.sources.scraper import _fetch_html
