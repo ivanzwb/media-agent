@@ -49,6 +49,7 @@ from app.pipeline.rewriter import rewrite
 from app.pipeline.search_create import (
     SearchCreateCancelled, SearchCreateOptions, run_search_create)
 from app.pipeline import styles as rewrite_styles
+from app.pipeline import style_learner
 from app.wechat import components as editor_components
 from app.pipeline.sanitizer import load_words, sanitize_draft
 from app.pipeline.video import build_explainer_video, video_path
@@ -795,16 +796,102 @@ def create_app(config: Config | None = None,
             "styles": [s.to_public() for s in rewrite_styles.all_styles(store)],
         }
 
+    def _require_style_pro():
+        return LG.require(license_mgr, LF.STYLE_LEARN)
+
+    def _style_examples(raw: str) -> list:
+        if not (raw or "").strip():
+            return []
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("风格示例必须是有效 JSON") from exc
+        if not isinstance(value, list):
+            raise ValueError("风格示例必须是数组")
+        return value
+
+    @app.post("/styles/learn")
+    @app.post("/api/rewrite-styles/learn")
+    def api_learn_rewrite_style(samples: str = Form(...),
+                                name: str = Form("")):
+        if locked := _require_style_pro():
+            return locked
+        try:
+            raw_samples = json.loads(samples)
+            if not isinstance(raw_samples, list):
+                raise ValueError("样例必须是数组")
+            store = get_store()
+            run_config = _current_config(store)
+            provider = get_rewrite_provider(
+                run_config.llm_provider, run_config.llm_api_key,
+                run_config.llm_model,
+                llm_api_base=run_config.llm_api_base,
+                cli_tool=run_config.cli_tool,
+                timeout=run_config.cli_timeout,
+                llm_timeout=run_config.llm_timeout,
+                priority=run_config.rewrite_priority)
+            learned = style_learner.learn_style(
+                store, provider, raw_samples, name=name,
+                proxy=run_config.fetch_proxy)
+        except (ValueError, json.JSONDecodeError) as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("style learning failed")
+            return JSONResponse(
+                {"ok": False, "error": f"风格学习失败：{exc}"},
+                status_code=500)
+        return {"ok": True, "style": learned.to_public()}
+
+    @app.get("/styles/export")
+    @app.get("/api/rewrite-styles/export")
+    def api_export_rewrite_styles():
+        if locked := _require_style_pro():
+            return locked
+        payload = rewrite_styles.export_style_pack(get_store())
+        return Response(
+            content=json.dumps(payload, ensure_ascii=False, indent=2),
+            media_type="application/json",
+            headers={
+                "Content-Disposition":
+                    'attachment; filename="media-agent-styles.json"',
+            },
+        )
+
+    @app.post("/styles/import")
+    @app.post("/api/rewrite-styles/import")
+    def api_import_rewrite_styles(file: UploadFile = File(...)):
+        if locked := _require_style_pro():
+            return locked
+        try:
+            raw = file.file.read(2_000_001)
+            if len(raw) > 2_000_000:
+                raise ValueError("风格配置文件不能超过 2MB")
+            payload = json.loads(raw.decode("utf-8-sig"))
+            imported = rewrite_styles.import_style_pack(get_store(), payload)
+        except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400)
+        return {
+            "ok": True,
+            "count": len(imported),
+            "styles": [style.to_public() for style in imported],
+        }
+
     @app.post("/api/rewrite-styles")
     def api_create_rewrite_style(name: str = Form(...),
                                  description: str = Form(""),
                                  prompt: str = Form(""),
-                                 instruction: str = Form(...)):
+                                 instruction: str = Form(...),
+                                 examples: str = Form("")):
+        if locked := _require_style_pro():
+            return locked
         store = get_store()
         try:
             s = rewrite_styles.save_custom_style(
                 store, id=None, name=name, description=description,
-                prompt=prompt, instruction=instruction)
+                prompt=prompt, instruction=instruction,
+                examples=_style_examples(examples))
         except ValueError as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
         return {"ok": True, "style": s.to_public()}
@@ -813,18 +900,24 @@ def create_app(config: Config | None = None,
     def api_update_rewrite_style(style_id: str, name: str = Form(...),
                                  description: str = Form(""),
                                  prompt: str = Form(""),
-                                 instruction: str = Form(...)):
+                                 instruction: str = Form(...),
+                                 examples: str = Form("")):
+        if locked := _require_style_pro():
+            return locked
         store = get_store()
         try:
             s = rewrite_styles.save_custom_style(
                 store, id=style_id, name=name, description=description,
-                prompt=prompt, instruction=instruction)
+                prompt=prompt, instruction=instruction,
+                examples=_style_examples(examples))
         except ValueError as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
         return {"ok": True, "style": s.to_public()}
 
     @app.delete("/api/rewrite-styles/{style_id}")
     def api_delete_rewrite_style(style_id: str):
+        if locked := _require_style_pro():
+            return locked
         store = get_store()
         try:
             ok = rewrite_styles.delete_custom_style(store, style_id)

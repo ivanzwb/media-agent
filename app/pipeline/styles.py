@@ -21,7 +21,8 @@ existing users who never pick a style.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from app.pipeline.anti_slop import ANTI_SLOP_SYSTEM_INSTRUCTION
@@ -44,6 +45,10 @@ class RewriteStyle:
     instruction: str            # user instruction template (single-brace literals)
     is_builtin: bool = False
     is_default: bool = False
+    examples: list[dict] = field(default_factory=list)
+    learned_from: list[dict] = field(default_factory=list)
+    origin: str = "manual"
+    analysis: dict = field(default_factory=dict)
 
     def to_public(self) -> dict:
         """Serialise for the API / templates."""
@@ -55,6 +60,10 @@ class RewriteStyle:
             "instruction": self.instruction,
             "is_builtin": self.is_builtin,
             "is_default": self.is_default,
+            "examples": self.examples,
+            "learned_from": self.learned_from,
+            "origin": self.origin,
+            "analysis": self.analysis,
         }
 
 
@@ -102,6 +111,14 @@ def _build_instruction(style_guidance: str) -> str:
         "### 写作风格\n" + style_guidance.strip() + "\n\n"
         + _COMMON_RULES + _MEDIA_AND_OUTPUT
     )
+
+
+def build_learned_instruction(style_guidance: str) -> str:
+    """Build a full rewrite template around learned style guidance."""
+    guidance = (style_guidance or "").strip()
+    if not guidance:
+        raise ValueError("学习结果缺少风格指引")
+    return _build_instruction(guidance)
 
 
 def _deep_tech_instruction() -> str:
@@ -245,6 +262,11 @@ def custom_styles(store: "Store") -> list[RewriteStyle]:
                 prompt=str(d.get("prompt") or ""),
                 instruction=str(d.get("instruction") or ""),
                 is_builtin=False,
+                examples=_normalise_examples(d.get("examples")),
+                learned_from=_normalise_sources(d.get("learned_from")),
+                origin="learned" if d.get("origin") == "learned" else "manual",
+                analysis=d.get("analysis") if isinstance(
+                    d.get("analysis"), dict) else {},
             ))
         except (KeyError, TypeError):
             continue
@@ -310,9 +332,46 @@ def resolve_style(style_id: str | None, store: "Store | None") -> RewriteStyle:
 # ── Custom style CRUD ────────────────────────────────────────────────────
 
 def _slugify(text: str) -> str:
-    import re
     slug = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
     return slug or "custom"
+
+
+def _normalise_examples(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    out: list[dict] = []
+    for item in value[:2]:
+        if isinstance(item, str):
+            content = item.strip()
+            title = ""
+            url = ""
+        elif isinstance(item, dict):
+            content = str(item.get("content") or "").strip()
+            title = str(item.get("title") or "").strip()[:200]
+            url = str(item.get("url") or "").strip()[:2000]
+        else:
+            continue
+        if content:
+            out.append({
+                "title": title,
+                "content": content[:4000],
+                "url": url,
+            })
+    return out
+
+
+def _normalise_sources(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    out: list[dict] = []
+    for item in value[:10]:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()[:200]
+        url = str(item.get("url") or "").strip()[:2000]
+        source_type = "url" if url else "paste"
+        out.append({"title": title, "url": url, "type": source_type})
+    return out
 
 
 def _save_custom_raw(store: "Store", items: list[dict]) -> None:
@@ -324,7 +383,11 @@ def _save_custom_raw(store: "Store", items: list[dict]) -> None:
 
 def save_custom_style(store: "Store", *, id: str | None, name: str,
                       description: str, prompt: str,
-                      instruction: str) -> RewriteStyle:
+                      instruction: str, examples: list | None = None,
+                      learned_from: list | None = None,
+                      origin: str | None = None,
+                      analysis: dict | None = None,
+                      create_if_missing: bool = False) -> RewriteStyle:
     """Create or update a custom style. Raises ValueError on invalid input
     or id collision with a builtin."""
     name = (name or "").strip()
@@ -334,6 +397,12 @@ def save_custom_style(store: "Store", *, id: str | None, name: str,
     instruction = (instruction or "").strip()
     if "{content}" not in instruction:
         raise ValueError("指令模板必须包含 {content} 占位符")
+    clean_examples = (
+        _normalise_examples(examples) if examples is not None else None)
+    clean_sources = (
+        _normalise_sources(learned_from) if learned_from is not None else None)
+    clean_origin = "learned" if origin == "learned" else "manual"
+    clean_analysis = analysis if isinstance(analysis, dict) else None
 
     items = _load_custom_raw(store)
     if id:
@@ -345,10 +414,35 @@ def save_custom_style(store: "Store", *, id: str | None, name: str,
             if it.get("id") == sid:
                 it.update(name=name, description=description.strip(),
                           prompt=prompt, instruction=instruction)
+                if clean_examples is not None:
+                    it["examples"] = clean_examples
+                if clean_sources is not None:
+                    it["learned_from"] = clean_sources
+                if origin is not None:
+                    it["origin"] = clean_origin
+                if clean_analysis is not None:
+                    it["analysis"] = clean_analysis
                 found = True
                 break
         if not found:
-            raise ValueError(f"风格不存在：{sid}")
+            if not create_if_missing:
+                raise ValueError(f"风格不存在：{sid}")
+            if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", sid):
+                sid = _slugify(name)
+            existing = _builtin_ids() | {it.get("id") for it in items}
+            base = sid
+            i = 2
+            while sid in existing:
+                sid = f"{base}-{i}"
+                i += 1
+            items.append({
+                "id": sid, "name": name, "description": description.strip(),
+                "prompt": prompt, "instruction": instruction,
+                "examples": clean_examples or [],
+                "learned_from": clean_sources or [],
+                "origin": clean_origin,
+                "analysis": clean_analysis or {},
+            })
     else:
         # New style: derive a unique id from the name.
         base = _slugify(name)
@@ -360,10 +454,60 @@ def save_custom_style(store: "Store", *, id: str | None, name: str,
             i += 1
         items.append({"id": sid, "name": name,
                       "description": description.strip(),
-                      "prompt": prompt, "instruction": instruction})
+                      "prompt": prompt, "instruction": instruction,
+                      "examples": clean_examples or [],
+                      "learned_from": clean_sources or [],
+                      "origin": clean_origin,
+                      "analysis": clean_analysis or {}})
     _save_custom_raw(store, items)
-    return RewriteStyle(id=sid, name=name, description=description.strip(),
-                        prompt=prompt, instruction=instruction, is_builtin=False)
+    saved = next(it for it in items if it.get("id") == sid)
+    return RewriteStyle(
+        id=sid, name=name, description=description.strip(),
+        prompt=prompt, instruction=instruction, is_builtin=False,
+        examples=_normalise_examples(saved.get("examples")),
+        learned_from=_normalise_sources(saved.get("learned_from")),
+        origin="learned" if saved.get("origin") == "learned" else "manual",
+        analysis=saved.get("analysis") if isinstance(
+            saved.get("analysis"), dict) else {},
+    )
+
+
+def export_style_pack(store: "Store") -> dict:
+    """Return a versioned, portable pack containing custom styles only."""
+    return {"version": 1, "styles": _load_custom_raw(store)}
+
+
+def import_style_pack(store: "Store", payload: dict) -> list[RewriteStyle]:
+    """Validate and merge a versioned custom-style pack by id."""
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        raise ValueError("不支持的风格配置版本")
+    items = payload.get("styles")
+    if not isinstance(items, list) or not items:
+        raise ValueError("风格配置中没有可导入的风格")
+    if len(items) > 100:
+        raise ValueError("单次最多导入 100 个风格")
+    imported: list[RewriteStyle] = []
+    existing = {s.id for s in custom_styles(store)}
+    for raw in items:
+        if not isinstance(raw, dict):
+            raise ValueError("风格配置格式无效")
+        sid = str(raw.get("id") or "").strip() or None
+        style = save_custom_style(
+            store,
+            id=sid if sid in existing else sid,
+            name=str(raw.get("name") or ""),
+            description=str(raw.get("description") or ""),
+            prompt=str(raw.get("prompt") or ""),
+            instruction=str(raw.get("instruction") or ""),
+            examples=raw.get("examples"),
+            learned_from=raw.get("learned_from"),
+            origin=str(raw.get("origin") or "manual"),
+            analysis=raw.get("analysis"),
+            create_if_missing=True,
+        )
+        existing.add(style.id)
+        imported.append(style)
+    return imported
 
 
 def delete_custom_style(store: "Store", style_id: str) -> bool:

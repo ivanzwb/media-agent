@@ -140,6 +140,26 @@ def test_create_custom_style_and_list():
     assert data[0]["name"] == "硬核评测"
 
 
+def test_custom_style_preserves_learning_metadata_and_pack_roundtrip():
+    source = FakeStore()
+    learned = S.save_custom_style(
+        source, id=None, name="种草风", description="亲切短句",
+        prompt="你是种草编辑", instruction="改写 {content}",
+        examples=[{"title": "样例", "content": "短句。真实体验。", "url": "https://x/a"}],
+        learned_from=[{"title": "文章 A", "url": "https://x/a"}],
+        origin="learned", analysis={"tone": "亲切"})
+    assert learned.origin == "learned"
+    assert learned.examples[0]["title"] == "样例"
+    pack = S.export_style_pack(source)
+
+    target = FakeStore()
+    imported = S.import_style_pack(target, pack)
+    assert len(imported) == 1
+    restored = S.get_style(imported[0].id, target)
+    assert restored.origin == "learned"
+    assert restored.learned_from[0]["url"] == "https://x/a"
+
+
 def test_create_requires_content_placeholder():
     st = FakeStore()
     with pytest.raises(ValueError):
@@ -253,6 +273,27 @@ def test_rewrite_uses_style_prompt_and_instruction():
     assert sys_msg.content != REWRITE_SYSTEM
     # Article content is substituted into the instruction.
     assert "The model scores 90" in user_msg.content
+
+
+def test_rewrite_injects_learned_examples_without_changing_fact_check():
+    style = S.RewriteStyle(
+        id="learned", name="学习风格", description="", prompt="目标语气",
+        instruction="改写下面正文并输出要求的 JSON：{content}",
+        examples=[
+            {"title": "样例一", "content": "这是目标表达片段。"},
+            {"title": "样例二", "content": "短句，有节奏。"},
+        ],
+    )
+    resp = json.dumps({"title_candidates": ["标题"], "body_md": "正文"})
+    check = json.dumps({"flagged_claims": []})
+    provider = RecordingProvider([resp, check])
+    rewrite(_article(), provider, style=style)
+    prompt = provider.calls[0][1].content
+    assert "### 目标风格示例" in prompt
+    assert "这是目标表达片段" in prompt
+    assert "不能把示例中的事实" in prompt
+    assert len(provider.calls) == 2
+    assert "目标风格示例" not in provider.calls[1][0].content
 
 
 def test_rewrite_without_style_matches_default_prompt():

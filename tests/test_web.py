@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import json
 import time
 
 from fastapi.testclient import TestClient
@@ -6,6 +7,7 @@ from fastapi.testclient import TestClient
 from app.config import Config
 from app.db import connect, init_db
 from app.models import Article, Draft
+from app.pipeline import styles as rewrite_styles
 from app.store import Store
 from app.web.server import create_app
 
@@ -105,6 +107,60 @@ def test_archive_marks_articles_with_video(tmp_path):
     assert map_item["has_video"] is False
     cached = store.get_article(article.id)
     assert cached["has_video"] == 1
+
+
+def test_rewrite_style_mutations_require_pro(tmp_path):
+    client, _, _ = make_client(tmp_path, pro=False)
+    payload = {
+        "name": "Custom",
+        "description": "",
+        "prompt": "",
+        "instruction": "Rewrite {content}",
+    }
+    created = client.post("/api/rewrite-styles", data=payload)
+    assert created.status_code == 403
+    assert created.json()["upgrade"] is True
+    learned = client.post(
+        "/styles/learn",
+        data={"samples": json.dumps([{"content": "x" * 100}] * 3)})
+    assert learned.status_code == 403
+
+
+def test_rewrite_style_learn_and_pack_roundtrip(tmp_path, monkeypatch):
+    client, _, _ = make_client(tmp_path, pro=True)
+    captured = {}
+
+    def fake_learn(store, provider, samples, **kwargs):
+        captured["samples"] = samples
+        return rewrite_styles.save_custom_style(
+            store, id=None, name=kwargs.get("name") or "Learned",
+            description="desc", prompt="prompt",
+            instruction="rewrite {content}",
+            examples=[{"title": "A", "content": "sample"}],
+            learned_from=[{"title": "A", "url": "https://x/a"}],
+            origin="learned")
+
+    monkeypatch.setattr(
+        "app.web.server.style_learner.learn_style", fake_learn)
+    samples = [{"content": "sample " * 30}] * 3
+    response = client.post(
+        "/api/rewrite-styles/learn",
+        data={"name": "My learned style", "samples": json.dumps(samples)})
+    assert response.status_code == 200
+    assert response.json()["style"]["origin"] == "learned"
+    assert len(captured["samples"]) == 3
+
+    exported = client.get("/api/rewrite-styles/export")
+    assert exported.status_code == 200
+    pack = exported.json()
+    assert pack["version"] == 1
+    assert pack["styles"][0]["examples"]
+
+    imported = client.post(
+        "/api/rewrite-styles/import",
+        files={"file": ("styles.json", json.dumps(pack), "application/json")})
+    assert imported.status_code == 200
+    assert imported.json()["count"] == 1
 
 
 def test_publish_wechat_requires_credentials(tmp_path):

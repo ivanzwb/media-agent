@@ -37,6 +37,7 @@ def test_activate_unlocks_features(tmp_path, monkeypatch):
     ok, _ = mgr.activate(_sign(priv))
     assert ok and mgr.active
     assert mgr.has_feature(F.VIDEO) and mgr.has_feature(F.PLATFORM_SYNC)
+    assert mgr.has_feature(F.STYLE_LEARN)
 
 
 def test_bad_signature_rejected(tmp_path, monkeypatch):

@@ -14,9 +14,10 @@ VOICE_CLONE = "voice_clone"                # 声音复刻 TTS (cosyvoice)
 SCHEDULE = "schedule"                      # 定时调度
 AUTO_DISCOVER = "auto_discover"            # AI 智能推荐 + 一键/批量发现来源
 SEARCH_CREATE = "search_create"             # 搜索驱动的多源综合创作
+STYLE_LEARN = "style_learn"                 # 多篇样例学习转写风格
 
 ALL_FEATURES = [REWRITE_UNLIMITED, VIDEO, PLATFORM_SYNC, VOICE_CLONE,
-                SCHEDULE, AUTO_DISCOVER, SEARCH_CREATE]
+                SCHEDULE, AUTO_DISCOVER, SEARCH_CREATE, STYLE_LEARN]
 
 # Everything a Pro license grants.
 PRO_FEATURES = set(ALL_FEATURES)
@@ -33,6 +34,7 @@ LABELS = {
     SCHEDULE: "定时调度",
     AUTO_DISCOVER: "AI 智能推荐与一键发现来源",
     SEARCH_CREATE: "搜索驱动创作",
+    STYLE_LEARN: "AI 学习与管理自定义转写风格",
 }
 
 

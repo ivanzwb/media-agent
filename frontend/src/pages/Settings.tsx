@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  App as AntApp, Button, Card, Divider, Form, Input, InputNumber, Progress, Select,
+  Alert, App as AntApp, Button, Card, Divider, Form, Input, InputNumber, Progress, Select,
   Space, Switch, Tag, Typography, List, Upload, Popconfirm, Tabs, Modal,
 } from "antd";
 import { UploadOutlined, AudioOutlined, StopOutlined, CheckOutlined, CloseOutlined, ThunderboltOutlined, DownloadOutlined, ReloadOutlined, PauseCircleOutlined, PlayCircleOutlined } from "@ant-design/icons";
@@ -23,7 +23,14 @@ interface ManagedCapability {
   performance_warning?: string;
 }
 interface Capabilities { cosyvoice: ManagedCapability; sadtalker: ManagedCapability; }
-interface StylePub { id: string; name: string; description: string; prompt: string; instruction: string; is_builtin: boolean; is_default: boolean; }
+interface StyleExample { title?: string; content: string; url?: string; }
+interface StyleSource { title?: string; url?: string; type?: string; }
+interface StylePub {
+  id: string; name: string; description: string; prompt: string;
+  instruction: string; is_builtin: boolean; is_default: boolean;
+  examples?: StyleExample[]; learned_from?: StyleSource[];
+  origin?: "manual" | "learned"; analysis?: Record<string, string>;
+}
 interface Voice { id: string; name?: string; }
 interface SettingsData {
   [k: string]: any;
@@ -284,7 +291,8 @@ export default function Settings() {
                   <Form.Item name="rewrite_style" label="全局默认风格">
                     <Select options={(data.rewrite_styles || []).map((s) => ({ value: s.id, label: s.name + (s.is_builtin ? "" : "（自定义）") }))} />
                   </Form.Item>
-                  <RewriteStyleManager styles={data.rewrite_styles || []} onChange={refetch} />
+                  <RewriteStyleManager styles={data.rewrite_styles || []}
+                    license={lic} onChange={refetch} />
                 </Card>
                 <Card title="敏感词" size="small" style={{ marginBottom: 16 }}>
                   <Form.Item name="sensitive_level" label="过滤级别">
@@ -427,14 +435,27 @@ function LicenseCard({ lic, labels, onChange }: { lic: any; labels: Record<strin
   );
 }
 
-function RewriteStyleManager({ styles, onChange }: { styles: StylePub[]; onChange: () => void; }) {
+function RewriteStyleManager({ styles, license, onChange }: {
+  styles: StylePub[]; license: any; onChange: () => void;
+}) {
   const { message } = AntApp.useApp();
   const customs = styles.filter((s) => !s.is_builtin);
   const builtins = styles.filter((s) => s.is_builtin);
+  const isPro = !!license?.dev
+    || (license?.features || []).includes("style_learn");
   const [modalOpen, setModalOpen] = useState(false);
+  const [learnOpen, setLearnOpen] = useState(false);
   const [editing, setEditing] = useState<StylePub | null>(null);
   const [saving, setSaving] = useState(false);
+  const [learning, setLearning] = useState(false);
   const [form] = Form.useForm();
+  const [learnForm] = Form.useForm();
+
+  function requirePro(): boolean {
+    if (isPro) return true;
+    message.warning("AI 学习与管理自定义转写风格为 Pro 功能");
+    return false;
+  }
 
   // Pre-fill the create form from a built-in style so a new custom style can
   // start from (and then tweak) an existing one.
@@ -446,18 +467,28 @@ function RewriteStyleManager({ styles, onChange }: { styles: StylePub[]; onChang
       description: b.description,
       instruction: b.instruction,
       prompt: b.prompt,
+      examples: [],
     });
   }
 
   async function openCreate() {
+    if (!requirePro()) return;
     setEditing(null); form.resetFields(); setModalOpen(true);
   }
   async function openEdit(s: StylePub) {
-    setEditing(s); form.setFieldsValue(s); setModalOpen(true);
+    if (!requirePro()) return;
+    setEditing(s);
+    form.setFieldsValue({ ...s, examples: s.examples || [] });
+    setModalOpen(true);
   }
   async function del(id: string) {
-    await api.delete(`/api/rewrite-styles/${encodeURIComponent(id)}`);
-    message.success("已删除"); onChange();
+    if (!requirePro()) return;
+    try {
+      await api.delete(`/api/rewrite-styles/${encodeURIComponent(id)}`);
+      message.success("已删除"); onChange();
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || "删除失败");
+    }
   }
   async function onSubmit() {
     const v = await form.validateFields();
@@ -472,18 +503,105 @@ function RewriteStyleManager({ styles, onChange }: { styles: StylePub[]; onChang
       fd.append("description", v.description || "");
       fd.append("prompt", v.prompt || "");
       fd.append("instruction", v.instruction);
+      fd.append("examples", JSON.stringify(v.examples || []));
       await method(url, fd);
       message.success(editing ? "已更新" : "已创建");
       setModalOpen(false); onChange();
-    } catch { message.error("操作失败"); }
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || "操作失败");
+    }
     finally { setSaving(false); }
+  }
+
+  function openLearn() {
+    if (!requirePro()) return;
+    learnForm.setFieldsValue({
+      name: "",
+      samples: [{}, {}, {}],
+    });
+    setLearnOpen(true);
+  }
+
+  async function submitLearn() {
+    const values = await learnForm.validateFields();
+    const samples = (values.samples || []).map((sample: any) => ({
+      title: String(sample?.title || "").trim(),
+      url: String(sample?.url || "").trim(),
+      content: String(sample?.content || "").trim(),
+    }));
+    if (samples.length < 3 || samples.length > 10
+        || samples.some((sample: any) => !sample.url && !sample.content)) {
+      message.error("请提供 3-10 篇样例，每篇填写 URL 或粘贴正文");
+      return;
+    }
+    setLearning(true);
+    try {
+      const result = await postForm<{ ok: boolean; style: StylePub }>(
+        "/api/rewrite-styles/learn",
+        { name: values.name || "", samples: JSON.stringify(samples) });
+      message.success(`已学习并保存风格「${result.style.name}」`);
+      setLearnOpen(false);
+      onChange();
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || "风格学习失败");
+    } finally {
+      setLearning(false);
+    }
+  }
+
+  async function exportStyles() {
+    if (!requirePro()) return;
+    try {
+      const response = await api.get("/api/rewrite-styles/export", {
+        responseType: "blob",
+      });
+      const href = URL.createObjectURL(response.data);
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.download = "media-agent-styles.json";
+      anchor.click();
+      URL.revokeObjectURL(href);
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || "导出失败");
+    }
   }
 
   return (
     <div>
-      <Space style={{ marginBottom: 8 }}>
+      {!isPro && (
+        <Alert type="info" showIcon style={{ marginBottom: 12 }}
+          message="Pro 功能"
+          description="激活 Pro 后可让 AI 从 3-10 篇目标文章学习风格，并管理、导入或导出自定义风格。" />
+      )}
+      <Space wrap style={{ marginBottom: 8 }}>
         <Text strong>自定义风格</Text>
-        <Button size="small" type="primary" onClick={openCreate}>新建风格</Button>
+        <Tag color="gold">Pro</Tag>
+        <Button size="small" type="primary" disabled={!isPro}
+          onClick={openCreate}>新建风格</Button>
+        <Button size="small" icon={<ThunderboltOutlined />} disabled={!isPro}
+          onClick={openLearn}>从样例学习</Button>
+        <Button size="small" icon={<DownloadOutlined />} disabled={!isPro}
+          onClick={exportStyles}>导出</Button>
+        <Upload accept=".json,application/json" showUploadList={false}
+          disabled={!isPro}
+          customRequest={async ({ file, onSuccess, onError }) => {
+            if (!requirePro()) return;
+            const fd = new FormData();
+            fd.append("file", file as File);
+            try {
+              const response = await api.post<{ count: number }>(
+                "/api/rewrite-styles/import", fd);
+              message.success(`已导入 ${response.data.count} 个风格`);
+              onChange(); onSuccess?.({});
+            } catch (e: any) {
+              message.error(e?.response?.data?.error || "导入失败");
+              onError?.(e);
+            }
+          }}>
+          <Button size="small" icon={<UploadOutlined />} disabled={!isPro}>
+            导入
+          </Button>
+        </Upload>
       </Space>
       <List size="small" dataSource={customs} locale={{ emptyText: "暂无自定义风格" }}
         renderItem={(s) => (
@@ -491,7 +609,21 @@ function RewriteStyleManager({ styles, onChange }: { styles: StylePub[]; onChang
             <a key="e" onClick={() => openEdit(s)}>编辑</a>,
             <Popconfirm key="d" title="删除该风格？" onConfirm={() => del(s.id)}><a>删除</a></Popconfirm>,
           ]}>
-            <List.Item.Meta title={s.name} description={s.description || s.instruction} />
+            <List.Item.Meta
+              title={<Space>{s.name}
+                {s.origin === "learned" && <Tag color="purple">AI 学习</Tag>}
+                {!!s.examples?.length && <Tag>{s.examples.length} 个示例</Tag>}
+              </Space>}
+              description={<>
+                <div>{s.description || s.instruction}</div>
+                {!!s.learned_from?.length && (
+                  <Text type="secondary">
+                    学习来源：{s.learned_from.map((source) =>
+                      source.title || source.url || "粘贴正文").join("、")}
+                  </Text>
+                )}
+              </>}
+            />
           </List.Item>
         )} />
       <Modal title={editing ? "编辑风格" : "新建风格"} open={modalOpen}
@@ -517,6 +649,75 @@ function RewriteStyleManager({ styles, onChange }: { styles: StylePub[]; onChang
           <Form.Item name="prompt" label="系统提示词（可选）" tooltip="留空则使用默认改写提示词">
             <Input.TextArea rows={6} placeholder="覆盖默认改写 prompt，一般不需要填写" />
           </Form.Item>
+          <Form.List name="examples">
+            {(fields, { add, remove }) => (
+              <>
+                <Space style={{ marginBottom: 8 }}>
+                  <Text>目标风格示例（最多 2 篇）</Text>
+                  {fields.length < 2 && (
+                    <Button size="small" onClick={() => add({})}>添加示例</Button>
+                  )}
+                </Space>
+                {fields.map((field, index) => (
+                  <Card key={field.key} size="small"
+                    title={`示例 ${index + 1}`} style={{ marginBottom: 8 }}
+                    extra={<a onClick={() => remove(field.name)}>移除</a>}>
+                    <Form.Item name={[field.name, "title"]} label="标题">
+                      <Input />
+                    </Form.Item>
+                    <Form.Item name={[field.name, "content"]} label="正文片段"
+                      rules={[{ required: true, message: "请输入示例正文" }]}>
+                      <Input.TextArea rows={4} />
+                    </Form.Item>
+                    <Form.Item name={[field.name, "url"]} label="来源 URL">
+                      <Input />
+                    </Form.Item>
+                  </Card>
+                ))}
+              </>
+            )}
+          </Form.List>
+        </Form>
+      </Modal>
+      <Modal title="从目标文章学习转写风格" open={learnOpen}
+        width={760} onCancel={() => setLearnOpen(false)}
+        onOk={submitLearn} confirmLoading={learning}
+        okText="开始学习">
+        <Paragraph type="secondary">
+          提供 3-10 篇同一目标风格的文章。每篇可填写 URL 自动抓取，或直接粘贴正文。
+          AI 只学习表达方式，不会把样例事实带入后续文章。
+        </Paragraph>
+        <Form form={learnForm} layout="vertical">
+          <Form.Item name="name" label="风格名称（可选）"
+            tooltip="留空时由 AI 根据样例建议名称">
+            <Input placeholder="例如：小红书种草风" />
+          </Form.Item>
+          <Form.List name="samples">
+            {(fields, { add, remove }) => (
+              <>
+                {fields.map((field, index) => (
+                  <Card key={field.key} size="small"
+                    title={`样例 ${index + 1}`} style={{ marginBottom: 10 }}
+                    extra={fields.length > 3
+                      ? <a onClick={() => remove(field.name)}>移除</a> : null}>
+                    <Form.Item name={[field.name, "title"]} label="标题（粘贴正文时可选）">
+                      <Input />
+                    </Form.Item>
+                    <Form.Item name={[field.name, "url"]} label="文章 URL">
+                      <Input placeholder="https://..." />
+                    </Form.Item>
+                    <Divider plain>或</Divider>
+                    <Form.Item name={[field.name, "content"]} label="直接粘贴正文">
+                      <Input.TextArea rows={5} />
+                    </Form.Item>
+                  </Card>
+                ))}
+                {fields.length < 10 && (
+                  <Button block onClick={() => add({})}>添加样例</Button>
+                )}
+              </>
+            )}
+          </Form.List>
         </Form>
       </Modal>
     </div>

@@ -670,7 +670,10 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
         # Convert the str.format template ({{/}} escaped) to replace-form.
         instruction_tmpl = REWRITE_INSTRUCTION.replace("{{", "{").replace("}}", "}")
     else:
-        system_prompt = style.prompt + "\n\n" + ANTI_SLOP_SYSTEM_INSTRUCTION
+        system_prompt = (
+            (style.prompt or REWRITE_SYSTEM)
+            + "\n\n" + ANTI_SLOP_SYSTEM_INSTRUCTION
+        )
         instruction_tmpl = style.instruction
 
     # Older custom styles predate the SEO placeholder. Inject it immediately
@@ -713,6 +716,24 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
         manifest=manifest, content=content,
         seo_block=seo_block,
         promotion_block=promotion_block)
+    examples = list(getattr(style, "examples", []) or [])[:2] if style else []
+    if examples:
+        blocks = [
+            "### 目标风格示例\n"
+            "以下片段只用于模仿表达方式、语气和结构。"
+            "绝不能把示例中的事实、人物、数据或观点写入当前文章。"
+        ]
+        for index, example in enumerate(examples, 1):
+            if not isinstance(example, dict):
+                continue
+            sample = str(example.get("content") or "").strip()[:3000]
+            if not sample:
+                continue
+            title = str(example.get("title") or "").strip()
+            heading = f"示例 {index}" + (f"：{title}" if title else "")
+            blocks.append(f"#### {heading}\n{sample}")
+        if len(blocks) > 1:
+            rewrite_prompt = "\n\n".join(blocks) + "\n\n---\n\n" + rewrite_prompt
     raw = provider.chat([
         Message(role="system", content=system_prompt),
         Message(role="user", content=rewrite_prompt),
