@@ -2754,6 +2754,9 @@ def create_app(config: Config | None = None,
             try:
                 result = run_search_create(
                     store, provider, options, style=style,
+                    promotion_footer=run_config.promotion_footer or "",
+                    seo_tags_enabled=run_config.seo_tags_enabled,
+                    sensitive_words=load_words(run_config),
                     progress=progress, should_stop=cancelled)
                 draft_id = result.get("draft_id")
                 with search_create_lock:

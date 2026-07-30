@@ -68,6 +68,7 @@ def test_search_create_start_and_status(tmp_path, monkeypatch):
 
     def fake_run(store, provider, options, **kwargs):
         captured["options"] = options
+        captured["kwargs"] = kwargs
         kwargs["progress"]({
             "stage": "synthesize", "detail": "正在综合",
             "current": 1, "total": 1, "stats": {"kept": 3},
@@ -86,6 +87,9 @@ def test_search_create_start_and_status(tmp_path, monkeypatch):
     assert state["request"]["engines"] == ["duckduckgo", "google"]
     assert captured["options"].style_id == "deep-tech"
     assert captured["options"].time_range_days == 30
+    assert captured["kwargs"]["seo_tags_enabled"] is True
+    assert captured["kwargs"]["promotion_footer"] == ""
+    assert "最佳" in captured["kwargs"]["sensitive_words"]
 
 
 def test_search_create_single_flight_and_cancel(tmp_path, monkeypatch):

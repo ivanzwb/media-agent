@@ -71,8 +71,8 @@ def _snippet(text: str | None) -> str:
     return " ".join(text.split())[:_SNIPPET_CHARS]
 
 
-def _classify_chunk(chunk: list[Article],
-                    provider: LLMProvider) -> list[Article]:
+def _classify_chunk(chunk: list[Article], provider: LLMProvider, *,
+                    content_scope: str = "news") -> list[Article]:
     """Classify ONE chunk. Returns the kept subset. FAIL-OPEN on any error."""
     lines = []
     for i, art in enumerate(chunk):
@@ -82,12 +82,23 @@ def _classify_chunk(chunk: list[Article],
             f"    摘要：{_snippet(art.content_md or art.raw_summary)}"
         )
     listing = "\n".join(lines)
+    if content_scope == "informational":
+        keep = (
+            "应【保留】：有实质信息的新闻、研究、科普、专业指南、医生/专家建议、"
+            "深度文章、评测分析和经验解释。即使不是近期新闻，只要能为当前选题"
+            "提供事实、风险、原因或建议，也应保留。\n"
+        )
+        role = "你是资深资料研究编辑"
+    else:
+        keep = (
+            "应【保留】：具体的新闻、发布/更新公告、行业动态、研究与技术文章、"
+            "深度报道、评测分析。\n"
+        )
+        role = "你是资深新闻内容审核编辑"
     prompt = (
-        "你是资深新闻内容审核编辑。下面是一批抓取到的候选网页，请判断每一条"
-        "是否为一篇真正的【新闻报道 / 行业动态 / 研究文章】（值得作为资讯"
-        "内容保留）。\n"
-        "应【保留】：具体的新闻、发布/更新公告、行业动态、研究与技术文章、"
-        "深度报道、评测分析。\n"
+        f"{role}。下面是一批抓取到的候选网页，请判断每一条是否为一篇"
+        "有独立正文、值得作为创作资料保留的内容。\n"
+        f"{keep}"
         "应【丢弃】：公司主页/关于我们/产品介绍/营销落地页/招聘/联系我们/"
         "版权声明/导航页/栏目列表页/索引页/纯目录等非文章内容。\n"
         "注意：这是判断【内容类型】，不是判断主题是否相关。\n\n"
@@ -111,10 +122,13 @@ def _classify_chunk(chunk: list[Article],
 
 
 def filter_relevant(articles: list[Article], provider: LLMProvider, *,
-                    enabled: bool, progress=None) -> list[Article]:
-    """LLM relevance/quality gate: keep only genuine news/industry/research
-    articles, dropping marketing / product / navigation / about / listing /
-    boilerplate pages.
+                    enabled: bool, progress=None,
+                    content_scope: str = "news") -> list[Article]:
+    """LLM quality gate for news feeds or broader informational search results.
+
+    Both scopes drop marketing / product / navigation / about / listing /
+    boilerplate pages. ``informational`` additionally keeps substantive
+    explainers, professional guidance and science/health articles.
 
     Runs as BATCHED ``provider.chat`` calls (``_RELEVANCE_CHUNK`` articles per
     call) to avoid the per-article CLI-agent timeout problems. FAIL-OPEN: any
@@ -129,7 +143,8 @@ def filter_relevant(articles: list[Article], provider: LLMProvider, *,
     kept: list[Article] = []
     for start in range(0, len(articles), _RELEVANCE_CHUNK):
         chunk = articles[start:start + _RELEVANCE_CHUNK]
-        kept.extend(_classify_chunk(chunk, provider))
+        kept.extend(_classify_chunk(
+            chunk, provider, content_scope=content_scope))
 
     dropped = len(articles) - len(kept)
     logger.info("relevance filter: kept %d / dropped %d of %d",

@@ -1,55 +1,129 @@
 # 打包与加固 (Packaging & Hardening)
 
-商业化发版的三种产物 + 防破解。除 PyPI 外，exe 与混淆需在你的构建环境运行
-（本仓库未预构建、未在 CI 验证）。
+本项目支持 Python wheel、本地 PyInstaller 构建，以及由 GitHub Actions 自动生成的 Windows / macOS 发布包。当前项目版本以 `pyproject.toml` 为准。
 
-## 1. PyPI / pip install（已配置，可直接用）
+## 1. Python wheel / pip 安装
 
-`pyproject.toml` + `MANIFEST.in` 已就绪（含模板/静态/公钥打包、控制台入口
-`media-agent`）。
+`pyproject.toml` 已配置 `media-agent` 控制台入口，并把 `app/web/static` 与许可公钥打入 wheel。Vendor 工具和签发私钥不会进入 Python 包。
 
 ```bash
-pip install build
-python -m build                 # 产出 dist/*.whl 和 *.tar.gz
-pip install dist/media_agent-0.1.0-py3-none-any.whl
-media-agent serve               # 启动本地 Web UI
-media-agent init | run | serve  # 其它命令同 `python -m app.cli`
+python -m pip install build
+python -m build
+
+# 使用实际生成的版本号
+python -m pip install dist/media_agent-<version>-py3-none-any.whl
+
+media-agent init
+media-agent run --feeds feeds.yaml
+media-agent serve
 ```
 
-发布到 PyPI：`pip install twine && twine upload dist/*`。
-
-## 2. 单文件 exe（PyInstaller · 未测试脚手架）
+如需发布到 PyPI：
 
 ```bash
-pip install pyinstaller
+python -m pip install twine
+python -m twine upload dist/*
+```
+
+> 当前 wheel **不包含**顶层 `frontend/dist`。在源码目录安装时可先执行 `cd frontend && npm run build` 后启动 Web UI；脱离源码目录分发时应使用下面的 PyInstaller onedir Release 包。
+
+## 2. Release 包（PyInstaller onedir）
+
+`.github/workflows/build.yml` 是正式发布流程。推送 `v*` tag 后会：
+
+1. 使用 Node.js 构建 React SPA；
+2. 安装 Python 依赖与 PyInstaller；
+3. 生成 onedir 应用；
+4. 对冻结后的 `app.web.server` 执行导入冒烟测试；
+5. 分别输出 Windows、macOS Intel (`x86_64`) 与 macOS Apple Silicon (`arm64`) zip；
+6. 上传到 `ivanzwb/release` 对应 GitHub Release。
+
+发布包会包含：
+
+- `frontend/dist` 与 `app/web/static`
+- `app/licensing/public_key.b64`
+- Playwright Python 库（Chromium 仍按需安装）
+- CosyVoice worker
+- `setup-optional.bat` 或 `setup-optional.sh`
+
+运行：
+
+```text
+Windows: media-agent\media-agent.exe
+macOS:   media-agent/media-agent
+```
+
+应用由 `packaging/run_app.py` 启动本地服务并打开浏览器，数据默认写入应用同级 `data/`。
+
+### 本地构建
+
+```text
+Windows: build-win.bat
+macOS:   bash build-mac.sh
+```
+
+本地脚本与 CI 都使用 onedir 思路。构建后应至少执行冻结模块冒烟测试，并在目标系统打开 Web UI 验证静态资源和数据库写入。
+
+## 3. 实验性单文件脚手架
+
+`packaging/media-agent.spec` 保留单文件 / 自定义 PyInstaller 的实验脚手架：
+
+```bash
+python -m pip install pyinstaller
 pyinstaller packaging/media-agent.spec
-# -> dist/media-agent(.exe)；双击启动并自动打开浏览器（packaging/run_app.py）
 ```
 
-注意：FastAPI/uvicorn/trafilatura/lxml 等有动态导入，首次构建大概率要按报错补
-`hiddenimports`/`datas`。数据目录默认落在 exe 同级 `data/`。
+该 spec **不是当前 Release CI 的正式产物**。FastAPI、uvicorn、trafilatura、lxml、Playwright 等包含动态导入；修改依赖后需要同步检查 `hiddenimports`、`datas` 和冻结环境冒烟测试。
 
-## 3. 防破解 / 加固
+## 4. 可选本地 AI Runtime
 
-已内置（代码级、可测）：
-- License 离线 **Ed25519 验签**（私钥不在客户端，无法伪造激活码）
-- 授权文件 **AES 加密 + 机器指纹绑定**（拷贝到其他机器失效）
-- **时间回拨检测**（防改系统时间绕过过期）
-- **公钥防调包自校验**（`app/licensing/integrity.py`，运行 `licctl keygen` 后启用）
+CosyVoice 与 SadTalker 不直接塞入主应用包，而是使用独立托管 Runtime，避免 torch 等大型依赖污染主程序。
 
-进一步加固（`tools/build_hardened.py`，需你的构建环境）：
-- **PyArmor**：`pyarmor gen -O dist_obf app/licensing app/web/server.py`
-- **Cython** 编译关键模块为原生 `.pyd/.so`：`python tools/build_hardened.py cythonize`
+- CI：`.github/workflows/build-cosyvoice-runtime.yml`、`.github/workflows/build-sadtalker-runtime.yml`
+- 打包器：`packaging/pack_cosyvoice_runtime.py`、`packaging/pack_sadtalker_runtime.py`
+- 开发准备：`prepare-cosyvoice-dev.*`、`prepare-sadtalker-dev.*`
+- Windows 使用 CUDA Runtime；macOS Intel / Apple Silicon 使用 CPU Runtime
+- Runtime 与模型支持分片、manifest、断点续传和真实推理验证
 
-顺序建议：`licctl keygen`（生成密钥并 pin 公钥哈希）→ 加固/编译 → 打包。
+## 5. 许可与加固
 
-## 发证流程（卖家）
+客户端已内置：
+
+- License 离线 **Ed25519 验签**（私钥不在客户端）
+- 授权文件加密与机器指纹绑定
+- 时间回拨检测
+- 公钥完整性自校验
+- Free / Pro 功能门控与每日免费转写额度
+
+Pro 功能目录位于 `app/licensing/features.py`，包括无限转写、搜索创作、风格学习、AI 来源发现、讲解视频、平台同步、声音复刻和定时调度。
+
+进一步加固：
 
 ```bash
-python -m tools.licctl keygen                          # 一次性：生成密钥对
-python -m tools.licctl issue --key MA-PRO-0001 --days 365
-python -m tools.licctl issue --key MA-PRO-0002 --machine 1A2B-3C4D-5E6F-7A8B
+# PyArmor 示例
+pyarmor gen -O dist_obf app/licensing app/web/server.py
+
+# Cython 编译关键模块
+python tools/build_hardened.py cythonize
 ```
 
-`tools/license_private_key.b64` 是签发私钥，**务必保密、切勿提交**（已 gitignore）。
-`app/licensing/public_key.b64` 与 `integrity.py` 的 pin 需随包发布。
+建议顺序：生成密钥并固定公钥哈希 → 运行测试 → 加固 / 编译 → 构建前端 → PyInstaller 打包 → 冻结模块与实际启动验证。
+
+## 6. 发证流程（卖家）
+
+```bash
+# 首次生成密钥对
+python -m tools.licctl keygen
+
+# 一年授权
+python -m tools.licctl issue --key MA-PRO-0001 --days 365
+
+# 绑定机器
+python -m tools.licctl issue \
+  --key MA-PRO-0002 \
+  --machine 1A2B-3C4D-5E6F-7A8B
+```
+
+`tools/license_private_key.b64` 是签发私钥，**务必保密、切勿提交或复制到 CI / 客户端产物**。客户端只携带 `app/licensing/public_key.b64` 与完整性校验信息。
+
+本地开发可设置 `MEDIA_AGENT_LICENSE_DEV=1` 跳过 Pro 门控；正式发行和验收时必须移除该变量。

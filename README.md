@@ -1,8 +1,13 @@
 # Media Agent · 自媒体运营自动助理
 
-围绕你设定的主题（如 AI、物理 AI），自动从 RSS / 网页抓取前沿公司与机构的最新新闻和技术文章，去重归档、主题分类，并以自媒体格式（图文并茂、通俗易懂、吸引眼球、以爆款为目标）**保真改写**——只基于原文事实、不瞎编，改写后还会做一次事实校验，存疑处高亮提醒人工核对。配套本地 Web 界面用于浏览归档、审核与 Markdown 编辑草稿、配置来源、触发与定时运行。
+Media Agent 是一套本地运行的自媒体内容生产系统，提供两条创作工作流：
 
-> 半自动定位：抓取 + 归档 + 生成草稿全自动，**发布前由人工审核**。
+1. **抓取、转写创作**：持续从 RSS / 网页抓取新内容，去重归档、主题分类并批量保真转写。
+2. **搜索创作（Pro）**：围绕临时选题，从多个搜索引擎查找和筛选资料，综合生成带引用的草稿。
+
+两条工作流都会进入统一的事实校验、敏感词处理、Markdown 编辑、媒体处理、内容归档和平台发布流程。系统只根据来源材料组织内容，存疑事实会在草稿中提示人工核对。
+
+> 半自动定位：资料采集、整理与草稿生成可以自动完成，**最终内容与发布操作仍应由人工审核**。
 
 ## 核心特性
 
@@ -10,18 +15,25 @@
 - **多来源抓取**：RSS 订阅 + 网页爬取（列表页自动发现链接 / 单页抓取）。列表页支持**分页跟随**（`max_pages`，跟随 `?page=N` / `/page/N`），href 提取兼容单/双/无引号；对 SPA/SSR 站点可选 **JS 渲染**（`render_js`，需 Playwright，未装则回退静态）。
 - **去重归档**：URL 规范化 + 标题指纹去重，跨轮次持久化；原文以 Markdown（带 front-matter）落盘，按主题分目录。
 - **选题热度打分**：`compute_hotness()` 以 LLM 给主题打基线分 + 联网新鲜度加成，辅助排序选题。
-- **智能推荐**（Web）：输入主题 →（多选）子主题 → 关键词，一键加为主题；并可「按主题发现前沿公司/机构来源」自动加入。
+- **来源发现**：免费版可从网址 / 关键词手动发现和批量添加来源；Pro 版可用 AI 推荐主题、子主题和关键词，并按主题一键 / 批量发现前沿来源。
+- **归档视频标记**：归档列表自动识别文章中的视频并显示「🎬 视频」，地图、广告等普通 iframe 不会被误标。
+
+### 双创作工作流
+- **抓取、转写创作**：通过 CLI、定时任务或 Web 顶栏「立即运行」执行 `抓取 → 去重 → 归档 → 分类 → 相关性过滤 → 转写 → 草稿`。可限制时间范围、每来源条数和每轮最多转写篇数。
+- **搜索创作（Pro）**：执行 `扩展检索词 → 搜索资料 → 抓取页面 → 筛选排序 → 综合写作 → 事实校验 → 保存草稿`。支持中文 / 英文 / 双语、7/30/90 天或不限时间、5/10/20 个参考来源，以及 Bing / DuckDuckGo / Google / Brave 多选；近期资料不足时会自动扩大时间范围。默认沿用「设置 → 内容与风格」中的全局风格、标签、推广和敏感词配置，也可为单次任务指定风格。
 
 ### 媒体
 - **媒体提取**：图片支持 `src`/`data-src`/`srcset`/`<picture>`/CSS background-image，视频支持 `<video>/<source>`、平台 iframe、**JS 动态填充**（扫描 `<script>`/JSON 中的媒体 URL），并支持 **HLS（`.m3u8`，边播拉 `.ts`）**。
-- **媒体本地化**：抓取归档时把文章里的图片（httpx）与视频（yt-dlp，直链/HLS 均可）**下载到本地** `data/media/<hash>/`，front-matter 与正文引用改为本地路径；后续转写/合成直接用本地文件，避免防盗链/失效。归档页每篇可单独「重新抓取 / 本地化媒体」。
+- **媒体本地化**：抓取归档时可把文章里的图片（httpx）与视频（yt-dlp，直链/HLS 均可）**下载到本地** `data/media/<hash>/`，front-matter 与正文引用改为本地路径；草稿编辑器也可对正文媒体执行本地化。归档页提供「重新抓取」。
 - **配图**：原文配图下载 + AI 生成封面（provider 可切换，离线用占位图）。
 
 ### 改写与合规
 - **主题分类**：关键词优先命中，模糊时 LLM 零样本分类。
 - **保真改写**：原文为唯一事实来源，禁编造数据/引用/结论；产出候选标题 + 钩子 + 正文 + 来源标注；改写后事实校验、存疑处标红。
+- **转写风格**：内置多种写作风格。Pro 可从 3–10 篇 URL 或粘贴正文中学习语气、句式、开篇、段落、修辞、标题与结尾模式；学习结果可编辑、复用并通过 JSON 导入 / 导出。转写时最多注入 2 个表达示例，只学习写法，不带入样例事实。
 - **敏感词过滤**：文章/视频脚本生成后自动移除平台敏感/违禁词（广告法绝对化用语、引流、医疗/金融夸大等），内置词库**按等级**（`off`/`basic`/`standard`/`strict`），可自定义追加；静默处理、记录并在草稿页提示。
-- **平台同步**：一键从主稿生成公众号 / 小红书 / 头条 / 知乎风格的新草稿；平台架构可插拔，新增平台只需加一个文件。文章编辑和视频讲解两个 Tab 均支持同步到平台（复制内容到剪贴板 + 打开平台编辑器）。
+- **草稿安全清理**：内部封面生成提示块不会写入、读取或发布到文章正文；旧草稿中的 `:::image-prompt` 块也会在访问时自动移除。
+- **平台同步（Pro）**：公众号支持通过 API 推送草稿箱或直接发布；头条支持复制美化 HTML，小红书 / 知乎支持平台适配与复制；视频支持打开平台创作页及视频号半自动发布。平台架构可插拔。
 
 ### 讲解视频
 - **脚本 + 配音**：从草稿自动生成口播分镜脚本（LLM）→ 逐段 TTS 配音；分镜可在草稿页**编辑**（旁白/画面/重选背景素材、增删/排序），并**只对改动的分镜重配**。
@@ -35,9 +47,27 @@
 - **运行控制**：按时间窗（`max_age_days`）与每源条数（`max_per_source`）限制抓取量。
 - **并发加速**：多来源抓取、图片/视频下载用线程池并发，数量可配（`MEDIA_AGENT_DOWNLOAD_WORKERS`，默认 CPU 核数）。
 - **定时调度**：APScheduler cron 定时自动运行；**实时运行进度/日志面板**。
-- **本地 Web 界面**：仪表盘、归档浏览（按日期分组、查看原文）、草稿编辑（文章/讲解视频双 Tab）、来源配置、设置、立即运行。
-- **可切换大模型**：业务代码不绑定厂商；内置 `mock`（离线跑通全链路）与 `openai`，易扩展。
+- **本地 Web 界面**：仪表盘、归档、草稿、来源、设置，以及 Pro 搜索创作；支持实时运行进度、日志、暂停和停止。
+- **可切换大模型**：业务代码不绑定厂商；内置 `mock`、OpenAI 兼容接口，也可使用 opencode / codex / copilot CLI Agent 执行转写。
 - **配置导出/导入**：把来源 + 配置导出为 JSON 分享/备份，导入可恢复；**导出不含 API Key**。
+
+### 免费版与 Pro 版
+
+| 功能 | 免费版 | Pro 版 |
+|---|:---:|:---:|
+| RSS / 网页抓取、去重归档、主题分类 | ✅ | ✅ |
+| 手动添加 / 发现来源、编辑器组件与模板 | ✅ | ✅ |
+| 媒体本地化、kitten 配音 | ✅ | ✅ |
+| LLM 转写 | 每日 1 篇 | 不限 |
+| 搜索创作 | — | ✅ |
+| AI 学习、管理、导入导出转写风格 | — | ✅ |
+| AI 推荐主题与一键 / 批量发现来源 | — | ✅ |
+| 讲解视频与数字人主播 | — | ✅ |
+| 平台同步 / 公众号 API 发布 | — | ✅ |
+| CosyVoice 声音复刻 | — | ✅ |
+| 定时调度 | — | ✅ |
+
+未激活许可证时自动使用免费版。Pro 使用离线、可绑定机器的激活码；本地开发可设置 `MEDIA_AGENT_LICENSE_DEV=1` 临时解锁功能，**不要用于正式发行包**。
 
 > 版权提示：把第三方视频片段剪入自己的成片并发布可能涉及版权，请自行注明出处或取得授权；AI 生成图建议标注「AI 生成」。
 
@@ -59,7 +89,7 @@ bash start.sh
 
 ## 安装
 
-需要 Python 3.11+（已在 3.12 验证）。
+需要 Python 3.10+（推荐 3.11；已在 3.12 验证）。部分本地语音运行时对 Python 版本有独立要求，打包版会使用托管 Runtime 隔离依赖。
 
 **可选外部依赖（按需安装）：**
 - **ffmpeg**（讲解视频合成、HLS 合并）：装好并加入 PATH（<https://ffmpeg.org>）。中文字幕字体可用 `MEDIA_AGENT_FONT` 指定（默认自动探测微软雅黑/黑体/Noto CJK）。
@@ -67,12 +97,12 @@ bash start.sh
 - **Playwright**（SPA/SSR 页面 JS 渲染抓取）：`pip install playwright && playwright install chromium`。
 - **TTS / 声音复刻**（按需选装）：
 
-| 方案 | 类型 | Python | 显存 | 中文 | 声音复刻 | 安装 |
-|---|---|---|---|---|---|---|
-| **CosyVoice2-0.5B** ⬅️内置 | 本地 | <3.13 | 4GB+ | ⭐⭐⭐ 最佳 | ✅ zero-shot(3-10s) | `pip install cosyvoice` |
-| **GPT-SoVITS** | 本地 | 3.9-3.11 | 4GB+ | ⭐⭐⭐ 极好 | ✅ 1分钟样本 | 单独项目(RVC-Boss) |
-| **Fish Speech** | 本地 | >=3.10 | 4GB+ | ⭐⭐ 好 | ✅ 小样本 | `pip install fish-speech` |
-| **edge-tts (kitten)** | 云端 | **任意** | **无需** | ⭐⭐ 中上 | ❌ 无 | 内置 |
+| 方案 | 类型 | 资源要求 | 中文 | 声音复刻 | 说明 |
+|---|---|---|---|---|---|
+| **kitten（edge-tts）** | 云端 | 无需 GPU | 良好 | ❌ | 默认内置，免 API Key |
+| **CosyVoice2-0.5B** | 本地托管 Runtime | Windows CUDA 4GB+；macOS CPU | 最佳 | ✅ 3–10 秒样本 | 设置页一键安装 |
+| **OpenAI 兼容 TTS** | 外部服务 | 由服务端决定 | 由模型决定 | 由服务端决定 | 配置 API Base / Key / Model |
+| **mock** | 本地测试 | 无 | 占位输出 | ❌ | 用于离线验证流程 |
 
 ```bash
 python -m venv .venv
@@ -86,14 +116,14 @@ pip install -r requirements.txt
 
 ### 打包版（免 Python 环境）
 
-不想装 Python？从 [Releases](https://github.com/ivanzwb/media-agent/releases) 下载对应平台的 zip，解压后直接运行：
+不想装 Python？从 [Releases](https://github.com/ivanzwb/release/releases) 下载对应平台的 zip，解压后直接运行：
 
 > 国内下载慢？用镜像加速：把 `https://github.com` 替换为 `https://ghproxy.net/https://github.com`，例如：
-> `https://ghproxy.net/https://github.com/ivanzwb/media-agent/releases/download/v0.2.30/media-agent-win64.zip`
+> `https://ghproxy.net/https://github.com/ivanzwb/release/releases/download/v0.2.34/media-agent-v0.2.34-win64.zip`
 
 ```
-Windows:  media-agent\media-agent.exe serve
-macOS:    media-agent/media-agent serve
+Windows:  media-agent\media-agent.exe
+macOS:    media-agent/media-agent
 ```
 
 打包版已内置所有 Python 依赖（playwright 库）。解压后运行 `setup-optional.bat`（Win）或 `setup-optional.sh`（Mac）可自动检测并引导安装可选组件：
@@ -114,7 +144,7 @@ macOS:    media-agent/media-agent serve
 
 开发时也可用 `start.bat` / `start.sh` 一键构建前端并启动服务（见「一键启动」）。
 
-CI 自动构建：推送带 `v*` 的 tag 即触发 GitHub Actions，同时输出 Win + Mac 两版到 Release。
+CI 自动构建：推送带 `v*` 的 tag 即触发 GitHub Actions，构建并冒烟验证 Windows、macOS Intel 与 macOS Apple Silicon 三个 onedir 包，然后上传 zip 到 Release。
 
 Windows 本地开发需要 SadTalker 时，运行：
 
@@ -180,7 +210,12 @@ sources:
 | `MEDIA_AGENT_LLM_PROVIDER` | `mock` \| `openai` | `mock` |
 | `MEDIA_AGENT_LLM_API_KEY` | 大模型 API Key | 无 |
 | `MEDIA_AGENT_LLM_MODEL` | 模型名（如 `gpt-4o-mini`） | provider 默认 |
+| `MEDIA_AGENT_LLM_API_BASE` | OpenAI 兼容接口地址 | provider 默认 |
+| `MEDIA_AGENT_LLM_TIMEOUT` | LLM 请求超时秒数 | `120` |
 | `MEDIA_AGENT_IMAGE_PROVIDER` | `mock` \| `openai` | `mock` |
+| `MEDIA_AGENT_IMAGE_API_KEY` | 图片模型 API Key | 无 |
+| `MEDIA_AGENT_IMAGE_API_BASE` | 图片模型兼容接口地址 | 跟随 LLM API Base |
+| `MEDIA_AGENT_IMAGE_MODEL` | 图片模型名 | provider 默认 |
 | `MEDIA_AGENT_TTS_PROVIDER` | `kitten`（内置）\| `cosyvoice`（托管 Runtime；Windows CUDA/macOS CPU）\| `mock` \| `openai`（兼容） | `kitten` |
 | `MEDIA_AGENT_TTS_API_BASE` | 外部 TTS 服务地址（仅 `openai` 需要） | 无 |
 | `MEDIA_AGENT_TTS_API_KEY` | TTS API Key（内置/本地服务可留空） | 无 |
@@ -191,14 +226,35 @@ sources:
 | `MEDIA_AGENT_TTS_INSTRUCT` | CosyVoice 语气/情感指令，如「用亲切自然的语气」（仅 `cosyvoice`） | 无 |
 | `MEDIA_AGENT_MAX_AGE_DAYS` | 只保留 N 天内的文章（空=不限） | 不限 |
 | `MEDIA_AGENT_MAX_PER_SOURCE` | 每个来源最多抓取条数（空=不限） | 不限 |
+| `MEDIA_AGENT_MAX_DRAFTS` | 每轮最多转写 / 改写篇数 | `10` |
 | `MEDIA_AGENT_DOWNLOAD_WORKERS` | 来源抓取 / 图片视频下载的并发线程数（空=CPU 核数） | CPU 核数 |
+| `MEDIA_AGENT_DOWNLOAD_IMAGES` | 抓取时本地化图片（`0` 关闭） | `1` |
+| `MEDIA_AGENT_DOWNLOAD_VIDEOS` | 抓取时本地化视频（`0` 关闭） | `1` |
+| `MEDIA_AGENT_RELEVANCE_FILTER` | LLM 过滤非新闻 / 非研究内容（`0` 关闭） | `1` |
+| `MEDIA_AGENT_FETCH_PROXY` | RSS、网页抓取与媒体下载 HTTP/HTTPS 代理 | 无 |
+| `MEDIA_AGENT_REWRITE_STYLE` | 全局默认转写风格 ID | 内置默认 |
+| `MEDIA_AGENT_REWRITE_PRIORITY` | `agent` 优先或普通 LLM 转写 | `agent` |
+| `MEDIA_AGENT_CLI_TOOL` | CLI Agent：`none` \| `opencode` \| `codex` \| `copilot` | `none` |
+| `MEDIA_AGENT_CLI_TIMEOUT` | CLI Agent 超时秒数 | `500` |
+| `MEDIA_AGENT_PROMOTION_FOOTER` | 自动附加到文章末尾的推广文案 | 无 |
+| `MEDIA_AGENT_SEO_TAGS_ENABLED` | 自动生成 SEO 标签（`0` 关闭） | `1` |
 | `MEDIA_AGENT_VIDEO_FIT_MODE` | 讲解视频画面适配：`fit`（完整+黑边）\| `crop`（铺满裁剪）\| `blur`（完整+模糊背景） | `fit` |
+| `MEDIA_AGENT_VIDEO_BRAND_NAME` | 视频品牌名称 | `Media Agent` |
+| `MEDIA_AGENT_FONT` | 视频中文字幕字体文件 | 自动探测 |
 | `MEDIA_AGENT_AVATAR_ENABLED` | 讲解视频叠加数字人主播（`1` 开启） | `0` |
 | `MEDIA_AGENT_AVATAR_IMAGE` | 主播头像文件名（放在 `data/avatar/`；建议在「设置」页上传） | 无 |
 | `MEDIA_AGENT_AVATAR_POSITION` | 默认位置：`pip`（画中画/角落）\| `full`（全屏主播）；可按分镜覆盖 | `pip` |
-| `MEDIA_AGENT_AVATAR_PROVIDER` | `sadtalker`（本地口型同步，需 GPU）\| `still`（静态头像） | `sadtalker` |
+| `MEDIA_AGENT_AVATAR_PROVIDER` | `sadtalker`（Windows CUDA / macOS CPU）\| `still`（静态头像） | `sadtalker` |
+| `MEDIA_AGENT_SADTALKER_DIR` | 自定义 SadTalker Runtime 目录 | 托管目录 |
+| `MEDIA_AGENT_SADTALKER_PYTHON` | 自定义 SadTalker Python 路径 | 托管 Runtime |
 | `MEDIA_AGENT_SENSITIVE_LEVEL` | 敏感词过滤等级：`off` \| `basic` \| `standard` \| `strict` | `standard` |
 | `MEDIA_AGENT_SENSITIVE_WORDS` | 自定义敏感词（逗号/换行分隔，追加到内置词库） | 无 |
+| `MEDIA_AGENT_WECHAT_APPID` | 公众号 AppID | 无 |
+| `MEDIA_AGENT_WECHAT_APPSECRET` | 公众号 AppSecret | 无 |
+| `MEDIA_AGENT_WECHAT_AUTHOR` | 公众号默认作者 | 无 |
+| `MEDIA_AGENT_GITHUB_MIRROR` | GitHub 下载镜像 | 无 |
+| `MEDIA_AGENT_HUGGINGFACE_MIRROR` | Hugging Face 下载镜像 | 无 |
+| `MEDIA_AGENT_LICENSE_DEV` | 本地开发绕过 Pro 许可（禁止发行包使用） | `0` |
 
 > 不配置任何真实模型时默认走 `mock`，可在无 API Key 的情况下跑通整条流水线（改写内容为占位文本），便于先验证流程。
 
@@ -231,22 +287,23 @@ python -m app.cli run --feeds feeds.yaml --with-images
 
 ### Web 界面
 
-`python -m app.cli serve` 后访问 `http://127.0.0.1:8000`：
+`python -m app.cli serve` 后访问 `http://127.0.0.1:8000`（React SPA）。顶栏包含 **仪表盘 / 归档 / 草稿 / 来源 / 设置**，以及 **搜索创作（Pro）** 和 **立即运行**。
 
-- **仪表盘**：归档/草稿/运行计数、最近运行、最新草稿、右上角「立即运行」（带实时进度/日志面板）。
-- **归档**：按日期分组浏览、主题筛选；每篇可「查看原文」（本地媒体内联渲染）、「重新抓取」、「本地化媒体」、「转写/重写」；抓取/本地化日志在右下角浮动面板（不遮挡列表）。
-- **草稿**：列表 + 双 Tab 编辑器——
-  - 「文章内容」：候选标题、正文 Markdown（分屏实时预览）、状态流转（drafted→reviewing→approved→published）、封面预览、**同步到平台**（公众号/小红书/头条/知乎）；**事实校验存疑 / 敏感词过滤**会高亮提示。
-  - 「讲解视频」：生成分镜脚本+配音、分镜编辑（旁白/画面/重选素材、增删/排序、局部重配）、合成 mp4、播放/下载、**同步到平台**。
-- **来源**：查看/编辑主题与来源；「智能推荐主题」（主题→子主题→关键词）、「按主题发现前沿来源」、「从网址/关键词发现」自动添加（写回 `feeds.yaml`）。
-- **设置**：LLM / 图片 / **TTS（含声音库录入）** provider、并发数、视频画面适配、**敏感词等级与自定义词**、运行控制、定时 cron、配置导出/导入。
+- **仪表盘**：归档 / 草稿 / 运行计数，主题与来源热度排名、最近运行、最新草稿及数据清理。
+- **归档**：按日期分组和主题筛选；视频文章显示「🎬 视频」；每篇可查看原文、重新抓取、选择风格转写 / 重写；支持批量删除和右下角转写进度面板。
+- **草稿列表**：状态筛选、评分、分页、来源类型标记和批量删除。
+- **草稿编辑 · 文章内容**：标题与候选标题、Markdown 分屏预览、排版组件 / 模板 / 素材库、状态流转、封面抓取 / AI 生成、事实校验、敏感词提示、媒体本地化、Agent 编辑，以及 Pro 平台适配 / 发布。搜索创作稿会显示参考来源与引用。
+- **草稿编辑 · 讲解视频（Pro）**：生成分镜和配音，编辑旁白 / 画面 / 素材 / 主播位置，局部重配，合成与下载 mp4，并打开平台视频页或执行视频号半自动发布。
+- **搜索创作（Pro）**：输入主题并配置语言、时间范围、参考来源数、写作风格和搜索引擎；页面实时显示七阶段进度、日志，支持取消和完成后打开草稿。
+- **来源**：主题 / 来源增删改、启用禁用、可达性检测和批量操作；免费版可从网址 / 关键词手动发现，Pro 可 AI 推荐主题并一键 / 按主题发现来源。
+- **设置**：8 个 Tab——**授权｜模型｜语音与视频｜数字人主播｜内容与风格｜采集与定时｜公众号｜其它**。自定义风格的学习、管理和导入导出位于「内容与风格」。
 
-> 定时设置在 `serve` 启动时生效，修改后请重启服务。
+> 定时调度仅在 Pro 许可有效时启动。修改 cron 后请重启服务。
 
 ## 产出物
 
 - `data/archive/<主题>/<日期>-<slug>.md`：抓取的原文（含 front-matter：标题/来源/主题/images/videos 等）。
-- `data/drafts/<主题>/<id>-<平台>-<slug>.md`：改写后的草稿，front-matter 含候选标题、来源、封面、平台、`flagged_claims`（存疑项）、`sensitive_hits`（被过滤的敏感词）、状态。
+- `data/drafts/<主题>/<article_id>-<slug>.md`：改写后的草稿，front-matter 含候选标题、来源、封面、平台、`flagged_claims`（存疑项）、`sensitive_hits`（被过滤的敏感词）、状态。平台适配通常返回复制 / 发布内容，不另外创建平台命名文件。
 - `data/media/<hash>/`：本地化的原文图片/视频。
 - `data/videos/draft-<id>/`：讲解视频产物（`script.json` 分镜脚本、逐段配音、`video.mp4`）。
 - `data/voices/`：声音复刻样本与注册表（`voices.json`）。
@@ -264,19 +321,21 @@ app/
 ├─ feeds.py             # feeds.yaml 读写（含 max_pages / render_js）
 ├─ cli.py               # Typer CLI（init / run / serve）
 ├─ scheduler.py         # APScheduler 定时调度
+├─ licensing/           # Free / Pro 功能门控、离线许可与完整性校验
 ├─ discovery.py         # 来源自动发现（RSS 探测 + 关键词搜索）
 ├─ sources/             # rss / scraper（分页/JS 渲染）/ extractor（媒体提取）/ dedup
 ├─ media/               # 下载策略链（downloader / strategies：httpx 直链 / URL 变换 / yt-dlp）
 ├─ llm/                 # 大模型抽象层 + providers（mock / openai）
 ├─ images/              # 图片抽象层 + providers（mock / openai）
 ├─ tts/                 # TTS 抽象层 + providers（kitten / cosyvoice / openai…）+ 声音库
-├─ video/              # builder：PIL 字幕帧 + ffmpeg 合成
+├─ video/               # builder：PIL 字幕帧 + ffmpeg 合成
+├─ wechat/              # 公众号 HTML、媒体上传、草稿箱与直接发布
 ├─ platforms/           # 平台同步（wechat / xiaohongshu / toutiao / zhihu）— 可插拔架构
-├─ pipeline/            # classifier / rewriter / sanitizer / localize / recommender(+热度)
-│                       #   / script / narration / images / adapter / video / orchestrator
+├─ pipeline/            # 抓取转写、搜索创作、风格学习、事实校验、媒体与视频流水线
 ├─ web/                 # FastAPI 服务 + 静态资源 + React SPA 挂载
 frontend/               # React SPA 源码（Vite + Ant Design + React Router）
-tests/                  # pytest（160 个测试）
+tests/                  # pytest 测试套件
+packaging/              # PyInstaller、CosyVoice / SadTalker Runtime 打包工具
 feeds.yaml  requirements.txt
 build-win.bat build-mac.sh  # 本地打包脚本
 start.bat start.sh      # 一键启动脚本（构建前端 + 启动服务）
@@ -313,10 +372,9 @@ python -m pytest -v
 
 ## 路线图（后续可扩展）
 
-- 平台 API 直发（公众号素材管理 API、头条号开放平台等）。
-- 多平台一键同步发布。
+- 扩展更多平台的官方 API 直发（公众号草稿箱 / 直接发布已支持）。
+- 更完整的多平台统一发布状态与失败重试。
 - 更多来源（X/Twitter 等社交平台）。
 - 多模型对比改写、A/B 标题。
 - 归档双格式（原始 HTML + Markdown）以便提取逻辑升级后回溯重提取（见 issue #9）。
 - 背景音乐 / 转场 / 竖屏 9:16 适配。（数字人口播已支持，见「讲解视频」）
-```

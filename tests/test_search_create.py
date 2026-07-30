@@ -15,8 +15,8 @@ from app.pipeline.search_create import (
     rank_by_topic, run_search_create, scrape_search_hits)
 from app.pipeline.synthesizer import synthesize
 from app.sources.web_search import (
-    SearchHit, merge_search_hits, normalize_search_url, search_bing_text,
-    search_ddgs_text, search_query)
+    SearchHit, filter_hits_for_query, merge_search_hits, normalize_search_url,
+    search_bing_text, search_ddgs_text, search_query)
 from app.sources.dedup import dedup_near_content
 from app.store import Store
 
@@ -92,7 +92,7 @@ def test_ddgs_uses_selected_search_engines(monkeypatch):
 
 
 def test_bing_result_short_circuits_blocked_engines(monkeypatch):
-    expected = SearchHit("Bing result", "https://example.test/bing")
+    expected = SearchHit("topic result", "https://example.test/bing")
     monkeypatch.setattr(
         "app.sources.web_search.search_bing_text",
         lambda *args, **kwargs: [expected])
@@ -104,10 +104,34 @@ def test_bing_result_short_circuits_blocked_engines(monkeypatch):
         "topic", region="cn-zh", engines=["duckduckgo"]) == [expected]
 
 
+def test_irrelevant_bing_results_fall_through_to_next_engine(monkeypatch):
+    calls = {"bing": 0, "ddgs": 0}
+
+    def broad_bing(*args, **kwargs):
+        calls["bing"] += 1
+        return [SearchHit("儿童频道", "https://example.test/children")]
+
+    def focused_ddgs(*args, **kwargs):
+        calls["ddgs"] += 1
+        return [SearchHit(
+            "医生提醒：儿童做美甲可能损伤指甲",
+            "https://example.test/manicure")]
+
+    monkeypatch.setattr(
+        "app.sources.web_search.search_bing_text", broad_bing)
+    monkeypatch.setattr(
+        "app.sources.web_search.search_ddgs_text", focused_ddgs)
+    result = search_query(
+        "儿童美甲 健康风险", region="cn-zh",
+        engines=["bing", "duckduckgo"])
+    assert result[0].url == "https://example.test/manicure"
+    assert calls == {"bing": 1, "ddgs": 1}
+
+
 def test_search_retries_three_times_before_success(monkeypatch):
     calls = {"count": 0}
     delays = []
-    expected = SearchHit("Recovered", "https://example.test/recovered")
+    expected = SearchHit("topic recovered", "https://example.test/recovered")
 
     def flaky_bing(*args, **kwargs):
         calls["count"] += 1
@@ -163,9 +187,18 @@ def test_bing_html_search_parses_results(monkeypatch):
 def test_query_expansion_parses_json_and_has_fallback():
     provider = MockProvider(['{"queries":["AI research","AI news","AI news"]}'])
     assert expand_search_queries("AI", "en", provider) == [
-        "AI research", "AI news"]
+        "AI", "AI research", "AI news"]
     fallback = MockProvider(["not json"])
     assert expand_search_queries("AI", "zh", fallback)[0] == "AI"
+
+
+def test_search_hit_filter_rejects_generic_partial_chinese_matches():
+    rows = [
+        SearchHit("儿童频道", "https://example.test/children"),
+        SearchHit("医生提醒：儿童做美甲可能损伤指甲",
+                  "https://example.test/manicure"),
+    ]
+    assert filter_hits_for_query(rows, "儿童美甲 健康风险") == [rows[1]]
 
 
 def test_scrape_partial_failure_and_cancel(monkeypatch):
@@ -261,13 +294,50 @@ def test_synthesize_applies_requested_output_language():
     assert "输出语言：English" in provider.calls[0][-1].content
 
 
+def test_synthesize_uses_content_style_settings_and_examples():
+    class CaptureProvider(MockProvider):
+        def __init__(self):
+            super().__init__([
+                '{"title_candidates":["标题"],'
+                '"body_md":"## 正文\\n事实 [1]。\\n\\n'
+                '**SEO 标签**：#AI #智能体"}',
+                '{"flagged_claims":[]}',
+            ])
+            self.calls = []
+
+        def chat(self, messages, **opts):
+            self.calls.append(messages)
+            return super().chat(messages, **opts)
+
+    style = types.SimpleNamespace(
+        prompt="使用克制、直接的编辑语气。",
+        instruction="### 写作风格\n短句、短段，先给结论。\n\n### 通用要求\n只写事实。",
+        analysis={},
+        examples=[{"title": "样例", "content": "这是只用于学习节奏的样例。"}],
+    )
+    provider = CaptureProvider()
+    result = synthesize(
+        "AI", [article(1), article(2)], provider, style=style,
+        promotion_footer="关注 Media Agent", seo_tags_enabled=True)
+
+    system = provider.calls[0][0].content
+    prompt = provider.calls[0][-1].content
+    assert "使用克制、直接的编辑语气" in system
+    assert "短句、短段，先给结论" in prompt
+    assert "目标风格示例" in prompt
+    assert "只用于模仿表达方式" in prompt
+    assert "关注 Media Agent" in prompt
+    assert "**标签**：#关键词1" in prompt
+    assert "**标签**：#AI #智能体" in result.body_md
+
+
 def test_run_search_create_mock_end_to_end(tmp_path, monkeypatch):
     config = Config(data_dir=tmp_path)
     config.ensure_dirs()
     conn = connect(config.db_path)
     init_db(conn)
     store = Store(conn, config)
-    rows = [article(1), article(2)]
+    rows = [article(1, days_old=365), article(2, days_old=365)]
     monkeypatch.setattr(
         "app.pipeline.search_create.search_queries",
         lambda *args, **kwargs: [
@@ -281,17 +351,22 @@ def test_run_search_create_mock_end_to_end(tmp_path, monkeypatch):
         "[0,1]",
         '{"scores":[{"index":0,"score":90},{"index":1,"score":80}]}',
         '{"title_candidates":["综合标题"],'
-        '"body_md":"## 正文\\n事实 [1] 和事实 [2]。",'
+        '"body_md":"## 正文\\n最佳事实 [1] 和事实 [2]。",'
         '"citations":[{"claim":"事实","source_indexes":[1,2]}]}',
         '{"flagged_claims":[]}',
     ])
     events = []
     result = run_search_create(
         store, provider,
-        SearchCreateOptions(topic="AI", time_range_days=0, ref_count=5),
+        SearchCreateOptions(topic="AI", time_range_days=30, ref_count=5),
+        sensitive_words={"最佳"},
         progress=events.append)
     assert result["draft_id"]
     assert events[-1]["stage"] == "done"
     meta = store.read_draft_body(result["draft_id"])
     assert meta["origin"] == "search_create"
     assert len(meta["sources"]) == 2
+    assert "最佳" not in meta["body_md"]
+    assert meta["sensitive_hits"] == ["最佳×1"]
+    assert result["stats"]["time_range_relaxed"] is True
+    assert any("自动扩大到不限时间" in event["detail"] for event in events)

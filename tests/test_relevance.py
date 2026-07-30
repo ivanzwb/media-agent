@@ -65,3 +65,23 @@ def test_filter_relevant_batches_across_chunks():
     provider = MockProvider(responses=["[0]", "[0]", "[0]"])
     kept = filter_relevant(arts, provider, enabled=True)
     assert kept == [arts[0], arts[8], arts[16]]
+
+
+def test_informational_scope_keeps_guidance_and_explainers_in_prompt():
+    arts = _articles(1)
+
+    class CaptureProvider(MockProvider):
+        def __init__(self):
+            super().__init__(responses=["[0]"])
+            self.prompt = ""
+
+        def chat(self, messages, **opts):
+            self.prompt = messages[-1].content
+            return super().chat(messages, **opts)
+
+    provider = CaptureProvider()
+    assert filter_relevant(
+        arts, provider, enabled=True,
+        content_scope="informational") == arts
+    assert "科普" in provider.prompt
+    assert "医生/专家建议" in provider.prompt

@@ -1,6 +1,6 @@
 # Media Agent · Web UI 重新设计方案
 
-> 本文档描述了 Media Agent Web 界面的全新设计方向。review 并批准后进入实现阶段。
+> **历史设计稿（已归档）**：本文记录早期基于 Jinja2 / vanilla CSS 的界面设想，不代表当前实现。当前产品已使用 **React SPA + Ant Design + React Router + React Query**，并加入 Free / Pro 授权、搜索创作、风格学习、讲解视频和平台发布等功能。实际功能与使用方式请以 [`README.md`](README.md) 和 `frontend/src/` 为准。
 
 ---
 

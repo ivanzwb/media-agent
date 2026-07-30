@@ -232,9 +232,10 @@ export default function SearchCreate() {
             <Form.Item name="ref_count" label="参考来源数量" style={{ minWidth: 180 }}>
               <Select options={[5, 10, 20].map((value) => ({ value, label: `${value} 个来源` }))} />
             </Form.Item>
-            <Form.Item name="style" label="写作风格" style={{ minWidth: 220 }}>
+            <Form.Item name="style" label="写作风格" style={{ minWidth: 260 }}
+              extra="留空时跟随「设置 → 内容与风格」；标签、推广和敏感词也使用该页设置。">
               <Select loading={!styleData} options={[
-                { value: "", label: "默认（全局）" },
+                { value: "", label: "默认（跟随设置）" },
                 ...(styleData?.styles || []).map((item) => ({
                   value: item.id,
                   label: item.name + (item.is_builtin === false ? "（自定义）" : ""),

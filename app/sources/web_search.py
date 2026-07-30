@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -27,6 +28,32 @@ class SearchHit:
     title: str
     url: str
     snippet: str = ""
+
+
+def filter_hits_for_query(hits: list[SearchHit], query: str) -> list[SearchHit]:
+    """Discard broad search results that only match one generic query fragment."""
+    lowered = (query or "").lower()
+    latin_terms = set(re.findall(r"[a-z0-9]{2,}", lowered))
+    cjk_groups = re.findall(r"[\u3400-\u9fff]{2,}", lowered)
+    cjk_terms = {
+        group[index:index + 2]
+        for group in cjk_groups
+        for index in range(len(group) - 1)
+    }
+    if not latin_terms and not cjk_terms:
+        return hits
+
+    filtered: list[SearchHit] = []
+    for hit in hits:
+        haystack = f"{hit.title} {hit.snippet}".lower()
+        latin_matches = sum(term in haystack for term in latin_terms)
+        cjk_matches = sum(term in haystack for term in cjk_terms)
+        # One Latin term is usually discriminative (AI, OpenAI, GPU). Chinese
+        # natural-language questions need two matching bigrams so Bing cannot
+        # satisfy “儿童美甲健康风险” with a generic “儿童” landing page.
+        if latin_matches >= 1 or cjk_matches >= min(2, len(cjk_terms)):
+            filtered.append(hit)
+    return filtered
 
 
 def normalize_search_url(url: str) -> str:
@@ -149,8 +176,14 @@ def search_query(query: str, *, max_results: int = 10,
                         query, max_results=max_results, timelimit=timelimit,
                         region=region, engines=[engine], proxy=proxy,
                         timeout=timeout)
+                relevant_hits = filter_hits_for_query(hits, query)
+                if relevant_hits:
+                    return relevant_hits
                 if hits:
-                    return hits
+                    logger.warning(
+                        "%s 搜索 %r 返回 %d 条，但与完整检索词相关性不足",
+                        engine, query, len(hits))
+                    break
                 error_detail = "未返回结果"
             except Exception as exc:  # noqa: BLE001
                 error_detail = str(exc)
@@ -175,8 +208,14 @@ def search_query(query: str, *, max_results: int = 10,
                 hits = search_bing_text(
                     query, max_results=max_results, timelimit=timelimit,
                     region=region, proxy=proxy, timeout=timeout)
+                relevant_hits = filter_hits_for_query(hits, query)
+                if relevant_hits:
+                    return relevant_hits
                 if hits:
-                    return hits
+                    logger.warning(
+                        "Bing 降级搜索 %r 返回 %d 条，但相关性不足",
+                        query, len(hits))
+                    break
                 error_detail = "未返回结果"
             except Exception as exc:  # noqa: BLE001
                 error_detail = str(exc)

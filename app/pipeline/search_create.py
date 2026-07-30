@@ -11,6 +11,7 @@ from app.models import Article, Draft
 from app.pipeline.orchestrator import filter_by_age
 from app.pipeline.relevance import filter_relevant
 from app.pipeline.rewriter import _extract_json
+from app.pipeline.sanitizer import sanitize_draft
 from app.pipeline.synthesizer import synthesize
 from app.sources.dedup import dedup, dedup_near_content
 from app.sources.scraper import scrape_single
@@ -90,7 +91,9 @@ def expand_search_queries(topic: str, lang: str,
     }[lang]
     prompt = (
         f"为主题「{topic}」生成 3-5 个适合查找高质量新闻、研究和深度文章的"
-        f"搜索引擎检索词。{language}。覆盖最新进展、关键数据和争议观点。"
+        f"搜索引擎检索词。{language}。检索词要短而具体，把最有区分度的核心"
+        "概念放在最前面，不要照抄完整问句；同时覆盖专业解释、风险/收益、"
+        "专家建议和可靠数据。"
         '只输出 JSON：{"queries":["..."]}。'
     )
     try:
@@ -99,7 +102,7 @@ def expand_search_queries(topic: str, lang: str,
         queries = parsed.get("queries") or []
         cleaned = [str(query).strip() for query in queries if str(query).strip()]
         if cleaned:
-            return list(dict.fromkeys(cleaned))[:5]
+            return list(dict.fromkeys([topic, *cleaned]))[:5]
     except Exception:  # noqa: BLE001
         pass
 
@@ -267,6 +270,9 @@ def rank_by_topic(articles: list[Article], topic: str, provider: LLMProvider,
 
 def run_search_create(store, provider: LLMProvider,
                       options: SearchCreateOptions, *, style=None,
+                      promotion_footer: str = "",
+                      seo_tags_enabled: bool = True,
+                      sensitive_words: set[str] | None = None,
                       progress: ProgressCallback | None = None,
                       should_stop: Callable[[], bool] | None = None) -> dict:
     options.validate()
@@ -281,6 +287,7 @@ def run_search_create(store, provider: LLMProvider,
         "urls": 0,
         "scraped": 0,
         "near_duplicates": 0,
+        "time_range_relaxed": False,
         "kept": 0,
         "draft_id": None,
     }
@@ -316,12 +323,22 @@ def run_search_create(store, provider: LLMProvider,
 
     _check_cancel(should_stop)
     _emit(progress, "filter", "正在过滤低质量和不相关内容…", stats=stats)
-    articles = filter_by_age(
+    articles_before_age = list(articles)
+    age_filtered = filter_by_age(
         articles, options.time_range_days,
         progress=lambda message: _emit(
             progress, "filter", message, stats=stats))
+    if options.time_range_days and len(age_filtered) < 2:
+        articles = articles_before_age
+        stats["time_range_relaxed"] = True
+        _emit(
+            progress, "filter",
+            f"最近 {options.time_range_days} 天资料不足，已自动扩大到不限时间",
+            stats=stats)
+    else:
+        articles = age_filtered
     articles = filter_relevant(
-        articles, provider, enabled=True,
+        articles, provider, enabled=True, content_scope="informational",
         progress=lambda message: _emit(
             progress, "filter", message, stats=stats))
     articles = rank_by_topic(articles, options.topic, provider, options.ref_count)
@@ -340,7 +357,9 @@ def run_search_create(store, provider: LLMProvider,
           stats=stats)
     result = synthesize(
         options.topic, saved_articles, provider,
-        style=style, lang=options.lang)
+        style=style, lang=options.lang,
+        promotion_footer=promotion_footer,
+        seo_tags_enabled=seo_tags_enabled)
 
     _check_cancel(should_stop)
     _emit(progress, "fact_check", "多源事实校验完成，正在保存草稿…",
@@ -381,6 +400,7 @@ def run_search_create(store, provider: LLMProvider,
             "engines": list(options.engines),
         },
     )
+    sanitize_draft(draft, sensitive_words or set())
     saved_draft = store.save_draft(draft)
     stats["draft_id"] = saved_draft.id
     _emit(progress, "done", f"已保存草稿 #{saved_draft.id}", stats=stats)
