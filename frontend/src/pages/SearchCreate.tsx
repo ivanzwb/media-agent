@@ -44,7 +44,7 @@ interface SearchCreateForm {
   time_range_days: 7 | 30 | 90 | 0;
   ref_count: 5 | 10 | 20;
   style: string;
-  engines: Array<"bing" | "duckduckgo" | "google" | "brave">;
+  engines: Array<"bing" | "baidu" | "duckduckgo" | "google" | "brave">;
 }
 
 const STAGES = [
@@ -202,7 +202,7 @@ export default function SearchCreate() {
         <Form<SearchCreateForm> form={form} layout="vertical" onFinish={start}
           initialValues={{
             lang: "zh", time_range_days: 30, ref_count: 10, style: "",
-            engines: ["bing", "duckduckgo", "google", "brave"],
+            engines: ["bing", "baidu", "duckduckgo", "google", "brave"],
           }}
           disabled={active || (!isPro && !!license)}>
           <Form.Item name="topic" label="创作主题"
@@ -243,9 +243,11 @@ export default function SearchCreate() {
               ]} />
             </Form.Item>
             <Form.Item name="engines" label="搜索引擎" style={{ minWidth: 300 }}
+              extra="百度中文资料最全，但不支持按时间范围筛选。"
               rules={[{ required: true, message: "请至少选择一个搜索引擎" }]}>
               <Select mode="multiple" maxTagCount="responsive" options={[
                 { value: "bing", label: "Bing（国内优先）" },
+                { value: "baidu", label: "百度（中文优先）" },
                 { value: "duckduckgo", label: "DuckDuckGo" },
                 { value: "google", label: "Google" },
                 { value: "brave", label: "Brave" },

@@ -59,7 +59,7 @@ def test_search_create_validates_request(tmp_path):
     assert response.status_code == 400
     bad_engine = client.post(
         "/api/search-create",
-        json={**valid_payload(), "engines": ["baidu"]})
+        json={**valid_payload(), "engines": ["yandex"]})
     assert bad_engine.status_code == 400
 
 

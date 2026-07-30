@@ -16,7 +16,7 @@ from app.pipeline.search_create import (
 from app.pipeline.synthesizer import synthesize
 from app.sources.web_search import (
     SearchHit, filter_hits_for_query, merge_search_hits, normalize_search_url,
-    search_bing_text, search_ddgs_text, search_query)
+    search_baidu_text, search_bing_text, search_ddgs_text, search_query)
 from app.sources.dedup import dedup_near_content
 from app.store import Store
 
@@ -101,7 +101,7 @@ def test_bing_result_short_circuits_blocked_engines(monkeypatch):
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("DDGS should not run after Bing succeeds")))
     assert search_query(
-        "topic", region="cn-zh", engines=["duckduckgo"]) == [expected]
+        "topic", region="cn-zh", engines=["bing", "duckduckgo"]) == [expected]
 
 
 def test_irrelevant_bing_results_fall_through_to_next_engine(monkeypatch):
@@ -128,6 +128,48 @@ def test_irrelevant_bing_results_fall_through_to_next_engine(monkeypatch):
     assert calls == {"bing": 1, "ddgs": 1}
 
 
+def test_baidu_is_selectable_and_skips_ddgs_backends(monkeypatch):
+    expected = SearchHit("远程办公 研究", "https://study.test/remote-work")
+    monkeypatch.setattr(
+        "app.sources.web_search.search_baidu_text",
+        lambda *args, **kwargs: [expected])
+    monkeypatch.setattr(
+        "app.sources.web_search.search_ddgs_text",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("baidu must not be passed to DDGS")))
+    monkeypatch.setattr(
+        "app.sources.web_search.search_bing_text",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Bing should not run when only baidu is selected")))
+
+    assert search_query(
+        "远程办公 研究", region="cn-zh", engines=["baidu"]) == [expected]
+
+
+def test_chinese_search_uses_baidu_after_selected_engines_fail(monkeypatch):
+    expected = SearchHit(
+        "医生提醒：儿童做美甲可能损伤指甲",
+        "https://www.baidu.com/link?url=result")
+    monkeypatch.setattr(
+        "app.sources.web_search.search_bing_text", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        "app.sources.web_search.search_ddgs_text",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("backend unavailable")))
+    monkeypatch.setattr(
+        "app.sources.web_search.search_baidu_text",
+        lambda *args, **kwargs: [expected])
+    monkeypatch.setattr("app.sources.web_search.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "app.sources.web_search.search_web",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy fallback should not run")))
+
+    assert search_query(
+        "儿童美甲 健康风险", region="cn-zh",
+        engines=["bing", "duckduckgo"]) == [expected]
+
+
 def test_search_retries_three_times_before_success(monkeypatch):
     calls = {"count": 0}
     delays = []
@@ -144,7 +186,7 @@ def test_search_retries_three_times_before_success(monkeypatch):
     monkeypatch.setattr(
         "app.sources.web_search.time.sleep", delays.append)
     assert search_query(
-        "topic", region="cn-zh", engines=["duckduckgo"]) == [expected]
+        "topic", region="cn-zh", engines=["bing"]) == [expected]
     assert calls["count"] == 4  # initial attempt + three retries
     assert delays == [0.4, 0.8, 1.6]
 
@@ -184,12 +226,68 @@ def test_bing_html_search_parses_results(monkeypatch):
         SearchHit("Result A", "https://news.test/a", "Useful summary.")]
 
 
+def test_baidu_search_resolves_redirects_and_drops_ads(monkeypatch):
+    page = """
+    <div class="result"><h3><a href="http://www.baidu.com/link?url=real">
+    远程办公 研究</a></h3><div class="c-abstract">一项长期跟踪研究。</div></div>
+    <div class="result"><h3><a href="https://www.baidu.com/baidu.php?url=ad">
+    推广链接</a></h3></div>
+    <div class="result"><h3><a href="https://image.baidu.com/search/index">
+    图片</a></h3></div>
+    <div class="result"><h3><a href="http://www.baidu.com/link?url=broken">
+    无法解析</a></h3></div>
+    """
+
+    class Response:
+        content = page.encode()
+
+        def raise_for_status(self):
+            return None
+
+    class Client:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def get(self, url, params):
+            assert url == "https://www.baidu.com/s"
+            assert params["wd"] == "远程办公"
+            return Response()
+
+        def head(self, url):
+            if url.endswith("broken"):
+                raise RuntimeError("redirect resolution failed")
+            return types.SimpleNamespace(url="https://study.test/remote-work")
+
+    monkeypatch.setattr("app.sources.web_search.httpx.Client", Client)
+    assert search_baidu_text("远程办公") == [
+        SearchHit("远程办公 研究", "https://study.test/remote-work",
+                  "一项长期跟踪研究。"),
+        SearchHit("无法解析", "http://www.baidu.com/link?url=broken", ""),
+    ]
+
+
 def test_query_expansion_parses_json_and_has_fallback():
     provider = MockProvider(['{"queries":["AI research","AI news","AI news"]}'])
     assert expand_search_queries("AI", "en", provider) == [
         "AI", "AI research", "AI news"]
     fallback = MockProvider(["not json"])
     assert expand_search_queries("AI", "zh", fallback)[0] == "AI"
+
+
+def test_conversational_topic_falls_back_to_search_terms():
+    provider = MockProvider(["not json"])
+    assert expand_search_queries("长期远程办公，真的好吗", "zh", provider) == [
+        "长期远程办公", "长期远程办公 分析", "长期远程办公 专家 建议"]
+    keeps_terms = MockProvider(['{"queries":["远程办公 效率 研究"]}'])
+    assert expand_search_queries(
+        "长期远程办公，究竟好不好？", "zh", keeps_terms) == [
+            "长期远程办公", "远程办公 效率 研究"]
 
 
 def test_search_hit_filter_rejects_generic_partial_chinese_matches():

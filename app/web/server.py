@@ -54,6 +54,7 @@ from app.wechat import components as editor_components
 from app.pipeline.sanitizer import load_words, sanitize_draft
 from app.pipeline.video import build_explainer_video, video_path
 from app.sources.extractor import _images_from_html, _videos_from_html
+from app.sources.web_search import DEFAULT_SEARCH_ENGINES
 from app.tts.base import get_tts_provider
 from app.tts.voices import (
     list_voices, add_voice, delete_voice, sample_path as voice_sample_path)
@@ -2655,7 +2656,7 @@ def create_app(config: Config | None = None,
             ref_count = int(payload.get("ref_count", 10))
             style_id = str(payload.get("style_id") or "").strip() or None
             raw_engines = payload.get(
-                "engines", ["bing", "duckduckgo", "google", "brave"])
+                "engines", list(DEFAULT_SEARCH_ENGINES))
             if not isinstance(raw_engines, list):
                 raise ValueError("搜索引擎必须为数组")
             engines = [str(engine) for engine in raw_engines]

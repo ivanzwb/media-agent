@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -12,8 +13,10 @@ from app.discovery import search_web
 
 logger = logging.getLogger(__name__)
 
-AVAILABLE_SEARCH_ENGINES = ("bing", "duckduckgo", "google", "brave")
-DEFAULT_SEARCH_ENGINES = ("bing", "duckduckgo", "google", "brave")
+AVAILABLE_SEARCH_ENGINES = ("bing", "baidu", "duckduckgo", "google", "brave")
+DEFAULT_SEARCH_ENGINES = ("bing", "baidu", "duckduckgo", "google", "brave")
+# Engines with a dedicated scraper here; the rest are DDGS backends.
+_NATIVE_ENGINES = ("bing", "baidu")
 SEARCH_RETRIES = 3
 _RETRY_BASE_DELAY = 0.4
 
@@ -49,8 +52,8 @@ def filter_hits_for_query(hits: list[SearchHit], query: str) -> list[SearchHit]:
         latin_matches = sum(term in haystack for term in latin_terms)
         cjk_matches = sum(term in haystack for term in cjk_terms)
         # One Latin term is usually discriminative (AI, OpenAI, GPU). Chinese
-        # natural-language questions need two matching bigrams so Bing cannot
-        # satisfy “儿童美甲健康风险” with a generic “儿童” landing page.
+        # queries need two matching bigrams so a multi-concept query is not
+        # satisfied by a landing page matching only its leading word.
         if latin_matches >= 1 or cjk_matches >= min(2, len(cjk_terms)):
             filtered.append(hit)
     return filtered
@@ -78,7 +81,8 @@ def search_ddgs_text(query: str, *, max_results: int = 10,
     from ddgs import DDGS
 
     selected = tuple(engines or DEFAULT_SEARCH_ENGINES)
-    ddgs_engines = [engine for engine in selected if engine != "bing"]
+    ddgs_engines = [engine for engine in selected
+                    if engine not in _NATIVE_ENGINES]
     if not ddgs_engines:
         return []
     rows = DDGS(proxy=proxy, timeout=timeout).text(
@@ -153,6 +157,94 @@ def search_bing_text(query: str, *, max_results: int = 10,
     return hits
 
 
+def _is_baidu_surface_url(url: str) -> bool:
+    """Reject Baidu ads and its non-article surfaces (images, video, maps)."""
+    parts = urlsplit(url)
+    host = parts.netloc.removeprefix("www.")
+    if host in ("image.baidu.com", "v.baidu.com", "map.baidu.com"):
+        return True
+    # ``/s`` and ``/sf`` are Baidu's own result surfaces; some hits resolve
+    # back to them instead of to an article.
+    return host == "baidu.com" and parts.path.startswith(
+        ("/baidu.php", "/s", "/sf"))
+
+
+def search_baidu_text(query: str, *, max_results: int = 10,
+                      proxy: str | None = None,
+                      timeout: int = 8) -> list[SearchHit]:
+    """Search Baidu HTML, the most reliable backend for Chinese queries.
+
+    Result links are ``baidu.com/link?url=`` redirects, so they are resolved
+    to their destinations; otherwise every source would be archived and cited
+    as ``baidu.com``. Baidu has no dependable freshness parameter, so results
+    are not restricted by the caller's time range.
+    """
+    from lxml import html as lxml_html
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 Chrome/126.0 Safari/537.36"),
+        "Accept-Language": "zh-CN,zh;q=0.9",
+    }
+    with httpx.Client(proxy=proxy, timeout=timeout, follow_redirects=True,
+                      headers=headers) as client:
+        response = client.get(
+            "https://www.baidu.com/s",
+            params={"wd": query, "rn": str(max_results)})
+        response.raise_for_status()
+
+        document = lxml_html.fromstring(
+            response.content.decode("utf-8", errors="replace"))
+        parsed: list[SearchHit] = []
+        seen_links: set[str] = set()
+        for heading in document.xpath("//h3"):
+            links = heading.xpath(".//a[@href]")
+            if not links:
+                continue
+            link = links[0]
+            url = normalize_search_url(str(link.get("href") or ""))
+            if not url or url in seen_links or _is_baidu_surface_url(url):
+                continue
+            seen_links.add(url)
+            container = heading.getparent()
+            snippet = ""
+            if container is not None:
+                snippet = " ".join(" ".join(container.xpath(
+                    './/*[contains(@class, "content-right_") or '
+                    'contains(@class, "c-abstract")]//text()')).split())
+            parsed.append(SearchHit(
+                title=" ".join(link.text_content().split()) or url,
+                url=url,
+                snippet=snippet))
+            if len(parsed) >= max_results:
+                break
+
+        def resolve(hit: SearchHit) -> SearchHit:
+            try:
+                final = normalize_search_url(str(client.head(hit.url).url))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Baidu 跳转解析失败 %s：%s", hit.url, exc)
+                return hit
+            if not final or final == hit.url:
+                return hit
+            return SearchHit(hit.title, final, hit.snippet)
+
+        if not parsed:
+            return []
+        with ThreadPoolExecutor(max_workers=min(6, len(parsed))) as executor:
+            resolved = list(executor.map(resolve, parsed))
+
+    hits: list[SearchHit] = []
+    seen: set[str] = set()
+    for hit in resolved:
+        if hit.url in seen or _is_baidu_surface_url(hit.url):
+            continue
+        seen.add(hit.url)
+        hits.append(hit)
+    return hits
+
+
 def search_query(query: str, *, max_results: int = 10,
                  timelimit: str | None = None,
                  region: str | None = None,
@@ -161,7 +253,7 @@ def search_query(query: str, *, max_results: int = 10,
                  timeout: int = 8,
                  ) -> list[SearchHit]:
     selected = tuple(engines or DEFAULT_SEARCH_ENGINES)
-    if region == "cn-zh":
+    if region == "cn-zh" and "bing" in selected:
         selected = ("bing",) + tuple(
             engine for engine in selected if engine != "bing")
     for engine in selected:
@@ -171,6 +263,10 @@ def search_query(query: str, *, max_results: int = 10,
                     hits = search_bing_text(
                         query, max_results=max_results, timelimit=timelimit,
                         region=region, proxy=proxy, timeout=timeout)
+                elif engine == "baidu":
+                    hits = search_baidu_text(
+                        query, max_results=max_results, proxy=proxy,
+                        timeout=timeout)
                 else:
                     hits = search_ddgs_text(
                         query, max_results=max_results, timelimit=timelimit,
@@ -225,6 +321,26 @@ def search_query(query: str, *, max_results: int = 10,
                     query, SEARCH_RETRIES, error_detail)
                 break
             time.sleep(_RETRY_BASE_DELAY * (2 ** attempt))
+
+    # Bing's automated Chinese endpoint sometimes searches only the first
+    # query fragment, while DDGS backends can be unavailable on mainland
+    # networks. Baidu is therefore a useful final fallback for Chinese topics.
+    if region == "cn-zh" and "baidu" not in selected:
+        try:
+            hits = search_baidu_text(
+                query, max_results=max_results, proxy=proxy, timeout=timeout)
+            relevant_hits = filter_hits_for_query(hits, query)
+            if relevant_hits:
+                logger.info(
+                    "Baidu 中文降级搜索 %r 返回 %d 条相关结果",
+                    query, len(relevant_hits))
+                return relevant_hits
+            if hits:
+                logger.warning(
+                    "Baidu 中文降级搜索 %r 返回 %d 条，但相关性不足",
+                    query, len(hits))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Baidu 中文降级搜索 %r 失败：%s", query, exc)
 
     return [
         SearchHit(title=url, url=normalized)

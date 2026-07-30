@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+import logging
 import re
 from typing import Callable
 from urllib.parse import urlsplit
@@ -20,6 +21,7 @@ from app.sources.web_search import (
     merge_search_hits, search_query)
 
 ProgressCallback = Callable[[dict], None]
+logger = logging.getLogger(__name__)
 
 
 class SearchCreateCancelled(RuntimeError):
@@ -82,6 +84,31 @@ def _emit(progress: ProgressCallback | None, stage: str, detail: str, *,
         })
 
 
+_ZH_QUESTION_TAIL = re.compile(
+    r"(?:好吗|好不好|行不行|对不对|可以吗|能不能|是不是|会不会|有没有"
+    r"|怎么样|怎么办|为什么|是否|如何)$")
+_ZH_MODAL_WORDS = re.compile(r"真的|到底|究竟|其实|确实|应该")
+
+
+def _topic_search_terms(topic: str, lang: str) -> str:
+    """Reduce a conversational topic to search terms.
+
+    Search engines match natural-language questions poorly, so punctuation
+    becomes term separators and language-level question/modal words are
+    dropped. Only function words are removed; subject matter is preserved.
+    """
+    compact = " ".join(re.sub(r"[,，。、！？!?；;：:]+", " ", topic).split())
+    if lang == "en":
+        return compact
+    segments = []
+    for segment in compact.split():
+        segment = _ZH_MODAL_WORDS.sub("", segment)
+        segment = _ZH_QUESTION_TAIL.sub("", segment)
+        if segment:
+            segments.append(segment)
+    return " ".join(segments) or compact or topic
+
+
 def expand_search_queries(topic: str, lang: str,
                           provider: LLMProvider) -> list[str]:
     language = {
@@ -102,15 +129,20 @@ def expand_search_queries(topic: str, lang: str,
         queries = parsed.get("queries") or []
         cleaned = [str(query).strip() for query in queries if str(query).strip()]
         if cleaned:
-            return list(dict.fromkeys([topic, *cleaned]))[:5]
-    except Exception:  # noqa: BLE001
-        pass
+            base = _topic_search_terms(topic, lang)
+            return list(dict.fromkeys([base, *cleaned]))[:5]
+        logger.warning(
+            "检索词扩展未返回有效 queries，使用本地兜底；响应：%r",
+            str(raw)[:300])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("检索词扩展失败，使用本地兜底：%s", exc)
 
+    base = _topic_search_terms(topic, lang)
     if lang == "en":
-        return [topic, f"{topic} latest research", f"{topic} analysis"]
+        return [base, f"{base} research", f"{base} expert analysis"]
     if lang == "bilingual":
-        return [topic, f"{topic} 最新进展", f"{topic} research review"]
-    return [topic, f"{topic} 最新进展", f"{topic} 深度分析"]
+        return [base, f"{base} 分析", f"{base} research review"]
+    return [base, f"{base} 分析", f"{base} 专家 建议"]
 
 
 def _search_timelimit(days: int | None) -> str | None:
@@ -323,13 +355,11 @@ def run_search_create(store, provider: LLMProvider,
 
     _check_cancel(should_stop)
     _emit(progress, "filter", "正在过滤低质量和不相关内容…", stats=stats)
-    articles_before_age = list(articles)
     age_filtered = filter_by_age(
         articles, options.time_range_days,
         progress=lambda message: _emit(
             progress, "filter", message, stats=stats))
     if options.time_range_days and len(age_filtered) < 2:
-        articles = articles_before_age
         stats["time_range_relaxed"] = True
         _emit(
             progress, "filter",
