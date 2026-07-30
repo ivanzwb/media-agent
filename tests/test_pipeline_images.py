@@ -1,6 +1,7 @@
 from app.models import Draft
 from app.images.providers.mock import MockImageProvider
-from app.pipeline.images import download_original_images, attach_cover
+from app.pipeline.images import (
+    download_original_images, attach_cover, strip_image_prompts)
 
 
 def test_download_original_images_writes_files(tmp_path):
@@ -30,3 +31,15 @@ def test_attach_cover_sets_path_and_writes(tmp_path):
     out = attach_cover(draft, MockImageProvider(), tmp_path)
     assert out.cover_image is not None
     assert (tmp_path / out.cover_image).exists()
+
+
+def test_strip_image_prompts_removes_internal_block_only():
+    body = (
+        "# 正文\n\n内容保留。\n\n"
+        ":::image-prompt\n自媒体封面图：测试标题\n:::\n\n"
+        "## 结尾\n结尾保留。"
+    )
+    cleaned = strip_image_prompts(body)
+    assert "image-prompt" not in cleaned
+    assert "自媒体封面图" not in cleaned
+    assert "# 正文" in cleaned and "## 结尾" in cleaned

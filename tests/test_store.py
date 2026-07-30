@@ -23,6 +23,23 @@ def sample_article(url="https://x.com/a"):
                    topic="AI")
 
 
+def test_draft_storage_never_exposes_internal_cover_prompt(tmp_path):
+    store = make_store(tmp_path)
+    article = store.save_article(sample_article())
+    legacy_block = (
+        "\n\n:::image-prompt\n自媒体封面图：Big AI News\n:::\n")
+    draft = store.save_draft(Draft(
+        article_id=article.id, title_candidates=["标题"],
+        body_md="正文" + legacy_block, topic="AI",
+        source_url=article.url, source_name=article.source_name))
+    assert "image-prompt" not in draft.body_md
+    assert store.read_draft_body(draft.id)["body_md"] == "正文"
+
+    store.update_draft_body(
+        draft.id, ["标题"], "更新正文" + legacy_block)
+    assert store.read_draft_body(draft.id)["body_md"] == "更新正文"
+
+
 def test_list_drafts_pagination_and_count(tmp_path):
     store = make_store(tmp_path)
     art = store.save_article(sample_article())

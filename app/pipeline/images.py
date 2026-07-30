@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import httpx
 
 from app.images.base import ImageProvider
 from app.models import Draft, slugify
+
+_IMAGE_PROMPT_BLOCK_RE = re.compile(
+    r"(?ms)^[ \t]*:::image-prompt[ \t]*\r?\n"
+    r".*?^[ \t]*:::[ \t]*(?:\r?\n|$)"
+)
+
+
+def strip_image_prompts(markdown: str) -> str:
+    """Remove legacy internal cover prompts from publishable article text."""
+    value = markdown or ""
+    cleaned = _IMAGE_PROMPT_BLOCK_RE.sub("", value)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).rstrip()
 
 
 def download_original_images(urls, dest_dir, fetch=None) -> list[str]:
@@ -48,15 +61,3 @@ def attach_cover(draft: Draft, provider: ImageProvider, images_dir) -> Draft:
     except Exception:
         draft.cover_image = None
     return draft
-
-
-def inject_image_prompt(draft: Draft, prompt: str | None = None) -> str:
-    """Return a placeholder prompt text for the article body.
-    
-    When no real image provider is configured, this prompt is appended to the
-    draft body so users can copy it into an external image generation tool.
-    """
-    title = (draft.title_candidates[0] if draft.title_candidates
-             else "cover")
-    p = prompt or f"自媒体封面图：{title}"
-    return f"\n\n:::image-prompt\n{p}\n:::\n"

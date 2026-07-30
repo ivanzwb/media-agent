@@ -18,7 +18,7 @@ from app.sources.rss import fetch_feed
 from app.sources.scraper import scrape_list, scrape_single
 from app.store import Store
 from app.pipeline.classifier import classify
-from app.pipeline.images import attach_cover, inject_image_prompt
+from app.pipeline.images import attach_cover
 from app.pipeline.localize import localize_article
 from app.pipeline.relevance import filter_relevant
 from app.pipeline.rewriter import rewrite
@@ -217,24 +217,6 @@ def _apply_promotion_footer(draft: Draft, config) -> None:
         draft.body_md = draft.body_md.rstrip() + f"\n\n---\n{footer}\n"
 
 
-def _append_prompt(draft: Draft, store: Store) -> None:
-    """Append an image-generation prompt placeholder to the draft body."""
-    meta = store.read_draft_body(draft.id)
-    body = meta.get("body_md", "")
-    titles = meta.get("title_candidates") or draft.title_candidates or []
-    prompt_draft = Draft(
-        article_id=draft.article_id,
-        title_candidates=titles,
-        body_md="",  # not used, we build from existing body
-        topic=meta.get("topic", ""),
-        source_url=meta.get("source_url", ""),
-        source_name=meta.get("source_name", ""),
-        status=meta.get("status", "drafted"),
-    )
-    prompt_block = inject_image_prompt(prompt_draft)
-    store.update_draft_body(draft.id, titles, body + prompt_block)
-
-
 def _noop(*_args, **_kwargs) -> None:
     pass
 
@@ -335,10 +317,6 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
                     if saved_draft.cover_image:
                         store.set_draft_cover(saved_draft.id,
                                               saved_draft.cover_image)
-                    else:
-                        _append_prompt(saved_draft, store)
-                else:
-                    _append_prompt(saved_draft, store)
                 emit(f"  已生成草稿：{art.title[:50]}", stats)
             except Exception as e:
                 emit(f"  改写失败（已跳过）：{art.title[:40]}（{e}）", stats)

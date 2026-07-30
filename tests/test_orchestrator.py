@@ -84,6 +84,9 @@ def test_run_pipeline_end_to_end(tmp_path, monkeypatch):
 
     drafts = store.conn.execute("SELECT * FROM drafts").fetchall()
     assert len(drafts) == 1
+    body = store.read_draft_body(drafts[0]["id"])["body_md"]
+    assert "image-prompt" not in body
+    assert "自媒体封面图" not in body
     articles = store.conn.execute("SELECT * FROM articles").fetchall()
     assert articles[0]["topic"] == "AI"
 

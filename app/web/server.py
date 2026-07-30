@@ -37,7 +37,7 @@ from app.platforms.registry import get as get_platform, list_all as list_platfor
 from app.pipeline.images import attach_cover
 from app.pipeline.narration import (
     generate_narration, load_narration, save_scenes, resynth_scenes)
-from app.pipeline.orchestrator import run_pipeline, _append_prompt
+from app.pipeline.orchestrator import run_pipeline
 from app.pipeline.recommender import (
     suggest_subtopics, suggest_keywords, suggest_sources, compute_hotness,
     suggest_keywords_batch, suggest_source_names_batch, _resolve_sources,
@@ -711,10 +711,6 @@ def create_app(config: Config | None = None,
                                  ws.config.images_dir)
                     if saved.cover_image:
                         ws.set_draft_cover(saved.id, saved.cover_image)
-                    else:
-                        _append_prompt(saved, ws)
-                else:
-                    _append_prompt(saved, ws)
 
                 with rewrite_locks[article_id]:
                     st["draft_id"] = saved.id

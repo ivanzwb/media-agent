@@ -11,6 +11,7 @@ import httpx
 
 from app.config import Config
 from app.models import Article, Draft, ArticleStatus, slugify as _slug
+from app.pipeline.images import strip_image_prompts
 
 _MD_IMG_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
 _HTML_IMG_RE = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.I)
@@ -224,6 +225,9 @@ class Store:
         self.conn.commit()
 
     def save_draft(self, draft: Draft) -> Draft:
+        # Internal cover-generation prompts are UI metadata, never article
+        # content. Strip legacy blocks at the persistence boundary too.
+        draft.body_md = strip_image_prompts(draft.body_md)
         topic = draft.topic or "uncategorized"
         topic_dir = str(topic).replace("/", "_").replace("\\", "_").strip(" .")
         topic_dir = topic_dir or "uncategorized"
@@ -561,7 +565,7 @@ class Store:
             return {}
         post = frontmatter.load(str(abs_path))
         meta = dict(post.metadata)
-        meta["body_md"] = post.content
+        meta["body_md"] = strip_image_prompts(post.content)
         return meta
 
     def update_draft_body(self, draft_id: int, title_candidates: list[str],
@@ -582,7 +586,7 @@ class Store:
                 meta.pop("title_cn", None)
         new_status = status or meta.get("status") or row["status"]
         meta["status"] = new_status
-        post = frontmatter.Post(body_md, **meta)
+        post = frontmatter.Post(strip_image_prompts(body_md), **meta)
         abs_path.parent.mkdir(parents=True, exist_ok=True)
         abs_path.write_text(frontmatter.dumps(post), encoding="utf-8")
         if title_cn is not None:
