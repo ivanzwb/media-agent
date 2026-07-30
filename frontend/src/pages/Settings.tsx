@@ -130,9 +130,13 @@ export default function Settings() {
                   <Form.Item name="image_provider" label="Provider"><Select options={["openai", "mock"].map((v) => ({ value: v }))} /></Form.Item>
                   <Form.Item name="image_model" label="模型"><Input /></Form.Item>
                   <Form.Item name="image_api_base" label="API Base"><Input /></Form.Item>
-                  <Form.Item name="image_api_key" label={<>API Key {data.image_api_key.set && <Tag color="green">已设置 {data.image_api_key.masked}</Tag>}</>}>
+                  <Form.Item name="image_api_key" label={<>API Key {data.image_api_key.set && <Tag color="green">已设置 {data.image_api_key.masked}</Tag>}</>}
+                    extra="留空时沿用 LLM 的 API Key 和 API Base。检测前请先保存设置。">
                     <Input.Password placeholder={data.image_api_key.set ? "留空则保持不变" : "输入 API Key"} />
                   </Form.Item>
+                  <Space align="end">
+                    <ImageTestButton />
+                  </Space>
                 </Card>
                 <Card title="转写 Agent（CLI）" size="small" style={{ marginBottom: 16 }}>
                   <Space align="end">
@@ -902,6 +906,34 @@ function LlmTestButton({ form }: { form: any }) {
   }
 
   return <Button icon={<ThunderboltOutlined />} loading={loading} onClick={testLlm}>检测</Button>;
+}
+
+function ImageTestButton() {
+  const { message } = AntApp.useApp();
+  const [loading, setLoading] = useState(false);
+
+  async function testImage() {
+    setLoading(true);
+    try {
+      const r = await api.post<{ ok: boolean; model?: string; latency_ms?: number; size_kb?: number; error?: string; note?: string }>("/api/test-image");
+      const d = r.data;
+      if (d.ok) {
+        const extra = d.note ? `（${d.note}）` : `${d.model}，${d.latency_ms}ms，${d.size_kb}KB`;
+        message.success(`图片模型可用：${extra}`);
+      } else {
+        message.warning(d.error || "图片模型不可用");
+      }
+    } catch (e: any) {
+      message.error("检测失败：" + (e?.message || e));
+    } finally { setLoading(false); }
+  }
+
+  return (
+    <Popconfirm title="检测会真实生成一张测试图片，消耗接口额度，确定继续？"
+      okText="开始检测" cancelText="取消" onConfirm={testImage}>
+      <Button icon={<ThunderboltOutlined />} loading={loading}>检测</Button>
+    </Popconfirm>
+  );
 }
 
 type ManagedRuntimeStatus = {

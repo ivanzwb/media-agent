@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from app.llm.base import get_provider, get_rewrite_provider, Message
@@ -140,3 +142,83 @@ def test_test_llm_no_api_key():
     d = r.json()
     assert d["ok"] is False
     assert "API Key" in d["error"]
+
+
+# ── /api/test-image endpoint tests ──────────────────────────────────────────
+
+
+def test_test_image_mock_provider():
+    """Mock provider reports availability without calling any API."""
+    client, tmp = _make_test_app(image_provider="mock")
+    d = client.post("/api/test-image").json()
+    assert d["ok"] is True
+    assert d["model"] == "mock"
+
+
+def test_test_image_no_api_key():
+    """A real provider without any usable key reports the missing key."""
+    client, tmp = _make_test_app(
+        image_provider="openai", image_api_key="", llm_api_key="")
+    d = client.post("/api/test-image").json()
+    assert d["ok"] is False
+    assert "API Key" in d["error"]
+
+
+def test_test_image_generates_probe_and_reports_size(monkeypatch):
+    """A successful probe generates one image and leaves nothing behind."""
+    generated: dict = {}
+
+    class FakeProvider:
+        def generate(self, prompt, out_path):
+            generated["prompt"] = prompt
+            generated["path"] = Path(out_path)
+            Path(out_path).write_bytes(b"x" * 3072)
+            return out_path
+
+    monkeypatch.setattr(
+        "app.web.server.get_image_provider",
+        lambda *args, **kwargs: FakeProvider())
+    client, tmp = _make_test_app(
+        image_provider="openai", image_api_key="key", image_model="gpt-image-1")
+    d = client.post("/api/test-image").json()
+    assert d["ok"] is True
+    assert d["model"] == "gpt-image-1"
+    assert d["size_kb"] == 3
+    assert generated["prompt"]
+    assert not generated["path"].exists()
+
+
+def test_test_image_reports_provider_failure(monkeypatch):
+    """Provider errors surface as a message instead of a 500."""
+    def explode(*args, **kwargs):
+        raise RuntimeError("model not found")
+
+    monkeypatch.setattr("app.web.server.get_image_provider", explode)
+    client, tmp = _make_test_app(
+        image_provider="openai", image_api_key="key")
+    d = client.post("/api/test-image").json()
+    assert d["ok"] is False
+    assert "model not found" in d["error"]
+
+
+def test_test_image_falls_back_to_llm_credentials(monkeypatch):
+    """Image settings inherit the LLM key/base, matching cover generation."""
+    captured: dict = {}
+
+    class FakeProvider:
+        def generate(self, prompt, out_path):
+            Path(out_path).write_bytes(b"png")
+            return out_path
+
+    def fake_get(name, api_key=None, *, model=None, base_url=None):
+        captured.update(
+            name=name, api_key=api_key, model=model, base_url=base_url)
+        return FakeProvider()
+
+    monkeypatch.setattr("app.web.server.get_image_provider", fake_get)
+    client, tmp = _make_test_app(
+        image_provider="openai", image_api_key="", image_api_base="",
+        llm_api_key="shared-key", llm_api_base="https://proxy.test/v1")
+    assert client.post("/api/test-image").json()["ok"] is True
+    assert captured["api_key"] == "shared-key"
+    assert captured["base_url"] == "https://proxy.test/v1"

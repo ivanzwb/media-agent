@@ -4299,6 +4299,46 @@ def create_app(config: Config | None = None,
             latency = int((_time.monotonic() - t0) * 1000)
             return {"ok": False, "error": str(exc)[:300], "latency_ms": latency}
 
+    @app.post("/api/test-image")
+    def test_image():
+        """Test the image model by generating one throwaway image.
+
+        Image APIs have no free probe, so this really does generate an image
+        and consumes quota; the UI asks for confirmation before calling it.
+        """
+        import tempfile
+        import time as _time
+
+        run_config = _current_config(get_store())
+        provider_name = run_config.image_provider or "mock"
+        api_key = run_config.image_api_key or run_config.llm_api_key or ""
+        model = run_config.image_model or ""
+        api_base = run_config.image_api_base or run_config.llm_api_base or ""
+
+        if provider_name in ("mock", "", None):
+            return {"ok": True, "model": "mock", "latency_ms": 0,
+                    "note": "mock 模式生成本地占位图，无需真实 API"}
+
+        if not api_key:
+            return {"ok": False, "error": "未设置 API Key"}
+
+        t0 = _time.monotonic()
+        try:
+            provider = get_image_provider(
+                provider_name, api_key, model=model or None,
+                base_url=api_base or None)
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                out = Path(provider.generate(
+                    prompt="纯色背景上的一个蓝色圆形",
+                    out_path=Path(tmp_dir) / "probe.png"))
+                size_kb = max(1, out.stat().st_size // 1024)
+            latency = int((_time.monotonic() - t0) * 1000)
+            return {"ok": True, "model": model or "dall-e-3",
+                    "latency_ms": latency, "size_kb": size_kb}
+        except Exception as exc:
+            latency = int((_time.monotonic() - t0) * 1000)
+            return {"ok": False, "error": str(exc)[:300], "latency_ms": latency}
+
     # ── Managed optional runtimes ───────────────────────────────────────────
     @app.get("/api/capabilities")
     def api_capabilities(refresh: bool = False):
