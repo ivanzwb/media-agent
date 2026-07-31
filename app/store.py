@@ -348,14 +348,16 @@ class Store:
 
     def create_series(self, *, title: str, topic: str, lang: str, depth: str,
                       parts: int, style_id: str | None,
-                      knowledge_map: str = "") -> int:
+                      knowledge_map: str = "", ref_count: int = 5,
+                      engines: list[str] | None = None) -> int:
         cur = self.conn.execute(
             """INSERT INTO series
-               (title, topic, lang, depth, parts, style_id, knowledge_map,
-                status, created_at)
-               VALUES (?,?,?,?,?,?,?,'running',?)""",
-            (title, topic, lang, depth, int(parts), style_id, knowledge_map,
-             datetime.now(timezone.utc).isoformat()))
+               (title, topic, lang, depth, parts, style_id, ref_count, engines,
+                knowledge_map, status, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,'running',?)""",
+            (title, topic, lang, depth, int(parts), style_id, int(ref_count),
+             json.dumps(list(engines or []), ensure_ascii=False),
+             knowledge_map, datetime.now(timezone.utc).isoformat()))
         self.conn.commit()
         return int(cur.lastrowid)
 
@@ -420,6 +422,39 @@ class Store:
             f"UPDATE series_chapters SET {', '.join(f'{k}=?' for k in allowed)},"
             " updated_at=? WHERE id=?", params)
         self.conn.commit()
+
+    def refresh_series_status(self, series_id: int) -> str:
+        """Recompute a finished series' status from its chapter rows.
+
+        Reruns change the picture after the run is over — a failed chapter can
+        become the difference between "partial" and "done".
+        """
+        statuses = [row["status"] for row in self.list_chapters(series_id)]
+        if not statuses:
+            return "failed"
+        if any(item in ("researching", "writing") for item in statuses):
+            return "running"
+        if not any(item == "done" for item in statuses):
+            status = "failed"
+        elif all(item == "done" for item in statuses):
+            status = "done"
+        else:
+            status = "partial"
+        self.finish_series(series_id, status)
+        return status
+
+    def series_source_urls(self, series_id: int,
+                           exclude_draft_id: int | None = None) -> set[str]:
+        """URLs the series' other chapters already cited."""
+        sql = ("SELECT articles.url FROM draft_articles "
+               "JOIN drafts ON drafts.id = draft_articles.draft_id "
+               "JOIN articles ON articles.id = draft_articles.article_id "
+               "WHERE drafts.series_id=?")
+        params: list = [series_id]
+        if exclude_draft_id is not None:
+            sql += " AND drafts.id<>?"
+            params.append(int(exclude_draft_id))
+        return {row[0] for row in self.conn.execute(sql, params).fetchall()}
 
     def get_series_drafts(self, series_id: int):
         return self.conn.execute(

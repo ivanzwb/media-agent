@@ -12,7 +12,8 @@ the whole design:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import json
 import logging
 import re
 from typing import Callable
@@ -433,6 +434,115 @@ def _chapter_references(chapter: dict, search_options: SearchCreateOptions,
     return merged[:search_options.ref_count]
 
 
+@dataclass
+class _ChapterContext:
+    """Everything a chapter needs that does not change between chapters."""
+    store: object
+    provider: LLMProvider
+    options: SeriesCreateOptions
+    search_options: SearchCreateOptions
+    series_id: int
+    style: object = None
+    promotion_footer: str = ""
+    seo_tags_enabled: bool = True
+    sensitive_words: set[str] = field(default_factory=set)
+
+
+def _write_chapter(context: _ChapterContext, chapter: dict, chapter_id: int, *,
+                   index: int, total: int, seen_urls: set[str],
+                   written: list[dict],
+                   hits: list[SearchHit] | None = None,
+                   progress: ProgressCallback | None = None,
+                   should_stop: Callable[[], bool] | None = None,
+                   stats: dict | None = None) -> tuple[int, str]:
+    """Research and write one chapter. Returns its draft id and summary.
+
+    Shared by the full run and by rerunning a single chapter, so a rerun
+    produces a chapter indistinguishable from one the original run wrote.
+    """
+    store = context.store
+    options = context.options
+    title = chapter["title"]
+
+    _check_cancel(should_stop)
+    store.update_chapter(chapter_id, status="researching", error=None)
+    _emit(progress, "research",
+          f"第 {index}/{total} 章《{title}》：正在检索资料…",
+          current=index, total=total, stats=stats)
+    articles = _chapter_references(
+        chapter, context.search_options, context.provider, topic=options.topic,
+        seen_urls=seen_urls, hits=hits, progress=progress,
+        should_stop=should_stop, stats=stats)
+    if len(articles) < 2:
+        raise ValueError("有效参考资料不足 2 篇")
+
+    saved_articles: list[Article] = []
+    for article in articles:
+        _check_cancel(should_stop)
+        article.topic = options.topic
+        saved_articles.append(store.save_article(article))
+    seen_urls.update(_url_key(article.url) for article in articles)
+
+    store.update_chapter(chapter_id, status="writing")
+    _emit(progress, "write", f"第 {index}/{total} 章《{title}》：正在写作…",
+          current=index, total=total, stats=stats)
+    result = synthesize(
+        f"{options.topic}：{title}", saved_articles, context.provider,
+        style=context.style, lang=options.lang,
+        promotion_footer=context.promotion_footer,
+        seo_tags_enabled=context.seo_tags_enabled,
+        context_note=_chapter_context(written, options.lang))
+
+    primary = saved_articles[0]
+    draft = Draft(
+        article_id=primary.id or 0,
+        title_candidates=result.title_candidates,
+        body_md=result.body_md,
+        topic=options.topic,
+        source_url=primary.url,
+        source_name=primary.source_name,
+        flagged_claims=result.flagged_claims,
+        origin="series",
+        sources=[
+            {
+                "article_id": article.id,
+                "title": article.title,
+                "url": article.url,
+                "source_name": article.source_name,
+                "published_at": (article.published_at.isoformat()
+                                 if article.published_at else None),
+                "rank": rank,
+                "role": "primary" if rank == 1 else "source",
+            }
+            for rank, article in enumerate(saved_articles, 1)
+        ],
+        citations=result.citations,
+        search_meta={
+            "topic": options.topic,
+            "chapter": title,
+            "queries": chapter["search_queries"],
+            "lang": options.lang,
+            "depth": options.depth,
+            "ref_count": options.ref_count,
+            "style_id": options.style_id,
+            "engines": list(options.engines),
+        },
+        series_id=context.series_id,
+        series_order=index,
+        series_part_label=_part_label(index, options.lang),
+        prerequisites=chapter["prerequisites"],
+    )
+    sanitize_draft(draft, context.sensitive_words)
+    saved_draft = store.save_draft(draft)
+    summary = _chapter_summary(result.body_md)
+    store.update_chapter(chapter_id, status="done", draft_id=saved_draft.id,
+                         summary=summary, error=None)
+    _emit(progress, "write",
+          f"第 {index}/{total} 章《{title}》已完成，草稿 #{saved_draft.id}",
+          current=index, total=total, stats=stats)
+    return saved_draft.id, summary
+
+
 def run_series_create(store, provider: LLMProvider,
                       options: SeriesCreateOptions, *, style=None,
                       promotion_footer: str = "",
@@ -473,7 +583,8 @@ def run_series_create(store, provider: LLMProvider,
     series_id = store.create_series(
         title=options.topic, topic=options.topic, lang=options.lang,
         depth=options.depth, parts=len(chapters), style_id=options.style_id,
-        knowledge_map=knowledge_map)
+        knowledge_map=knowledge_map, ref_count=options.ref_count,
+        engines=list(options.engines))
     stats["series_id"] = series_id
     stats["parts"] = len(chapters)
     total = len(chapters)
@@ -499,93 +610,24 @@ def run_series_create(store, provider: LLMProvider,
     written: list[dict] = []
     draft_ids: list[int] = []
 
+    context = _ChapterContext(
+        store=store, provider=provider, options=options,
+        search_options=search_options, series_id=series_id, style=style,
+        promotion_footer=promotion_footer, seo_tags_enabled=seo_tags_enabled,
+        sensitive_words=sensitive_words or set())
+
     for index, (chapter, chapter_id) in enumerate(
             zip(chapters, chapter_ids), 1):
         title = chapter["title"]
         try:
-            _check_cancel(should_stop)
-            store.update_chapter(chapter_id, status="researching", error=None)
-            _emit(progress, "research",
-                  f"第 {index}/{total} 章《{title}》：正在检索资料…",
-                  current=index, total=total, stats=stats)
-            articles = _chapter_references(
-                chapter, search_options, provider, topic=options.topic,
-                seen_urls=seen_urls, hits=seeds.get(index), progress=progress,
-                should_stop=should_stop, stats=stats)
-            if len(articles) < 2:
-                raise ValueError("有效参考资料不足 2 篇")
-
-            saved_articles: list[Article] = []
-            for article in articles:
-                _check_cancel(should_stop)
-                article.topic = options.topic
-                saved_articles.append(store.save_article(article))
-            seen_urls.update(_url_key(article.url) for article in articles)
-
-            store.update_chapter(chapter_id, status="writing")
-            _emit(progress, "write",
-                  f"第 {index}/{total} 章《{title}》：正在写作…",
-                  current=index, total=total, stats=stats)
-            result = synthesize(
-                f"{options.topic}：{title}", saved_articles, provider,
-                style=style, lang=options.lang,
-                promotion_footer=promotion_footer,
-                seo_tags_enabled=seo_tags_enabled,
-                context_note=_chapter_context(written, options.lang))
-
-            primary = saved_articles[0]
-            draft = Draft(
-                article_id=primary.id or 0,
-                title_candidates=result.title_candidates,
-                body_md=result.body_md,
-                topic=options.topic,
-                source_url=primary.url,
-                source_name=primary.source_name,
-                flagged_claims=result.flagged_claims,
-                origin="series",
-                sources=[
-                    {
-                        "article_id": article.id,
-                        "title": article.title,
-                        "url": article.url,
-                        "source_name": article.source_name,
-                        "published_at": (
-                            article.published_at.isoformat()
-                            if article.published_at else None),
-                        "rank": rank,
-                        "role": "primary" if rank == 1 else "source",
-                    }
-                    for rank, article in enumerate(saved_articles, 1)
-                ],
-                citations=result.citations,
-                search_meta={
-                    "topic": options.topic,
-                    "chapter": title,
-                    "queries": chapter["search_queries"],
-                    "lang": options.lang,
-                    "depth": options.depth,
-                    "ref_count": options.ref_count,
-                    "style_id": options.style_id,
-                    "engines": list(options.engines),
-                },
-                series_id=series_id,
-                series_order=index,
-                series_part_label=_part_label(index, options.lang),
-                prerequisites=chapter["prerequisites"],
-            )
-            sanitize_draft(draft, sensitive_words or set())
-            saved_draft = store.save_draft(draft)
-            summary = _chapter_summary(result.body_md)
-            store.update_chapter(
-                chapter_id, status="done", draft_id=saved_draft.id,
-                summary=summary, error=None)
-            draft_ids.append(saved_draft.id)
+            draft_id, summary = _write_chapter(
+                context, chapter, chapter_id, index=index, total=total,
+                seen_urls=seen_urls, written=written, hits=seeds.get(index),
+                progress=progress, should_stop=should_stop, stats=stats)
+            draft_ids.append(draft_id)
             written.append(
                 {"order": index, "title": title, "summary": summary})
             stats["chapters_done"] += 1
-            _emit(progress, "write",
-                  f"第 {index}/{total} 章《{title}》已完成，草稿 #{saved_draft.id}",
-                  current=index, total=total, stats=stats)
         except SearchCreateCancelled:
             store.update_chapter(chapter_id, status="cancelled")
             store.finish_series(series_id, "cancelled")
@@ -617,3 +659,100 @@ def run_series_create(store, provider: LLMProvider,
         "draft_ids": draft_ids,
         "stats": stats,
     }
+
+
+def _loads(value, fallback):
+    try:
+        parsed = json.loads(value or "")
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if isinstance(parsed, type(fallback)) else fallback
+
+
+def retry_chapter(store, provider: LLMProvider, series_id: int,
+                  chapter_id: int, *, style=None, promotion_footer: str = "",
+                  seo_tags_enabled: bool = True,
+                  sensitive_words: set[str] | None = None,
+                  workers: int = 6, proxy: str | None = None,
+                  progress: ProgressCallback | None = None,
+                  should_stop: Callable[[], bool] | None = None) -> dict:
+    """Research and write one chapter again, in place.
+
+    The counterpart to chapter-level failure isolation: a chapter that came up
+    short is worth another attempt on its own, and rerunning the whole series
+    to get it would discard everything that did work. Reuses the series' own
+    search settings so the rerun is comparable to the original attempt.
+    """
+    series = store.get_series(series_id)
+    if series is None:
+        raise ValueError("系列不存在")
+    chapters = store.list_chapters(series_id)
+    row = next((item for item in chapters if item["id"] == chapter_id), None)
+    if row is None:
+        raise ValueError("章节不存在")
+    if row["draft_id"]:
+        raise ValueError("该章已有草稿，请在草稿编辑页修改，避免覆盖已有改动")
+
+    options = SeriesCreateOptions(
+        topic=series["topic"], lang=series["lang"], depth=series["depth"],
+        parts=series["parts"], style_id=series["style_id"],
+        engines=_loads(series["engines"], []) or list(DEFAULT_SEARCH_ENGINES),
+        ref_count=series["ref_count"] or 5, workers=workers, proxy=proxy)
+    options.validate()
+    search_options = options.chapter_options()
+    search_options.validate()
+
+    chapter = {
+        "title": row["title"],
+        "scope": row["scope"] or "",
+        "search_queries": _loads(row["search_queries"], []) or [row["title"]],
+        "prerequisites": _loads(row["prerequisites"], []),
+    }
+    order = row["chapter_order"]
+    stats = {
+        "topic": options.topic,
+        "series_id": series_id,
+        "chapter_id": chapter_id,
+        "chapter": row["title"],
+        "parts": len(chapters),
+        "chapters_done": 0,
+        "chapters_failed": 0,
+    }
+    # The other chapters' sources stay off-limits, exactly as during the run.
+    seen_urls = {_url_key(url)
+                 for url in store.series_source_urls(series_id)}
+    written = [{"order": item["chapter_order"], "title": item["title"],
+                "summary": item["summary"] or ""}
+               for item in chapters
+               if item["chapter_order"] < order and item["status"] == "done"]
+
+    context = _ChapterContext(
+        store=store, provider=provider, options=options,
+        search_options=search_options, series_id=series_id, style=style,
+        promotion_footer=promotion_footer, seo_tags_enabled=seo_tags_enabled,
+        sensitive_words=sensitive_words or set())
+    try:
+        draft_id, _ = _write_chapter(
+            context, chapter, chapter_id, index=order, total=len(chapters),
+            seen_urls=seen_urls, written=written, progress=progress,
+            should_stop=should_stop, stats=stats)
+    except SearchCreateCancelled:
+        store.update_chapter(chapter_id, status="cancelled")
+        store.refresh_series_status(series_id)
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("系列第 %d 章重跑失败：%s", order, exc)
+        stats["chapters_failed"] = 1
+        store.update_chapter(chapter_id, status="failed", error=str(exc))
+        status = store.refresh_series_status(series_id)
+        _emit(progress, "done", f"第 {order} 章《{row['title']}》仍未完成：{exc}",
+              current=order, total=len(chapters), stats=stats)
+        return {"series_id": series_id, "chapter_id": chapter_id,
+                "status": status, "draft_ids": [], "stats": stats}
+
+    stats["chapters_done"] = 1
+    status = store.refresh_series_status(series_id)
+    _emit(progress, "done", f"第 {order} 章《{row['title']}》已重新生成",
+          current=order, total=len(chapters), stats=stats)
+    return {"series_id": series_id, "chapter_id": chapter_id,
+            "status": status, "draft_ids": [draft_id], "stats": stats}

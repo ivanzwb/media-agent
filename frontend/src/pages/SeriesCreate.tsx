@@ -109,6 +109,7 @@ export default function SeriesCreate() {
   const [form] = Form.useForm<SeriesForm>();
   const [submitting, setSubmitting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [retrying, setRetrying] = useState<number | null>(null);
 
   const { data: styleData } = useQuery({
     queryKey: ["rewrite-styles"],
@@ -217,6 +218,23 @@ export default function SeriesCreate() {
       ),
       onOk: () => submit(values),
     });
+  }
+
+  // A chapter that came up short is worth another try on its own: rerunning
+  // the whole series to rescue one chapter would redo everything that worked.
+  async function retryChapter(seriesId: number, chapterId: number) {
+    if (!isPro) { openLicenseGuide(); return; }
+    setRetrying(chapterId);
+    try {
+      await api.post(`/api/series/${seriesId}/chapters/${chapterId}/retry`, {});
+      message.success("已开始重跑这一章");
+      await qc.invalidateQueries({ queryKey: ["series-status"] });
+    } catch (e: any) {
+      if (e?.response?.status === 403) openLicenseGuide();
+      message.error(e?.response?.data?.error || e?.response?.data?.detail || "重跑失败");
+    } finally {
+      setRetrying(null);
+    }
   }
 
   async function cancel() {
@@ -392,7 +410,12 @@ export default function SeriesCreate() {
                       ? [<Link key="open" to={`/drafts/${chapter.draft_id}/edit`}>
                           <Button type="link" size="small">打开草稿</Button>
                         </Link>]
-                      : undefined}>
+                      : [<Button key="retry" type="link" size="small"
+                          loading={retrying === chapter.id}
+                          disabled={active}
+                          onClick={() => retryChapter(series.id, chapter.id)}>
+                          重跑本章
+                        </Button>]}>
                     <List.Item.Meta
                       title={
                         <Space>
@@ -448,9 +471,16 @@ export default function SeriesCreate() {
                     {chapter.draft_id ? (
                       <Link to={`/drafts/${chapter.draft_id}/edit`}>{chapter.title}</Link>
                     ) : (
-                      <Text type="secondary">
-                        {chapter.title}（{chapter.error || "未生成"}）
-                      </Text>
+                      <>
+                        <Text type="secondary">
+                          {chapter.title}（{chapter.error || "未生成"}）
+                        </Text>
+                        <Button type="link" size="small" disabled={active}
+                          loading={retrying === chapter.id}
+                          onClick={() => retryChapter(item.id, chapter.id)}>
+                          重跑本章
+                        </Button>
+                      </>
                     )}
                   </div>
                 ))}

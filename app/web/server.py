@@ -48,7 +48,8 @@ from app.pipeline.localize import (
 from app.pipeline.rewriter import rewrite
 from app.pipeline.search_create import (
     SearchCreateCancelled, SearchCreateOptions, run_search_create)
-from app.pipeline.series_create import SeriesCreateOptions, run_series_create
+from app.pipeline.series_create import (
+    SeriesCreateOptions, retry_chapter, run_series_create)
 from app.pipeline import styles as rewrite_styles
 from app.pipeline import style_learner
 from app.wechat import components as editor_components
@@ -3014,15 +3015,32 @@ def create_app(config: Config | None = None,
                 finished_at=None, cancel_requested=False,
                 request=request_snapshot)
 
+        def run(store, provider, run_config, style, progress, cancelled):
+            options.workers = run_config.workers
+            options.proxy = run_config.fetch_proxy
+            return run_series_create(
+                store, provider, options, style=style,
+                promotion_footer=run_config.promotion_footer or "",
+                seo_tags_enabled=run_config.seo_tags_enabled,
+                sensitive_words=load_words(run_config),
+                progress=progress, should_stop=cancelled)
+
+        _start_series_job("series_create", options.style_id, run)
+        return {"ok": True, "started": True, **_series_public_state()}
+
+    def _start_series_job(op_kind: str, style_id: str | None, run) -> None:
+        """Run a series job on a worker thread.
+
+        Full runs and single-chapter reruns share the state block, so one
+        status endpoint and one progress view serve both.
+        """
         def worker() -> None:
             op_conn = _db_conn()
-            op_id = start_op(op_conn, "series_create", 0)
+            op_id = start_op(op_conn, op_kind, 0)
             with search_create_lock:
                 series_state["op_id"] = op_id
             store = Store(op_conn, config)
             run_config = _current_config(store)
-            options.workers = run_config.workers
-            options.proxy = run_config.fetch_proxy
             provider = get_rewrite_provider(
                 run_config.llm_provider, run_config.llm_api_key,
                 run_config.llm_model,
@@ -3031,7 +3049,7 @@ def create_app(config: Config | None = None,
                 timeout=run_config.cli_timeout,
                 llm_timeout=run_config.llm_timeout,
                 priority=run_config.rewrite_priority)
-            style = rewrite_styles.resolve_style(options.style_id, store)
+            style = rewrite_styles.resolve_style(style_id, store)
             last_detail = None
 
             def cancelled() -> bool:
@@ -3070,12 +3088,8 @@ def create_app(config: Config | None = None,
                 })
 
             try:
-                result = run_series_create(
-                    store, provider, options, style=style,
-                    promotion_footer=run_config.promotion_footer or "",
-                    seo_tags_enabled=run_config.seo_tags_enabled,
-                    sensitive_words=load_words(run_config),
-                    progress=progress, should_stop=cancelled)
+                result = run(
+                    store, provider, run_config, style, progress, cancelled)
                 series_id = result.get("series_id")
                 with search_create_lock:
                     series_state.update(
@@ -3090,13 +3104,13 @@ def create_app(config: Config | None = None,
                         status="cancelled", error=None, detail="系列创作已取消")
                 cancel_op(op_conn, op_id)
             except ValueError as exc:
-                logger.warning("series-create stopped: %s", exc)
+                logger.warning("%s stopped: %s", op_kind, exc)
                 with search_create_lock:
                     series_state.update(
                         status="error", error=str(exc), detail="任务失败")
                 fail_op(op_conn, op_id, str(exc))
             except Exception as exc:  # noqa: BLE001
-                logger.exception("series-create failed")
+                logger.exception("%s failed", op_kind)
                 with search_create_lock:
                     series_state.update(
                         status="error", error=str(exc), detail="任务失败")
@@ -3109,8 +3123,8 @@ def create_app(config: Config | None = None,
                 op_conn.close()
 
         threading.Thread(
-            target=worker, daemon=True, name="series-create").start()
-        return {"ok": True, "started": True, **_series_public_state()}
+            target=worker, daemon=True,
+            name=op_kind.replace("_", "-")).start()
 
     @app.get("/api/series/status")
     def api_series_status():
@@ -3195,6 +3209,60 @@ def create_app(config: Config | None = None,
                 for row in store.get_series_drafts(series_id)
             ],
         }
+
+    @app.post("/api/series/{series_id}/chapters/{chapter_id}/retry")
+    def api_series_chapter_retry(series_id: int, chapter_id: int):
+        denied = LG.require(license_mgr, LF.SERIES_CREATE)
+        if denied is not None:
+            return denied
+        store = get_store()
+        row = store.get_series(series_id)
+        if row is None:
+            return JSONResponse(
+                {"ok": False, "error": "系列不存在"}, status_code=404)
+        chapter = next((item for item in store.list_chapters(series_id)
+                        if item["id"] == chapter_id), None)
+        if chapter is None:
+            return JSONResponse(
+                {"ok": False, "error": "章节不存在"}, status_code=404)
+        if chapter["draft_id"]:
+            # Rewriting over a draft would throw away edits made to it.
+            return JSONResponse(
+                {"ok": False,
+                 "error": "该章已有草稿，请在草稿编辑页修改"}, status_code=409)
+
+        with search_create_lock:
+            busy = _heavy_job_busy()
+            if busy:
+                return JSONResponse(
+                    {"ok": False, "error": f"已有{busy}任务正在进行"},
+                    status_code=409)
+            series_state.update(
+                running=True, status="running", stage="research",
+                detail=f"正在重跑第 {chapter['chapter_order']} 章…",
+                current=0, total=row["parts"], stats={}, logs=[], error=None,
+                series_id=series_id, op_id=None,
+                started_at=datetime.now(timezone.utc).isoformat(),
+                finished_at=None, cancel_requested=False,
+                request={
+                    "topic": row["topic"], "lang": row["lang"],
+                    "depth": row["depth"], "parts": row["parts"],
+                    "style_id": row["style_id"],
+                    "chapter_id": chapter_id,
+                    "chapter": chapter["title"],
+                })
+
+        def run(job_store, provider, run_config, style, progress, cancelled):
+            return retry_chapter(
+                job_store, provider, series_id, chapter_id, style=style,
+                promotion_footer=run_config.promotion_footer or "",
+                seo_tags_enabled=run_config.seo_tags_enabled,
+                sensitive_words=load_words(run_config),
+                workers=run_config.workers, proxy=run_config.fetch_proxy,
+                progress=progress, should_stop=cancelled)
+
+        _start_series_job("series_chapter_retry", row["style_id"], run)
+        return {"ok": True, "started": True, **_series_public_state()}
 
     @app.post("/run")
     def trigger_run():

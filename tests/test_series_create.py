@@ -10,7 +10,7 @@ from app.db import connect, init_db
 from app.models import Article
 from app.pipeline.search_create import SearchCreateCancelled
 from app.pipeline.series_create import (
-    SeriesCreateOptions, generate_series_outline, probe_topic,
+    SeriesCreateOptions, generate_series_outline, probe_topic, retry_chapter,
     run_series_create)
 from app.sources.web_search import SearchHit
 from app.store import Store
@@ -371,3 +371,146 @@ def test_options_reject_out_of_range_part_counts():
 def test_chapter_search_ignores_the_recency_window():
     """Knowledge series cover settled material, not the last 30 days."""
     assert options().chapter_options().time_range_days is None
+
+
+def starved_series(tmp_path, monkeypatch):
+    """A run whose middle chapter found nothing, ready to be reran."""
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch,
+         hits_for=lambda query: [] if "q2" in query or "第二章" in query
+         else hits,
+         articles_by_url=articles_by_url)
+    result = run_series_create(store, ScriptedProvider(), options())
+    assert result["status"] == "partial"
+    return store, result["series_id"], hits, articles_by_url
+
+
+def test_retry_completes_a_failed_chapter_without_rerunning_the_series(
+        tmp_path, monkeypatch):
+    store, series_id, hits, articles_by_url = starved_series(
+        tmp_path, monkeypatch)
+    failed = store.list_chapters(series_id)[1]
+    # Second time around the chapter's terms find sources.
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+
+    result = retry_chapter(store, ScriptedProvider(), series_id, failed["id"])
+
+    assert result["status"] == "done"  # the series is whole again
+    chapters = store.list_chapters(series_id)
+    assert [row["status"] for row in chapters] == ["done"] * 3
+    assert chapters[1]["error"] is None
+    drafts = store.get_series_drafts(series_id)
+    assert [row["series_order"] for row in drafts] == [1, 2, 3]
+    body = store.read_draft_body(drafts[1]["id"])
+    assert body["series_part_label"] == "第 2 章"
+    assert body["search_meta"]["chapter"] == "第二章"
+
+
+def test_retry_leaves_the_other_chapters_sources_alone(tmp_path, monkeypatch):
+    store, series_id, hits, articles_by_url = starved_series(
+        tmp_path, monkeypatch)
+    failed = store.list_chapters(series_id)[1]
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+
+    retry_chapter(store, ScriptedProvider(), series_id, failed["id"])
+
+    per_chapter = [
+        {source["url"]
+         for source in store.read_draft_body(row["id"])["sources"]}
+        for row in store.get_series_drafts(series_id)]
+    assert sum(len(item) for item in per_chapter) == len(
+        set().union(*per_chapter))
+
+
+def test_retry_passes_the_earlier_chapters_as_context(tmp_path, monkeypatch):
+    store, series_id, hits, articles_by_url = starved_series(
+        tmp_path, monkeypatch)
+    failed = store.list_chapters(series_id)[1]
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+    provider = ScriptedProvider()
+
+    retry_chapter(store, provider, series_id, failed["id"])
+
+    write = next(item for item in provider.prompts if "title_candidates" in item)
+    assert "第 1 章《第一章》：这一章的开头段落。" in write
+    assert "第 3 章" not in write  # only what the reader has read by then
+
+
+def test_retry_that_fails_again_keeps_the_series_partial(
+        tmp_path, monkeypatch):
+    store, series_id, _, _ = starved_series(tmp_path, monkeypatch)
+    failed = store.list_chapters(series_id)[1]
+
+    result = retry_chapter(store, ScriptedProvider(), series_id, failed["id"])
+
+    assert result["status"] == "partial"
+    assert result["draft_ids"] == []
+    chapter = store.list_chapters(series_id)[1]
+    assert chapter["status"] == "failed"
+    assert "不足 2 篇" in chapter["error"]
+
+
+def test_retry_after_a_cancelled_run_reports_partial(tmp_path, monkeypatch):
+    """A chapter the cancel never reached is still an unwritten chapter."""
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+    def should_stop() -> bool:
+        series = store.latest_series()
+        return bool(series) and any(
+            row["status"] == "done" for row in store.list_chapters(series["id"]))
+    with pytest.raises(SearchCreateCancelled):
+        run_series_create(
+            store, ScriptedProvider(), options(), should_stop=should_stop)
+    series_id = store.latest_series()["id"]
+    cancelled = store.list_chapters(series_id)[1]
+
+    result = retry_chapter(store, ScriptedProvider(), series_id, cancelled["id"])
+
+    assert result["status"] == "partial"  # chapter 3 was never started
+    statuses = [row["status"] for row in store.list_chapters(series_id)]
+    assert statuses == ["done", "done", "pending"]
+    assert store.get_series(series_id)["status"] == "partial"
+
+
+def test_retry_refuses_a_chapter_that_already_has_a_draft(
+        tmp_path, monkeypatch):
+    store, series_id, _, _ = starved_series(tmp_path, monkeypatch)
+    written = store.list_chapters(series_id)[0]
+
+    with pytest.raises(ValueError, match="已有草稿"):
+        retry_chapter(store, ScriptedProvider(), series_id, written["id"])
+
+
+def test_retry_reuses_the_series_own_search_settings(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch,
+         hits_for=lambda query: [] if "q2" in query or "第二章" in query
+         else hits,
+         articles_by_url=articles_by_url)
+    run_series_create(
+        store, ScriptedProvider(),
+        options(ref_count=10, engines=["baidu", "bing"]))
+    series = store.latest_series()
+    assert json.loads(series["engines"]) == ["baidu", "bing"]
+
+    seen: list = []
+    def fake_search(queries, opts, **kwargs):
+        seen.append(opts)
+        return hits
+    monkeypatch.setattr(
+        "app.pipeline.series_create.search_queries", fake_search)
+    monkeypatch.setattr(
+        "app.pipeline.search_create.search_queries", fake_search)
+    failed = store.list_chapters(series["id"])[1]
+
+    retry_chapter(store, ScriptedProvider(), series["id"], failed["id"])
+
+    assert list(seen[0].engines) == ["baidu", "bing"]
+    assert seen[0].ref_count == 10

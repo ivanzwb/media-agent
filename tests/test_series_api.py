@@ -239,3 +239,82 @@ def test_series_detail_and_list(tmp_path):
 
     assert client.get("/api/series/9999").status_code == 404
     assert client.get("/api/series/9999/drafts").status_code == 404
+
+
+def retry_url(series_id: int, chapter_id: int) -> str:
+    return f"/api/series/{series_id}/chapters/{chapter_id}/retry"
+
+
+def chapter_ids_of(client: TestClient, series_id: int) -> list[int]:
+    return [item["id"] for item in
+            client.get(f"/api/series/{series_id}").json()["series"]["chapters"]]
+
+
+def test_chapter_retry_runs_only_that_chapter(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_retry(store, provider, series_id, chapter_id, **kwargs):
+        captured["target"] = (series_id, chapter_id)
+        captured["kwargs"] = kwargs
+        kwargs["progress"]({
+            "stage": "write", "detail": "第 2 章：正在写作…",
+            "current": 1, "total": 1, "stats": {"series_id": series_id},
+        })
+        return {"series_id": series_id, "status": "done", "draft_ids": [21],
+                "stats": {"series_id": series_id, "chapters_done": 1}}
+
+    monkeypatch.setattr("app.web.server.retry_chapter", fake_retry)
+    client = make_client(tmp_path, pro=True)
+    series_id = seed_series(tmp_path)
+    failed = chapter_ids_of(client, series_id)[1]
+
+    assert client.post(retry_url(series_id, failed)).status_code == 200
+    state = wait_terminal(client)
+    assert state["status"] == "done"
+    assert captured["target"] == (series_id, failed)
+    assert captured["kwargs"]["seo_tags_enabled"] is True
+    assert "最佳" in captured["kwargs"]["sensitive_words"]
+    assert any("正在写作" in line for line in state["logs"])
+
+
+def test_chapter_retry_requires_pro(tmp_path):
+    client = make_client(tmp_path, pro=False)
+    series_id = seed_series(tmp_path)
+    assert client.post(retry_url(series_id, 1)).status_code == 403
+
+
+def test_chapter_retry_refuses_a_chapter_that_already_has_a_draft(tmp_path):
+    client = make_client(tmp_path, pro=True)
+    series_id = seed_series(tmp_path)
+    written = chapter_ids_of(client, series_id)[0]
+
+    response = client.post(retry_url(series_id, written))
+    assert response.status_code == 409
+    assert "草稿编辑页" in response.json()["error"]
+
+
+def test_chapter_retry_rejects_unknown_targets(tmp_path):
+    client = make_client(tmp_path, pro=True)
+    series_id = seed_series(tmp_path)
+    assert client.post(retry_url(9999, 1)).status_code == 404
+    assert client.post(retry_url(series_id, 9999)).status_code == 404
+
+
+def test_chapter_retry_waits_for_a_running_job(tmp_path, monkeypatch):
+    def blocking_run(store, provider, options, **kwargs):
+        while not kwargs["should_stop"]():
+            time.sleep(0.01)
+        raise SearchCreateCancelled()
+
+    monkeypatch.setattr("app.web.server.run_series_create", blocking_run)
+    client = make_client(tmp_path, pro=True)
+    series_id = seed_series(tmp_path)
+    failed = chapter_ids_of(client, series_id)[1]
+    assert client.post(
+        "/api/series/create", json=valid_payload()).status_code == 200
+
+    response = client.post(retry_url(series_id, failed))
+    assert response.status_code == 409
+
+    assert client.post("/api/series/cancel").status_code == 200
+    wait_terminal(client)
