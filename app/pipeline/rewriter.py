@@ -795,9 +795,11 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
 
     # Append any remaining (unused) videos at the end so nothing is lost
     vid_block = _media_block([], videos, body_md)
+    # Plain-text attribution: an outbound link here gets the post flagged as
+    # 引流 by 公众号/头条. The source URL stays available on the draft record.
     body_with_source = (
-        f"{body_md}{vid_block}\n\n---\n**信息来源**："
-        f"[{article.source_name}]({article.url})\n"
+        f"{body_md}{vid_block}\n\n---\n"
+        f"**信息来源**：{article.source_name}\n"
     )
 
     # Fact-check on the PLAIN rewritten text (use body_raw without inlined

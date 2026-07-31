@@ -353,7 +353,7 @@ def test_near_content_dedup_keeps_richer_copy():
     assert [row.id for row in result] == [2, 3]
 
 
-def test_synthesize_retries_links_citations_and_fact_checks():
+def test_synthesize_retries_cites_sources_and_fact_checks():
     provider = MockProvider([
         "invalid",
         '{"title_candidates":["标题一","标题二"],'
@@ -363,10 +363,27 @@ def test_synthesize_retries_links_citations_and_fact_checks():
     ])
     result = synthesize("AI", [article(1), article(2)], provider)
     assert result.title_candidates[0] == "标题一"
-    assert "[[1]](https://example1.com/news)" in result.body_md
+    assert "事实一 [1]" in result.body_md
     assert "## 参考文献" in result.body_md
+    assert "1. Article 1 — Source 1" in result.body_md
     assert result.citations[0]["source_indexes"] == [1]
     assert result.flagged_claims == ["事实二缺少直接证据"]
+
+
+def test_synthesize_body_carries_no_outbound_links():
+    """公众号/头条把站外链接判为引流，正文里不能出现任何 URL。"""
+    provider = MockProvider([
+        '{"title_candidates":["标题"],'
+        '"body_md":"## 进展\\n见 [原文](https://example1.com/news) 与 [1]。\\n'
+        '![图](../../media/cover.jpg)",'
+        '"citations":[]}',
+        '{"flagged_claims":[]}',
+    ])
+    result = synthesize("AI", [article(1), article(2)], provider)
+    assert "http://" not in result.body_md
+    assert "https://" not in result.body_md
+    assert "见 原文 与 [1]。" in result.body_md
+    assert "![图](../../media/cover.jpg)" in result.body_md
 
 
 def test_synthesize_requires_multiple_sources():

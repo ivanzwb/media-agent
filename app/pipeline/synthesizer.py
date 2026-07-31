@@ -66,21 +66,22 @@ def _coerce_citations(value, source_count: int) -> list[dict]:
     return out
 
 
-def _link_citation_markers(body: str, articles: list[Article]) -> str:
-    def replace(match: re.Match) -> str:
-        index = int(match.group(1))
-        if not 1 <= index <= len(articles):
-            return match.group(0)
-        return f"[[{index}]]({articles[index - 1].url})"
+_EXTERNAL_LINK_RE = re.compile(r"(?<!!)\[([^\]]+)\]\(https?://[^)\s]+\)")
 
-    return re.sub(r"(?<!\[)\[(\d+)\](?![\]\(])", replace, body)
+
+def _strip_external_links(body: str) -> str:
+    """Keep the anchor text, drop the URL.
+
+    公众号、头条等平台把站外链接判为引流并降权，所以正文不能带任何外链。
+    图片语法和本地 media 相对路径不受影响。
+    """
+    return _EXTERNAL_LINK_RE.sub(r"\1", body)
 
 
 def _references(articles: list[Article]) -> str:
     lines = ["## 参考文献"]
     for index, article in enumerate(articles, 1):
-        lines.append(
-            f"{index}. [{article.title}]({article.url}) — {article.source_name}")
+        lines.append(f"{index}. {article.title} — {article.source_name}")
     return "\n".join(lines)
 
 
@@ -204,7 +205,8 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
         f"{content_rules}\n\n"
         "只输出 JSON 对象，字段：\n"
         '- "title_candidates": 3 个不夸大的候选标题\n'
-        '- "body_md": Markdown 正文，关键事实后使用 [1]、[2] 等引用标记\n'
+        '- "body_md": Markdown 正文，关键事实后使用 [1]、[2] 等引用标记；'
+        "正文中不要出现任何链接或网址\n"
         '- "citations": [{"claim":"正文中的关键事实",'
         '"source_indexes":[1,2],"quote":"可选的原文短句"}]\n'
         "不要输出代码围栏或额外说明。\n\n"
@@ -238,7 +240,7 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
         titles = [topic]
     body = post_process(str(parsed["body_md"]).strip())
     body = _normalise_tags(body)
-    body = _link_citation_markers(body, articles)
+    body = _strip_external_links(body)
     body = f"{body.rstrip()}\n\n---\n\n{_references(articles)}\n"
     citations = _coerce_citations(parsed.get("citations"), len(articles))
     flagged = fact_check_multi(body, articles, provider)
