@@ -10,8 +10,9 @@ from app.db import connect, init_db
 from app.models import Article
 from app.pipeline.search_create import SearchCreateCancelled
 from app.pipeline.series_create import (
-    SeriesCreateOptions, generate_series_outline, plan_series, probe_topic,
-    retry_chapter, run_series_chapters, run_series_create)
+    SeriesCreateOptions, _series_nav_note, generate_series_outline,
+    plan_series, probe_topic, retry_chapter, run_series_chapters,
+    run_series_create)
 from app.sources.web_search import SearchHit
 from app.store import Store
 
@@ -371,6 +372,51 @@ def test_options_reject_out_of_range_part_counts():
 def test_chapter_search_ignores_the_recency_window():
     """Knowledge series cover settled material, not the last 30 days."""
     assert options().chapter_options().time_range_days is None
+
+
+def test_each_chapter_points_at_its_neighbours(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+
+    result = run_series_create(store, ScriptedProvider(), options())
+
+    bodies = [store.read_draft_body(row["id"])["body_md"]
+              for row in store.get_series_drafts(result["series_id"])]
+    assert "本文是《强化学习》系列第 1 篇，共 3 篇。" in bodies[0]
+    assert "上一篇" not in bodies[0]  # nothing precedes the opener
+    assert "下一篇《第二章》" in bodies[0]
+    assert "上一篇《第一章》　下一篇《第三章》" in bodies[1]
+    # The outline named chapter one as a prerequisite, so it is named by number.
+    assert "建议先读：第 1 篇《第一章》" in bodies[1]
+    assert "下一篇" not in bodies[2]
+
+
+def test_the_navigation_note_stays_out_of_the_chapter_summary(
+        tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+
+    result = run_series_create(store, ScriptedProvider(), options())
+
+    chapters = store.list_chapters(result["series_id"])
+    assert chapters[0]["summary"] == "这一章的开头段落。"
+
+
+def test_an_english_series_reads_as_parts():
+    note = _series_nav_note(
+        "Reinforcement Learning", 2, ["Basics", "Value", "Policy"],
+        ["Basics", "linear algebra"], "en")
+    assert 'Part 2 of 3 in the "Reinforcement Learning" series.' in note
+    assert 'Previous: "Basics" | Next: "Policy"' in note
+    assert 'Read first: Part 1 "Basics"; linear algebra' in note
+
+
+def test_a_lone_chapter_gets_no_navigation():
+    assert _series_nav_note("话题", 1, ["只有一章"], [], "zh") == ""
 
 
 def test_plan_stops_before_writing_and_records_what_it_found(

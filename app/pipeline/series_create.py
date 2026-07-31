@@ -392,6 +392,46 @@ def _chapter_summary(body_md: str) -> str:
     return ""
 
 
+def _series_nav_note(topic: str, index: int, titles: list[str],
+                     prerequisites: list[str], lang: str) -> str:
+    """A reader's way into and out of one chapter of a series.
+
+    Published chapters land in a reader's feed one at a time, with nothing to
+    say they belong together. Built from the chapter rows rather than asked of
+    the model, so it cannot name a chapter the series does not have.
+    """
+    total = len(titles)
+    if total < 2 or not 1 <= index <= total:
+        return ""
+    english = lang == "en"
+    previous = titles[index - 2] if index > 1 else ""
+    following = titles[index] if index < total else ""
+
+    lines = [f"Part {index} of {total} in the \"{topic}\" series."
+             if english else f"本文是《{topic}》系列第 {index} 篇，共 {total} 篇。"]
+    around = []
+    if previous:
+        around.append(f"Previous: \"{previous}\"" if english
+                      else f"上一篇《{previous}》")
+    if following:
+        around.append(f"Next: \"{following}\"" if english
+                      else f"下一篇《{following}》")
+    if around:
+        lines.append(" | ".join(around) if english else "　".join(around))
+
+    # A prerequisite the series covers itself is worth pointing at by number.
+    earlier = {title: order for order, title in enumerate(titles[:index - 1], 1)}
+    read_first = [
+        (f"Part {earlier[item]} \"{item}\"" if english
+         else f"第 {earlier[item]} 篇《{item}》") if item in earlier else item
+        for item in prerequisites if item]
+    if read_first:
+        lines.append(("Read first: " if english else "建议先读：")
+                     + ("; ".join(read_first) if english
+                        else "、".join(read_first)))
+    return "".join(f"> {line}\n" for line in lines) + "\n"
+
+
 def _chapter_context(written: list[dict], lang: str) -> str:
     return "\n".join(
         f"{_part_label(item['order'], lang)}《{item['title']}》：{item['summary']}"
@@ -448,6 +488,7 @@ class _ChapterContext:
     promotion_footer: str = ""
     seo_tags_enabled: bool = True
     sensitive_words: set[str] = field(default_factory=set)
+    chapter_titles: list[str] = field(default_factory=list)
 
 
 def _write_chapter(context: _ChapterContext, chapter: dict, chapter_id: int, *,
@@ -498,10 +539,13 @@ def _write_chapter(context: _ChapterContext, chapter: dict, chapter_id: int, *,
             [item for item in written if item["order"] < index], options.lang))
 
     primary = saved_articles[0]
+    body_md = _series_nav_note(
+        options.topic, index, context.chapter_titles,
+        chapter["prerequisites"], options.lang) + result.body_md
     draft = Draft(
         article_id=primary.id or 0,
         title_candidates=result.title_candidates,
-        body_md=result.body_md,
+        body_md=body_md,
         topic=options.topic,
         source_url=primary.url,
         source_name=primary.source_name,
@@ -649,7 +693,8 @@ def run_series_chapters(store, provider: LLMProvider, series_id: int, *,
         store=store, provider=provider, options=options,
         search_options=search_options, series_id=series_id, style=style,
         promotion_footer=promotion_footer, seo_tags_enabled=seo_tags_enabled,
-        sensitive_words=sensitive_words or set())
+        sensitive_words=sensitive_words or set(),
+        chapter_titles=[row["title"] for row in rows])
 
     for row in targets:
         index = row["chapter_order"]
