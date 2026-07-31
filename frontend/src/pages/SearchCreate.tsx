@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Alert, App as AntApp, Button, Card, Form, Input, Progress, Select, Space,
-  Steps, Tag, Typography,
+  Alert, App as AntApp, Button, Card, ConfigProvider, Form, Input, Progress,
+  Select, Space, Steps, Tag, Typography,
 } from "antd";
 import { CloseCircleOutlined, SearchOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useState } from "react";
@@ -92,6 +92,7 @@ export default function SearchCreate() {
   const { openLicenseGuide } = useOutletContext<{ openLicenseGuide: () => void }>();
   const [form] = Form.useForm<SearchCreateForm>();
   const [submitting, setSubmitting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   const { data: styleData } = useQuery({
     queryKey: ["rewrite-styles"],
@@ -119,6 +120,10 @@ export default function SearchCreate() {
       : active ? 0.35 : 0;
     return Math.round(((currentStage + stageFraction) / STAGES.length) * 100);
   }, [active, currentStage, draftId, state, status?.current, status?.progress, status?.total]);
+
+  useEffect(() => {
+    if (!active) setCancelling(false);
+  }, [active]);
 
   useEffect(() => {
     const saved = status?.request;
@@ -164,11 +169,13 @@ export default function SearchCreate() {
   }
 
   async function cancel() {
+    setCancelling(true);
     try {
       await api.post("/api/search-create/cancel", {});
-      message.info("已请求取消搜索创作");
+      message.info("已请求取消，正在等待当前步骤结束…");
       await qc.invalidateQueries({ queryKey: ["search-create-status"] });
     } catch (e: any) {
+      setCancelling(false);
       message.error(e?.response?.data?.error || e?.response?.data?.detail || "取消失败");
     }
   }
@@ -261,7 +268,11 @@ export default function SearchCreate() {
                 开始搜索创作
               </Button>
               {active && (
-                <Button danger icon={<CloseCircleOutlined />} onClick={cancel}>取消</Button>
+                // Form 的 disabled 会经 context 连带禁用内部按钮，取消按钮必须跳出该 context
+                <ConfigProvider componentDisabled={false}>
+                  <Button danger icon={<CloseCircleOutlined />}
+                    loading={cancelling} onClick={cancel}>取消</Button>
+                </ConfigProvider>
               )}
             </Space>
           </Form.Item>
