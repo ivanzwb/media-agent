@@ -1213,11 +1213,31 @@ def create_app(config: Config | None = None,
             task["error"] = error
             task.pop("provider", None)
 
+    def _set_agent_result(draft_id: int, run_id: str, body_md: str) -> None:
+        # Publishes to task state only. The explicit apply endpoint performs the
+        # draft write, so closing a completed dialog does not silently overwrite
+        # the editor or a later manual save.
+        with _agent_tasks_lock:
+            if not _agent_task_is_current(draft_id, run_id, running=True):
+                return
+            task = _agent_tasks[draft_id]
+            task.update({
+                "status": "completed",
+                "body_md": body_md,
+                "title_candidates": task["title_candidates"],
+                "title_cn": task["title_cn"],
+            })
+            task.pop("provider", None)
+            logger.info("agent-edit draft=%d run=%s result ready",
+                        draft_id, run_id)
+
     def _agent_run_background(draft_id: int, run_id: str, prompt: str,
                               full_md: str, provider: LLMProvider,
                               workspace: Path):
         """Run one isolated Agent edit and publish only its current result."""
         out_path = workspace / "output-draft.md"
+        result_body: str | None = None
+        failure: str | None = None
         try:
             messages = [
                 Message(role="system", content=(
@@ -1276,35 +1296,27 @@ def create_app(config: Config | None = None,
                     f"Agent {source} 看起来是执行摘要而不是完整正文；"
                     f"请检查 CLI 权限，或确认它写入了 {out_path}")
 
-            # Publish the result to task state only. The explicit apply endpoint
-            # performs the draft write, so closing a completed dialog does not
-            # silently overwrite the editor or a later manual save.
-            with _agent_tasks_lock:
-                if not _agent_task_is_current(draft_id, run_id, running=True):
-                    return
-                task = _agent_tasks[draft_id]
-                task.update({
-                    "status": "completed",
-                    "body_md": parsed_body,
-                    "title_candidates": task["title_candidates"],
-                    "title_cn": task["title_cn"],
-                })
-                task.pop("provider", None)
-                logger.info("agent-edit draft=%d run=%s result ready",
-                            draft_id, run_id)
+            result_body = parsed_body
 
         except RuntimeError as exc:
             logger.error("agent-edit draft=%d run=%s failed: %s",
                          draft_id, run_id, exc)
-            _set_agent_error(draft_id, run_id, str(exc))
+            failure = str(exc)
         except Exception as exc:
             logger.exception("agent-edit draft=%d run=%s unexpected error",
                              draft_id, run_id)
-            _set_agent_error(draft_id, run_id, f"内部错误: {exc}")
+            failure = f"内部错误: {exc}"
         finally:
             # This path was created by _agent_workspace and is unique to this
             # run, so recursive cleanup cannot touch another draft or user file.
+            # Cleanup runs before the outcome is published: a caller that polls
+            # its way to a terminal status must not then find the run's
+            # workspace still on disk.
             shutil.rmtree(workspace, ignore_errors=True)
+            if result_body is not None:
+                _set_agent_result(draft_id, run_id, result_body)
+            elif failure is not None:
+                _set_agent_error(draft_id, run_id, failure)
 
     @app.post("/api/draft/{draft_id}/agent-edit")
     def draft_agent_edit(draft_id: int, prompt: str = Form(...),
