@@ -26,7 +26,7 @@ from app.pipeline.search_create import (
     ProgressCallback, SearchCreateCancelled, SearchCreateOptions, _check_cancel,
     _emit, _topic_search_terms, _url_key, collect_references, search_queries)
 from app.pipeline.synthesizer import synthesize
-from app.sources.web_search import DEFAULT_SEARCH_ENGINES
+from app.sources.web_search import DEFAULT_SEARCH_ENGINES, SearchHit
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,11 @@ _GROUNDING_CHARS = 6000
 _GROUNDING_PER_DOMAIN = 2
 _SNIPPET_CHARS = 180
 _SUMMARY_CHARS = 200
+_MAP_CHARS = 2000
+# Search hits shrink a lot on the way to usable references — pages fail to
+# fetch, get dropped as marketing or near-duplicates — so clearing the
+# two-reference bar needs noticeably more than two hits.
+_PREFLIGHT_MIN_HITS = 4
 
 
 @dataclass
@@ -141,6 +146,60 @@ def probe_topic(options: SeriesCreateOptions, *,
     return "\n".join(lines)
 
 
+_LIST_LINE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
+
+
+def _clean_markdown_list(raw: str) -> str:
+    """Keep the nested list and drop everything the model wrapped it in.
+
+    The map is rendered as Markdown in the UI, so a stray prose preamble or
+    code fence would show up verbatim.
+    """
+    lines: list[str] = []
+    for line in str(raw or "").splitlines():
+        if line.strip().startswith("```"):
+            continue
+        if _LIST_LINE.match(line):
+            lines.append(line.rstrip())
+        elif lines and not line.strip():
+            break  # the list has ended; whatever follows is commentary
+    text = "\n".join(lines)
+    return text[:_MAP_CHARS].rstrip()
+
+
+def generate_knowledge_map(topic: str, grounding: str, provider: LLMProvider,
+                           *, depth: str, lang: str = "zh") -> str:
+    """Sketch the shape of the field as a nested Markdown list.
+
+    Written before the outline so the chapter split follows the subject's own
+    structure rather than a generic "background, principles, practice" arc.
+    Rendered as Markdown rather than a diagram: the frontend already renders
+    Markdown, and a nested list carries the hierarchy without a new dependency.
+    """
+    language = {"zh": "中文", "en": "English",
+                "bilingual": "中英双语"}.get(lang, "中文")
+    grounding_block = (
+        f"该主题公开资料的标题与摘要，用于校准术语：\n{grounding}\n\n"
+        if grounding.strip() else "")
+    prompt = (
+        f"梳理知识主题「{topic}」的核心脉络。深度定位：{_DEPTH_LABELS[depth]}。"
+        f"输出语言：{language}。\n\n"
+        f"{grounding_block}"
+        "只输出一个嵌套的 Markdown 无序列表，最多三层：第一层是该领域的主要分支，"
+        "第二层是分支下的关键概念或方法，第三层可选，用于补充典型应用或常见误区。"
+        "每项一行，控制在 20 字以内。\n"
+        "不要输出标题、说明文字或代码围栏。"
+    )
+    try:
+        return _clean_markdown_list(
+            provider.chat([Message(role="user", content=prompt)]))
+    except Exception as exc:  # noqa: BLE001
+        # The map is for orientation, not correctness; losing it must not stop
+        # a run the user already paid the grounding search for.
+        logger.warning("知识架构生成失败：%s", exc)
+        return ""
+
+
 def _normalise_chapters(value, topic: str, parts: int,
                         lang: str) -> list[dict]:
     if not isinstance(value, list):
@@ -175,8 +234,8 @@ def _normalise_chapters(value, topic: str, parts: int,
 
 
 def generate_series_outline(topic: str, grounding: str, provider: LLMProvider,
-                            *, parts: int, depth: str,
-                            lang: str = "zh") -> list[dict]:
+                            *, parts: int, depth: str, lang: str = "zh",
+                            knowledge_map: str = "") -> list[dict]:
     language = {"zh": "中文", "en": "English",
                 "bilingual": "中英双语"}.get(lang, "中文")
     grounding_block = (
@@ -184,12 +243,16 @@ def generate_series_outline(topic: str, grounding: str, provider: LLMProvider,
         f"不要当作事实来源，也不要照抄：\n{grounding}\n\n"
         if grounding.strip() else ""
     )
+    map_block = (
+        f"该领域的核心脉络如下，章节划分应覆盖其中的主要分支：\n{knowledge_map}\n\n"
+        if knowledge_map.strip() else ""
+    )
     prompt = (
         f"为知识主题「{topic}」设计一个 {parts} 篇的系列文章提纲。\n"
         f"深度定位：{_DEPTH_LABELS[depth]}。输出语言：{language}。\n"
         "章节之间要有清晰的递进关系，共同覆盖该领域的主要脉络，"
         "彼此不重复。\n\n"
-        f"{grounding_block}"
+        f"{map_block}{grounding_block}"
         "只输出 JSON 对象：\n"
         '{"chapters":[{"title":"章节标题",'
         '"scope":"这一章讲什么、读者读完能得到什么，100 字以内",'
@@ -205,6 +268,103 @@ def generate_series_outline(topic: str, grounding: str, provider: LLMProvider,
         logger.warning("系列提纲解析失败，响应：%r", str(raw)[:300])
         raise ValueError("系列提纲生成失败，请调整主题后重试")
     return chapters
+
+
+def _repair_chapter_queries(chapters: list[dict], thin: list[int], topic: str,
+                            grounding: str,
+                            provider: LLMProvider) -> dict[int, list[str]]:
+    listing = "\n".join(
+        f"{index}. {chapters[index - 1]['title']}"
+        f"（现检索词：{'、'.join(chapters[index - 1]['search_queries'])}）"
+        for index in thin)
+    grounding_block = (
+        f"该主题公开资料的标题与摘要，请从中借用实际的说法：\n{grounding}\n\n"
+        if grounding.strip() else "")
+    prompt = (
+        f"系列主题「{topic}」的下列章节，其检索词在搜索引擎上几乎搜不到资料，"
+        "请为每一章改写检索词。\n\n"
+        f"{grounding_block}"
+        f"需要改写的章节：\n{listing}\n\n"
+        '只输出 JSON：{"fixes":[{"index":1,"search_queries":["检索词"]}]}\n'
+        "检索词要短、具体、用该领域公开资料里实际出现的说法，每章 2-4 个。"
+    )
+    try:
+        parsed = _extract_json(
+            provider.chat([Message(role="user", content=prompt)])) or {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("检索词修复调用失败：%s", exc)
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    fixes: dict[int, list[str]] = {}
+    for item in parsed.get("fixes") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        queries = [str(query).strip()
+                   for query in (item.get("search_queries") or [])
+                   if str(query).strip()][:4]
+        if index in thin and queries:
+            fixes[index] = queries
+    return fixes
+
+
+def preflight_chapters(chapters: list[dict], options: SeriesCreateOptions,
+                       provider: LLMProvider, *, grounding: str = "",
+                       progress: ProgressCallback | None = None,
+                       should_stop: Callable[[], bool] | None = None,
+                       stats: dict | None = None
+                       ) -> tuple[list[dict], dict[int, list[SearchHit]]]:
+    """Check every chapter can find sources, before committing to the run.
+
+    Search-only, like grounding. A chapter whose terms find almost nothing
+    will fail twenty minutes from now for a reason that is fixable right now,
+    while the outline is still cheap to change. The hits are kept and handed
+    to the research stage, so most of what this costs comes back.
+    """
+    search_options = options.chapter_options()
+    search_options.validate()
+    total = len(chapters)
+    seeds: dict[int, list[SearchHit]] = {}
+    thin: list[int] = []
+
+    for index, chapter in enumerate(chapters, 1):
+        _check_cancel(should_stop)
+        _emit(progress, "preflight",
+              f"预检第 {index}/{total} 章《{chapter['title']}》…",
+              current=index, total=total, stats=stats)
+        hits = search_queries(
+            chapter["search_queries"], search_options, should_stop=should_stop)
+        seeds[index] = hits
+        if len(hits) < _PREFLIGHT_MIN_HITS:
+            thin.append(index)
+
+    if thin:
+        _check_cancel(should_stop)
+        _emit(progress, "preflight",
+              f"{len(thin)} 章资料偏少，正在改写检索词…",
+              current=total, total=total, stats=stats)
+        for index, queries in _repair_chapter_queries(
+                chapters, thin, options.topic, grounding, provider).items():
+            _check_cancel(should_stop)
+            retried = search_queries(
+                queries, search_options, should_stop=should_stop)
+            if len(retried) > len(seeds[index]):
+                chapters[index - 1]["search_queries"] = queries
+                seeds[index] = retried
+
+    starved = [chapters[index - 1]["title"] for index in range(1, total + 1)
+               if len(seeds[index]) < _PREFLIGHT_MIN_HITS]
+    if stats is not None:
+        stats["preflight_thin"] = starved
+    _emit(progress, "preflight",
+          f"预检完成：{total - len(starved)}/{total} 章资料充足"
+          + (f"，{'、'.join(starved)} 可能写不成" if starved else ""),
+          current=total, total=total, stats=stats)
+    return chapters, seeds
 
 
 def _part_label(index: int, lang: str) -> str:
@@ -238,9 +398,10 @@ def _chapter_context(written: list[dict], lang: str) -> str:
 def _chapter_references(chapter: dict, search_options: SearchCreateOptions,
                         provider: LLMProvider, *, topic: str,
                         seen_urls: set[str],
-                        progress: ProgressCallback | None,
-                        should_stop: Callable[[], bool] | None,
-                        stats: dict | None) -> list[Article]:
+                        hits: list[SearchHit] | None = None,
+                        progress: ProgressCallback | None = None,
+                        should_stop: Callable[[], bool] | None = None,
+                        stats: dict | None = None) -> list[Article]:
     """References for one chapter, widening the query once if it comes up short.
 
     A narrow chapter — a glossary, a niche variant — is normal in a series, and
@@ -250,8 +411,8 @@ def _chapter_references(chapter: dict, search_options: SearchCreateOptions,
     """
     articles = collect_references(
         chapter["search_queries"], search_options, provider,
-        topic=chapter["title"], seen_urls=seen_urls, progress=progress,
-        should_stop=should_stop, stats=stats)
+        topic=chapter["title"], seen_urls=seen_urls, hits=hits,
+        progress=progress, should_stop=should_stop, stats=stats)
     widened = (f"{_topic_search_terms(topic, search_options.lang)} "
                f"{chapter['title']}").strip()
     if len(articles) >= 2 or widened in chapter["search_queries"]:
@@ -298,21 +459,40 @@ def run_series_create(store, provider: LLMProvider,
         options, progress=progress, should_stop=should_stop, stats=stats)
 
     _check_cancel(should_stop)
+    _emit(progress, "map", "正在梳理该领域的核心脉络…", stats=stats)
+    knowledge_map = generate_knowledge_map(
+        options.topic, grounding, provider, depth=options.depth,
+        lang=options.lang)
+
+    _check_cancel(should_stop)
     _emit(progress, "outline", "正在生成系列提纲…", stats=stats)
     chapters = generate_series_outline(
         options.topic, grounding, provider, parts=options.parts,
-        depth=options.depth, lang=options.lang)
+        depth=options.depth, lang=options.lang, knowledge_map=knowledge_map)
 
     series_id = store.create_series(
         title=options.topic, topic=options.topic, lang=options.lang,
-        depth=options.depth, parts=len(chapters), style_id=options.style_id)
-    chapter_ids = store.add_chapters(series_id, chapters)
+        depth=options.depth, parts=len(chapters), style_id=options.style_id,
+        knowledge_map=knowledge_map)
     stats["series_id"] = series_id
     stats["parts"] = len(chapters)
     total = len(chapters)
     _emit(progress, "outline", f"提纲已生成，共 {total} 章",
           current=0, total=total, stats=stats)
 
+    seeds: dict[int, list[SearchHit]] = {}
+    try:
+        chapters, seeds = preflight_chapters(
+            chapters, options, provider, grounding=grounding,
+            progress=progress, should_stop=should_stop, stats=stats)
+    except SearchCreateCancelled:
+        store.finish_series(series_id, "cancelled")
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # Losing the check costs a chance to fix the outline, not the run.
+        logger.warning("章节预检失败：%s", exc)
+
+    chapter_ids = store.add_chapters(series_id, chapters)
     search_options = options.chapter_options()
     search_options.validate()
     seen_urls: set[str] = set()
@@ -330,7 +510,7 @@ def run_series_create(store, provider: LLMProvider,
                   current=index, total=total, stats=stats)
             articles = _chapter_references(
                 chapter, search_options, provider, topic=options.topic,
-                seen_urls=seen_urls, progress=progress,
+                seen_urls=seen_urls, hits=seeds.get(index), progress=progress,
                 should_stop=should_stop, stats=stats)
             if len(articles) < 2:
                 raise ValueError("有效参考资料不足 2 篇")

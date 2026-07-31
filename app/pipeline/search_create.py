@@ -310,6 +310,7 @@ def _url_key(url: str) -> str:
 def collect_references(queries: list[str], options: SearchCreateOptions,
                        provider: LLMProvider, *, topic: str | None = None,
                        seen_urls: set[str] | None = None,
+                       hits: list[SearchHit] | None = None,
                        progress: ProgressCallback | None = None,
                        should_stop: Callable[[], bool] | None = None,
                        stats: dict | None = None) -> list[Article]:
@@ -324,14 +325,19 @@ def collect_references(queries: list[str], options: SearchCreateOptions,
     ``_url_key`` values to keep later chapters off the sources earlier ones
     already used. It is only read here — callers decide which of the returned
     references they actually keep, and record those themselves.
+
+    ``hits`` skips the search when the caller already has results for these
+    queries, which is how a series reuses what its feasibility check found
+    instead of paying for the same search twice.
     """
     topic = topic or options.topic
     _check_cancel(should_stop)
-    _emit(progress, "search", "正在搜索相关文章…",
-          total=len(queries), stats=stats)
-    hits = search_queries(
-        queries, options, progress=progress, should_stop=should_stop,
-        stats=stats)
+    if hits is None:
+        _emit(progress, "search", "正在搜索相关文章…",
+              total=len(queries), stats=stats)
+        hits = search_queries(
+            queries, options, progress=progress, should_stop=should_stop,
+            stats=stats)
     if seen_urls is not None:
         hits = [hit for hit in hits if _url_key(hit.url) not in seen_urls]
     if stats is not None:

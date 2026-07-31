@@ -347,12 +347,14 @@ class Store:
     # can only ever be a cache of these.
 
     def create_series(self, *, title: str, topic: str, lang: str, depth: str,
-                      parts: int, style_id: str | None) -> int:
+                      parts: int, style_id: str | None,
+                      knowledge_map: str = "") -> int:
         cur = self.conn.execute(
             """INSERT INTO series
-               (title, topic, lang, depth, parts, style_id, status, created_at)
-               VALUES (?,?,?,?,?,?,'running',?)""",
-            (title, topic, lang, depth, int(parts), style_id,
+               (title, topic, lang, depth, parts, style_id, knowledge_map,
+                status, created_at)
+               VALUES (?,?,?,?,?,?,?,'running',?)""",
+            (title, topic, lang, depth, int(parts), style_id, knowledge_map,
              datetime.now(timezone.utc).isoformat()))
         self.conn.commit()
         return int(cur.lastrowid)

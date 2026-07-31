@@ -1114,6 +1114,23 @@ def create_app(config: Config | None = None,
         body = store.read_draft_body(draft_id)
         title_candidates = body.get("title_candidates", []) or []
         article = store.get_article(row["article_id"]) if row["article_id"] else None
+        series_nav = None
+        series_id = row["series_id"] if "series_id" in row.keys() else None
+        if series_id:
+            series_row = store.get_series(series_id)
+            if series_row is not None:
+                series_nav = {
+                    "id": series_id,
+                    "title": series_row["title"],
+                    "order": row["series_order"],
+                    "part_label": body.get("series_part_label") or "",
+                    "prerequisites": body.get("prerequisites", []) or [],
+                    "chapters": [
+                        {"order": item["chapter_order"], "title": item["title"],
+                         "status": item["status"], "draft_id": item["draft_id"]}
+                        for item in store.list_chapters(series_id)
+                    ],
+                }
         return {
             "ok": True,
             "id": draft_id,
@@ -1130,6 +1147,7 @@ def create_app(config: Config | None = None,
             "sources": body.get("sources", []) or [],
             "citations": body.get("citations", []) or [],
             "search_meta": body.get("search_meta", {}) or {},
+            "series": series_nav,
             "article_id": row["article_id"],
             "article_published_at": article["published_at"] if article else None,
             "article_title": title_candidates[0] if title_candidates else "",
@@ -2896,6 +2914,7 @@ def create_app(config: Config | None = None,
             "depth": row["depth"],
             "parts": row["parts"],
             "style_id": row["style_id"],
+            "knowledge_map": row["knowledge_map"] or "",
             "status": row["status"],
             "error": row["error"],
             "created_at": row["created_at"],

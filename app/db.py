@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS series (
     depth TEXT NOT NULL DEFAULT 'intermediate',
     parts INTEGER NOT NULL DEFAULT 5,
     style_id TEXT,
+    knowledge_map TEXT,
     status TEXT NOT NULL DEFAULT 'running',
     error TEXT,
     created_at TEXT NOT NULL,
@@ -130,6 +131,11 @@ def init_db(conn: sqlite3.Connection) -> None:
     try:
         conn.execute(
             "ALTER TABLE drafts ADD COLUMN origin TEXT NOT NULL DEFAULT 'rewrite'")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    # Migrate: series created before the knowledge map existed.
+    try:
+        conn.execute("ALTER TABLE series ADD COLUMN knowledge_map TEXT")
     except sqlite3.OperationalError:
         pass  # column already exists
     # Migrate: link drafts that belong to a knowledge series. Ordering and

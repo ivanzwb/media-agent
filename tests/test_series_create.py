@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 
 import pytest
 
@@ -41,11 +42,15 @@ OUTLINE = (
 )
 
 
+KNOWLEDGE_MAP = "- 基础概念\n  - 马尔可夫决策过程\n- 核心算法\n  - 时序差分"
+
+
 class ScriptedProvider:
     """Answers by prompt shape, so chapter count never shifts the script."""
 
-    def __init__(self, outline: str = OUTLINE):
+    def __init__(self, outline: str = OUTLINE, fixes: str = '{"fixes":[]}'):
         self.outline = outline
+        self.fixes = fixes
         self.prompts: list[str] = []
 
     def chat(self, messages, **opts) -> str:
@@ -53,6 +58,10 @@ class ScriptedProvider:
         self.prompts.append(prompt)
         if "事实核查员" in prompt:
             return '{"flagged_claims":[]}'
+        if "梳理知识主题" in prompt:
+            return f"这是脉络：\n{KNOWLEDGE_MAP}\n\n以上仅供参考。"
+        if '"fixes"' in prompt:
+            return self.fixes
         if "系列文章提纲" in prompt:
             return self.outline
         if "title_candidates" in prompt:
@@ -87,9 +96,12 @@ def options(**overrides) -> SeriesCreateOptions:
     return SeriesCreateOptions(**values)
 
 
-def wire(monkeypatch, *, hits_for, articles_by_url, scrape_calls=None):
+def wire(monkeypatch, *, hits_for, articles_by_url, scrape_calls=None,
+         search_calls=None):
     """Route search and scrape through in-memory fixtures."""
     def fake_search(queries, opts, **kwargs):
+        if search_calls is not None:
+            search_calls.append(list(queries))
         collected: list[SearchHit] = []
         for query in queries:
             collected.extend(hits_for(query))
@@ -247,11 +259,11 @@ def test_cancel_keeps_the_chapters_already_written(tmp_path, monkeypatch):
     hits, articles_by_url = pool(12)
     wire(monkeypatch, hits_for=lambda query: hits,
          articles_by_url=articles_by_url)
-    calls = {"count": 0}
-
     def should_stop() -> bool:
-        calls["count"] += 1
-        return calls["count"] > 12
+        """Cancel as soon as the first chapter is on disk."""
+        series = store.latest_series()
+        return bool(series) and any(
+            row["status"] == "done" for row in store.list_chapters(series["id"]))
 
     with pytest.raises(SearchCreateCancelled):
         run_series_create(
@@ -279,6 +291,74 @@ def test_later_chapters_receive_earlier_chapter_summaries(
     assert "系列上下文" not in writes[0]
     assert "第 1 章《第一章》：这一章的开头段落。" in writes[1]
     assert "第 2 章《第二章》" in writes[2]
+
+
+def test_knowledge_map_is_stored_and_shapes_the_outline(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+    provider = ScriptedProvider()
+
+    result = run_series_create(store, provider, options())
+
+    stored = store.get_series(result["series_id"])["knowledge_map"]
+    assert stored == KNOWLEDGE_MAP  # prose around the list is stripped
+    outline_prompt = next(
+        item for item in provider.prompts if "系列文章提纲" in item)
+    assert "马尔可夫决策过程" in outline_prompt
+
+
+def test_preflight_rewrites_terms_that_find_nothing(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    # The outline's own terms are dead; only the repaired ones match.
+    wire(monkeypatch,
+         hits_for=lambda query: hits if "修好的词" in query else [],
+         articles_by_url=articles_by_url)
+    provider = ScriptedProvider(fixes=(
+        '{"fixes":[{"index":1,"search_queries":["修好的词 一"]},'
+        '{"index":2,"search_queries":["修好的词 二"]},'
+        '{"index":3,"search_queries":["修好的词 三"]}]}'))
+
+    result = run_series_create(store, provider, options())
+
+    assert result["status"] == "done"
+    chapters = store.list_chapters(result["series_id"])
+    assert [json.loads(row["search_queries"]) for row in chapters] == [
+        ["修好的词 一"], ["修好的词 二"], ["修好的词 三"]]
+    assert result["stats"]["preflight_thin"] == []
+
+
+def test_preflight_reports_chapters_it_could_not_rescue(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch,
+         hits_for=lambda query: [] if "q2" in query or "第二章" in query
+         else hits,
+         articles_by_url=articles_by_url)
+
+    result = run_series_create(store, ScriptedProvider(), options())
+
+    # The warning arrives during the outline stage, not ten minutes later.
+    assert result["stats"]["preflight_thin"] == ["第二章"]
+    assert result["status"] == "partial"
+
+
+def test_preflight_hits_seed_research_instead_of_searching_twice(
+        tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    search_calls: list[list[str]] = []
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url, search_calls=search_calls)
+
+    run_series_create(store, ScriptedProvider(), options())
+
+    # One grounding pass plus one probe per chapter — the research stage adds
+    # none, because it reuses what the probe already found.
+    assert len(search_calls) == 4
+    assert search_calls[1:] == [["q1"], ["q2"], ["q3"]]
 
 
 def test_options_reject_out_of_range_part_counts():

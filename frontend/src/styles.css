@@ -6,6 +6,11 @@ body {
 }
 .ma-content { padding: 24px; min-width: 1200px; width: min(88vw, 1600px); margin: 0 auto; height: calc(100vh - 64px); overflow-y: auto; display: flex; flex-direction: column; }
 
+/* ── Knowledge map: antd's reset strips list markers, restore them ── */
+.ma-knowledge-map ul { list-style: disc; padding-inline-start: 20px; margin: 0; }
+.ma-knowledge-map ul ul { list-style: circle; }
+.ma-knowledge-map li { margin: 2px 0; line-height: 1.7; }
+
 /* ── DraftEdit: lock page at 100vh, only editor scrollbar ── */
 body:has(.ma-draft-edit),
 body:has(.ma-draft-edit) #root,

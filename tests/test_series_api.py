@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
 from app.config import Config
 from app.db import connect, init_db
+from app.models import Article, Draft
 from app.pipeline.search_create import SearchCreateCancelled
 from app.store import Store
 from app.web.server import create_app
@@ -157,6 +159,66 @@ def test_status_rebuilds_chapter_progress_from_the_database(tmp_path):
     assert state["series"]["chapters_failed"] == 1
     assert state["current"] == 1
     assert state["topic"] == "强化学习"
+
+
+def test_draft_detail_carries_series_navigation(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.store._web_image_for_title", lambda *args: None)
+    client = make_client(tmp_path, pro=True)
+    config = Config(data_dir=tmp_path)
+    conn = connect(config.db_path)
+    init_db(conn)
+    store = Store(conn, config)
+    series_id = store.create_series(
+        title="强化学习", topic="强化学习", lang="zh", depth="beginner",
+        parts=2, style_id=None, knowledge_map="- 基础\n  - MDP")
+    article = store.save_article(Article(
+        title="Source", content_md="facts", url="https://source.test/a",
+        source_name="Source", source_type="scrape",
+        published_at=datetime.now(timezone.utc), images=[], raw_summary=None,
+        fetched_at=datetime.now(timezone.utc), topic="强化学习"))
+    draft = store.save_draft(Draft(
+        article_id=article.id, title_candidates=["第一章成稿"],
+        body_md="## 正文", topic="强化学习", source_url=article.url,
+        source_name=article.source_name, origin="series",
+        series_id=series_id, series_order=1, series_part_label="第 1 章",
+        prerequisites=["入门"]))
+    chapter_ids = store.add_chapters(series_id, [
+        {"title": "第一章", "search_queries": ["q1"]},
+        {"title": "第二章", "search_queries": ["q2"]},
+    ])
+    store.update_chapter(chapter_ids[0], status="done", draft_id=draft.id)
+    store.update_chapter(chapter_ids[1], status="failed", error="资料不足")
+
+    payload = client.get(f"/api/draft/{draft.id}").json()
+    assert payload["origin"] == "series"
+    nav = payload["series"]
+    assert nav["id"] == series_id
+    assert nav["order"] == 1
+    assert nav["part_label"] == "第 1 章"
+    assert nav["prerequisites"] == ["入门"]
+    assert [item["draft_id"] for item in nav["chapters"]] == [draft.id, None]
+    assert client.get(f"/api/series/{series_id}").json()[
+        "series"]["knowledge_map"] == "- 基础\n  - MDP"
+
+
+def test_draft_detail_has_no_series_block_for_a_plain_draft(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr("app.store._web_image_for_title", lambda *args: None)
+    client = make_client(tmp_path, pro=True)
+    config = Config(data_dir=tmp_path)
+    conn = connect(config.db_path)
+    init_db(conn)
+    store = Store(conn, config)
+    article = store.save_article(Article(
+        title="Source", content_md="facts", url="https://source.test/b",
+        source_name="Source", source_type="scrape",
+        published_at=datetime.now(timezone.utc), images=[], raw_summary=None,
+        fetched_at=datetime.now(timezone.utc), topic="AI"))
+    draft = store.save_draft(Draft(
+        article_id=article.id, title_candidates=["普通草稿"], body_md="## 正文",
+        topic="AI", source_url=article.url, source_name=article.source_name))
+
+    assert client.get(f"/api/draft/{draft.id}").json()["series"] is None
 
 
 def test_series_detail_and_list(tmp_path):

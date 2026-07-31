@@ -11,7 +11,7 @@ import {
 } from "@ant-design/icons";
 import MDEditor, { commands, type ICommand } from "@uiw/react-md-editor";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, getJson, postForm } from "../api/client";
 import { useLocalState } from "../api/hooks";
 import SceneEditor from "../components/SceneEditor";
@@ -66,6 +66,15 @@ function _applyDirectiveParams(
   return { text: lines.join("\n"), ok: true };
 }
 
+interface SeriesChapterNav {
+  order: number; title: string; status: string; draft_id: number | null;
+}
+
+interface SeriesNav {
+  id: number; title: string; order: number | null; part_label: string;
+  prerequisites: string[]; chapters: SeriesChapterNav[];
+}
+
 interface DraftData {
   ok: boolean; id: number; status: string; title_cn: string;
   title_candidates: string[]; body_md: string; cover_image: string | null;
@@ -89,6 +98,7 @@ interface DraftData {
     lang?: string; time_range_days?: number; ref_count?: number;
     style_id?: string | null; engines?: string[]; queries?: string[];
   };
+  series?: SeriesNav | null;
   sensitive_hits: string[]; article_id: number | null;
   article_published_at: string | null; article_title: string;
   has_video: boolean; has_narration: boolean; video_brand_name: string;
@@ -194,6 +204,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   status, setStatus, theme, setTheme, onSave, editorHeight }: any) {
   const qc = useQueryClient();
   const { message } = AntApp.useApp();
+  const navigate = useNavigate();
   const editorRef = useRef<HTMLDivElement>(null);
   const colorRef = useRef("#e67514");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -208,7 +219,9 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   const [wechatPublishing, setWechatPublishing] = useState<"draft" | "publish" | null>(null);
   const [coverCollapsed, setCoverCollapsed] = useLocalState<boolean>("draftedit-coverCollapsed", false);
   const TOUTIAO_URL = "https://mp.toutiao.com/profile_v4/graphic/publish";
-  const isSearchDraft = data.origin === "search_create";
+  // Series chapters are written the same way as search drafts, so they carry
+  // the same reference, citation and search-parameter panels.
+  const isSearchDraft = data.origin === "search_create" || data.origin === "series";
   const searchSources = Array.isArray(data.sources) ? data.sources : [];
   const citations = Array.isArray(data.citations)
     ? data.citations
@@ -801,6 +814,56 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
                 )}
               </Space>
             </Card>
+            {data.series && (
+              <Card size="small" style={{ marginTop: 12 }}
+                title={`系列：${data.series.title}`}
+                extra={<Link to="/series-create">查看系列</Link>}>
+                <Space direction="vertical" size={6} style={{ width: "100%" }}>
+                  {data.series.chapters.map((chapter: SeriesChapterNav) => {
+                    const current = chapter.order === data.series?.order;
+                    const label = `${chapter.order}. ${chapter.title}`;
+                    return (
+                      <div key={chapter.order} style={{ lineHeight: 1.35 }}>
+                        {current ? (
+                          <Text strong>{label}（当前）</Text>
+                        ) : chapter.draft_id ? (
+                          <Link to={`/drafts/${chapter.draft_id}/edit`}>{label}</Link>
+                        ) : (
+                          <Text type="secondary">{label}（{chapter.status === "failed" ? "未完成" : "待生成"}）</Text>
+                        )}
+                      </div>
+                    );
+                  })}
+                </Space>
+                {data.series.prerequisites.length > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    <Text type="secondary">前置阅读：{data.series.prerequisites.join("、")}</Text>
+                  </div>
+                )}
+                <Space style={{ marginTop: 12 }}>
+                  {(() => {
+                    const chapters: SeriesChapterNav[] = data.series?.chapters || [];
+                    const order = data.series?.order ?? 0;
+                    const prev = [...chapters].reverse().find(
+                      (item) => item.order < order && item.draft_id);
+                    const next = chapters.find(
+                      (item) => item.order > order && item.draft_id);
+                    return (
+                      <>
+                        <Button size="small" disabled={!prev}
+                          onClick={() => prev && navigate(`/drafts/${prev.draft_id}/edit`)}>
+                          上一章
+                        </Button>
+                        <Button size="small" disabled={!next}
+                          onClick={() => next && navigate(`/drafts/${next.draft_id}/edit`)}>
+                          下一章
+                        </Button>
+                      </>
+                    );
+                  })()}
+                </Space>
+              </Card>
+            )}
             <Card size="small" title={isSearchDraft ? `参考来源（${searchSources.length}）` : "来源"}
               style={{ marginTop: 12 }}>
               {isSearchDraft && searchSources.length > 0 ? (

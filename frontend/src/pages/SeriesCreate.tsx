@@ -1,10 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Alert, App as AntApp, Button, Card, ConfigProvider, Form, Input, List,
-  Progress, Select, Space, Tag, Typography,
+  Alert, App as AntApp, Button, Card, Collapse, ConfigProvider, Form, Input,
+  List, Progress, Select, Space, Tag, Typography,
 } from "antd";
 import { BookOutlined, CloseCircleOutlined } from "@ant-design/icons";
-import { useEffect, useState } from "react";
+import DOMPurify from "dompurify";
+import { marked } from "marked";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { api, getJson } from "../api/client";
 import { useLicense } from "../api/hooks";
@@ -35,9 +37,11 @@ interface Series {
   parts: number;
   status: string;
   error: string | null;
+  knowledge_map: string;
   chapters: Chapter[];
   chapters_done: number;
   chapters_failed: number;
+  created_at: string;
 }
 
 interface SeriesStatus {
@@ -47,7 +51,7 @@ interface SeriesStatus {
   detail?: string;
   current?: number;
   total?: number;
-  stats?: Record<string, unknown>;
+  stats?: { preflight_thin?: string[];[key: string]: unknown };
   logs?: string[];
   error?: string | null;
   series_id?: number | null;
@@ -77,10 +81,20 @@ const CHAPTER_STATUS: Record<string, { label: string; color: string }> = {
 
 const STAGE_LABEL: Record<string, string> = {
   probe: "检索该主题的公开资料",
+  map: "梳理知识脉络",
   outline: "生成系列提纲",
+  preflight: "预检各章资料量",
   research: "逐章检索资料",
   write: "逐章写作",
   done: "已完成",
+};
+
+const SERIES_STATUS: Record<string, { label: string; color: string }> = {
+  running: { label: "运行中", color: "processing" },
+  done: { label: "已完成", color: "success" },
+  partial: { label: "部分完成", color: "warning" },
+  cancelled: { label: "已取消", color: "warning" },
+  failed: { label: "失败", color: "error" },
 };
 
 function isActive(data?: SeriesStatus) {
@@ -100,6 +114,11 @@ export default function SeriesCreate() {
     queryKey: ["rewrite-styles"],
     queryFn: () => getJson<{ styles: RewriteStyle[] }>("/api/rewrite-styles"),
   });
+  const historyQuery = useQuery({
+    queryKey: ["series-list"],
+    queryFn: () => getJson<{ series: Series[] }>("/api/series"),
+    retry: false,
+  });
   const statusQuery = useQuery({
     queryKey: ["series-status"],
     queryFn: () => getJson<SeriesStatus>("/api/series/status"),
@@ -112,6 +131,14 @@ export default function SeriesCreate() {
   const series = status?.series || null;
   const isPro = !!(license?.active || license?.dev);
 
+  const knowledgeMapHtml = useMemo(() => {
+    const source = series?.knowledge_map?.trim();
+    if (!source) return "";
+    return DOMPurify.sanitize(marked.parse(source, { async: false }) as string);
+  }, [series?.knowledge_map]);
+  const thinChapters = status?.stats?.preflight_thin || [];
+  const history = historyQuery.data?.series || [];
+
   const total = series?.parts || status?.total || 0;
   const finished = series
     ? series.chapters_done + series.chapters_failed
@@ -121,6 +148,12 @@ export default function SeriesCreate() {
   useEffect(() => {
     if (!active) setCancelling(false);
   }, [active]);
+
+  // A finished run changes the history, and the history is what the user comes
+  // back to days later.
+  useEffect(() => {
+    if (!active) qc.invalidateQueries({ queryKey: ["series-list"] });
+  }, [active, qc]);
 
   useEffect(() => {
     const saved = status?.request;
@@ -333,6 +366,21 @@ export default function SeriesCreate() {
               message={resultAlert.text} />
           )}
 
+          {thinChapters.length > 0 && active && (
+            <Alert style={{ marginTop: 16 }} type="warning" showIcon
+              message={`预检发现 ${thinChapters.join("、")} 公开资料偏少，可能写不成`}
+              description="现在取消并换个说法重来，比等它跑到那一章更省时间。" />
+          )}
+
+          {knowledgeMapHtml && (
+            <Collapse style={{ marginTop: 16 }} size="small" items={[{
+              key: "map",
+              label: "知识脉络（用于校准章节划分）",
+              children: <div className="ma-knowledge-map"
+                dangerouslySetInnerHTML={{ __html: knowledgeMapHtml }} />,
+            }]} />
+          )}
+
           {series && series.chapters.length > 0 && (
             <List style={{ marginTop: 16 }} size="small"
               dataSource={series.chapters}
@@ -373,6 +421,42 @@ export default function SeriesCreate() {
               }}>{(status?.logs || []).join("\n") || status?.detail}</pre>
             </div>
           )}
+        </Card>
+      )}
+
+      {history.length > 0 && (
+        <Card title={`历史系列（${history.length}）`}>
+          <Collapse accordion size="small" items={history.map((item) => ({
+            key: String(item.id),
+            label: (
+              <Space wrap>
+                <Text strong>{item.title}</Text>
+                <Tag color={SERIES_STATUS[item.status]?.color || "default"}>
+                  {SERIES_STATUS[item.status]?.label || item.status}
+                </Tag>
+                <Text type="secondary">
+                  {item.chapters_done}/{item.parts} 章
+                  {item.chapters_failed > 0 ? ` · ${item.chapters_failed} 章未完成` : ""}
+                </Text>
+              </Space>
+            ),
+            children: (
+              <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                {item.chapters.map((chapter) => (
+                  <div key={chapter.id}>
+                    <Text type="secondary">第 {chapter.order} 章　</Text>
+                    {chapter.draft_id ? (
+                      <Link to={`/drafts/${chapter.draft_id}/edit`}>{chapter.title}</Link>
+                    ) : (
+                      <Text type="secondary">
+                        {chapter.title}（{chapter.error || "未生成"}）
+                      </Text>
+                    )}
+                  </div>
+                ))}
+              </Space>
+            ),
+          }))} />
         </Card>
       )}
     </Space>
