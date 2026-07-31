@@ -69,6 +69,36 @@ CREATE TABLE IF NOT EXISTS operations (
     error TEXT,
     stats_json TEXT DEFAULT '{}'
 );
+CREATE TABLE IF NOT EXISTS series (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    lang TEXT NOT NULL DEFAULT 'zh',
+    depth TEXT NOT NULL DEFAULT 'intermediate',
+    parts INTEGER NOT NULL DEFAULT 5,
+    style_id TEXT,
+    status TEXT NOT NULL DEFAULT 'running',
+    error TEXT,
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+);
+CREATE TABLE IF NOT EXISTS series_chapters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    series_id INTEGER NOT NULL,
+    chapter_order INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    scope TEXT,
+    search_queries TEXT NOT NULL DEFAULT '[]',
+    prerequisites TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT,
+    draft_id INTEGER,
+    summary TEXT,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(series_id) REFERENCES series(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_series_chapters_series
+    ON series_chapters(series_id, chapter_order);
 """
 
 
@@ -100,6 +130,17 @@ def init_db(conn: sqlite3.Connection) -> None:
     try:
         conn.execute(
             "ALTER TABLE drafts ADD COLUMN origin TEXT NOT NULL DEFAULT 'rewrite'")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    # Migrate: link drafts that belong to a knowledge series. Ordering and
+    # lookups run in SQL, so these two live in the table rather than the
+    # markdown front-matter.
+    try:
+        conn.execute("ALTER TABLE drafts ADD COLUMN series_id INTEGER")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    try:
+        conn.execute("ALTER TABLE drafts ADD COLUMN series_order INTEGER")
     except sqlite3.OperationalError:
         pass  # column already exists
     # Migrate: cache whether an archived article contains video. Keep existing

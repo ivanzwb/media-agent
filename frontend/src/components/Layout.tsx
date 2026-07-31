@@ -1,5 +1,5 @@
 import { Layout as AntLayout, Menu, Button, Tag, Modal } from "antd";
-import { PlayCircleOutlined, SearchOutlined } from "@ant-design/icons";
+import { BookOutlined, PlayCircleOutlined, SearchOutlined } from "@ant-design/icons";
 import { Link, useLocation, useNavigate, Outlet } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -59,8 +59,8 @@ export default function Layout() {
     qc.invalidateQueries({ queryKey: ["run-status"] });
   }
 
-  function openSearchCreate() {
-    if (lic?.active || lic?.dev) navigate("/search-create");
+  function openPro(path: string) {
+    if (lic?.active || lic?.dev) navigate(path);
     else setGuideOpen(true);
   }
 
@@ -78,8 +78,11 @@ export default function Layout() {
           onClick={(e) => navigate(e.key)}
           items={NAV.map((n) => ({ key: n.key, label: n.label }))} />
         <Link to="/settings" title="授权状态">{licTag}</Link>
-        <Button icon={<SearchOutlined />} onClick={openSearchCreate}>
+        <Button icon={<SearchOutlined />} onClick={() => openPro("/search-create")}>
           搜索创作 <Tag color="gold" bordered={false} style={{ marginInlineEnd: 0 }}>Pro</Tag>
+        </Button>
+        <Button icon={<BookOutlined />} onClick={() => openPro("/series-create")}>
+          系列创作 <Tag color="gold" bordered={false} style={{ marginInlineEnd: 0 }}>Pro</Tag>
         </Button>
         <Button type="primary" icon={<PlayCircleOutlined />} onClick={startRun}>
           立即运行

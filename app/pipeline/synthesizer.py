@@ -169,10 +169,23 @@ def fact_check_multi(body_md: str, articles: list[Article],
     return [str(claim).strip() for claim in claims if str(claim).strip()]
 
 
+def _series_context_instruction(context_note: str) -> str:
+    value = (context_note or "").strip()
+    if not value:
+        return ""
+    return (
+        "### 系列上下文\n"
+        "本文是一个系列中的一篇。以下是已写完的前置章节，用于承接行文、"
+        "避免重复展开讲过的内容。它们不是参考资料，不得作为事实来源引用：\n"
+        f"{value}"
+    )
+
+
 def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
                *, style=None, lang: str = "zh",
                promotion_footer: str = "",
-               seo_tags_enabled: bool = True) -> SynthesisResult:
+               seo_tags_enabled: bool = True,
+               context_note: str = "") -> SynthesisResult:
     if len(articles) < 2:
         raise ValueError("多源综合至少需要 2 篇有效参考资料")
 
@@ -195,6 +208,7 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
     content_rules = "\n\n".join(filter(None, [
         f"### 写作风格\n{guidance}" if guidance else "",
         examples,
+        _series_context_instruction(context_note),
         _promotion_instruction(promotion_footer),
         _seo_instruction(seo_tags_enabled),
     ]))

@@ -48,6 +48,7 @@ from app.pipeline.localize import (
 from app.pipeline.rewriter import rewrite
 from app.pipeline.search_create import (
     SearchCreateCancelled, SearchCreateOptions, run_search_create)
+from app.pipeline.series_create import SeriesCreateOptions, run_series_create
 from app.pipeline import styles as rewrite_styles
 from app.pipeline import style_learner
 from app.wechat import components as editor_components
@@ -342,6 +343,9 @@ def create_app(config: Config | None = None,
         "paused": False, "stop_requested": False, "stopped": False,
         "source_current": 0, "source_total": 0,
     }
+    # One lock guards both search creation and series creation: they compete
+    # for the same LLM quota and outbound bandwidth, and a series run lasts
+    # long enough that stacking a second heavy job on top is never intended.
     search_create_lock = threading.Lock()
     search_create_state = {
         "running": False, "status": "idle", "stage": None,
@@ -350,6 +354,21 @@ def create_app(config: Config | None = None,
         "started_at": None, "finished_at": None, "cancel_requested": False,
         "request": {},
     }
+    series_state = {
+        "running": False, "status": "idle", "stage": None,
+        "detail": None, "current": 0, "total": 0, "stats": {},
+        "logs": [], "error": None, "series_id": None, "op_id": None,
+        "started_at": None, "finished_at": None, "cancel_requested": False,
+        "request": {},
+    }
+
+    def _heavy_job_busy() -> str | None:
+        """Name of the running heavy job, if any. Call under the lock."""
+        if search_create_state["running"]:
+            return "搜索创作"
+        if series_state["running"]:
+            return "系列创作"
+        return None
     _SOURCE_PROG_RE = re.compile(r"抓取来源 \[(\d+)/(\d+)\]")
 
     # ---- reachability check progress ----
@@ -2688,9 +2707,10 @@ def create_app(config: Config | None = None,
                 {"ok": False, "error": str(exc)}, status_code=400)
 
         with search_create_lock:
-            if search_create_state["running"]:
+            busy = _heavy_job_busy()
+            if busy:
                 return JSONResponse(
-                    {"ok": False, "error": "已有搜索创作任务正在进行"},
+                    {"ok": False, "error": f"已有{busy}任务正在进行"},
                     status_code=409)
             search_create_state.update(
                 running=True, status="running", stage="expand",
@@ -2842,6 +2862,308 @@ def create_app(config: Config | None = None,
             search_create_state["cancel_requested"] = True
             search_create_state["detail"] = "正在取消…"
         return {"ok": True, "cancel_requested": True}
+
+    # ── knowledge series creation ────────────────────────────────────────
+
+    def _chapter_payload(row) -> dict:
+        def _loads(value, fallback):
+            try:
+                return json.loads(value or "")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return fallback
+
+        return {
+            "id": row["id"],
+            "order": row["chapter_order"],
+            "title": row["title"],
+            "scope": row["scope"] or "",
+            "search_queries": _loads(row["search_queries"], []),
+            "prerequisites": _loads(row["prerequisites"], []),
+            "status": row["status"],
+            "error": row["error"],
+            "draft_id": row["draft_id"],
+            "summary": row["summary"] or "",
+        }
+
+    def _series_payload(store, row) -> dict:
+        chapters = [_chapter_payload(item)
+                    for item in store.list_chapters(row["id"])]
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "topic": row["topic"],
+            "lang": row["lang"],
+            "depth": row["depth"],
+            "parts": row["parts"],
+            "style_id": row["style_id"],
+            "status": row["status"],
+            "error": row["error"],
+            "created_at": row["created_at"],
+            "finished_at": row["finished_at"],
+            "chapters": chapters,
+            "chapters_done": sum(
+                1 for item in chapters if item["status"] == "done"),
+            "chapters_failed": sum(
+                1 for item in chapters if item["status"] == "failed"),
+        }
+
+    def _series_public_state() -> dict:
+        with search_create_lock:
+            return {
+                "running": series_state["running"],
+                "status": series_state["status"],
+                "stage": series_state["stage"],
+                "detail": series_state["detail"],
+                "current": series_state["current"],
+                "total": series_state["total"],
+                "stats": dict(series_state["stats"]),
+                "logs": list(series_state["logs"]),
+                "error": series_state["error"],
+                "series_id": series_state["series_id"],
+                "op_id": series_state["op_id"],
+                "started_at": series_state["started_at"],
+                "finished_at": series_state["finished_at"],
+                "request": dict(series_state["request"]),
+                "topic": series_state["request"].get("topic"),
+            }
+
+    @app.post("/api/series/create")
+    async def api_series_create(request: Request):
+        denied = LG.require(license_mgr, LF.SERIES_CREATE)
+        if denied is not None:
+            return denied
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise ValueError("请求体必须为 JSON 对象")
+            raw_engines = payload.get("engines", list(DEFAULT_SEARCH_ENGINES))
+            if not isinstance(raw_engines, list):
+                raise ValueError("搜索引擎必须为数组")
+            style_id = str(payload.get("style_id") or "").strip() or None
+            options = SeriesCreateOptions(
+                topic=str(payload.get("topic") or ""),
+                lang=str(payload.get("lang") or "zh"),
+                depth=str(payload.get("depth") or "intermediate"),
+                parts=payload.get("parts", 5),
+                style_id=style_id,
+                engines=[str(engine) for engine in raw_engines],
+                ref_count=int(payload.get("ref_count", 5)),
+                workers=config.workers,
+                proxy=config.fetch_proxy,
+            )
+            options.validate()
+            validation_store = get_store()
+            if style_id and rewrite_styles.get_style(
+                    style_id, validation_store) is None:
+                raise ValueError("写作风格不存在")
+            request_snapshot = {
+                "topic": options.topic,
+                "lang": options.lang,
+                "depth": options.depth,
+                "parts": options.parts,
+                "ref_count": options.ref_count,
+                "style_id": options.style_id,
+                "engines": list(options.engines),
+            }
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400)
+
+        with search_create_lock:
+            busy = _heavy_job_busy()
+            if busy:
+                return JSONResponse(
+                    {"ok": False, "error": f"已有{busy}任务正在进行"},
+                    status_code=409)
+            series_state.update(
+                running=True, status="running", stage="probe",
+                detail="任务已启动", current=0, total=options.parts, stats={},
+                logs=[], error=None, series_id=None, op_id=None,
+                started_at=datetime.now(timezone.utc).isoformat(),
+                finished_at=None, cancel_requested=False,
+                request=request_snapshot)
+
+        def worker() -> None:
+            op_conn = _db_conn()
+            op_id = start_op(op_conn, "series_create", 0)
+            with search_create_lock:
+                series_state["op_id"] = op_id
+            store = Store(op_conn, config)
+            run_config = _current_config(store)
+            options.workers = run_config.workers
+            options.proxy = run_config.fetch_proxy
+            provider = get_rewrite_provider(
+                run_config.llm_provider, run_config.llm_api_key,
+                run_config.llm_model,
+                llm_api_base=run_config.llm_api_base,
+                cli_tool=run_config.cli_tool,
+                timeout=run_config.cli_timeout,
+                llm_timeout=run_config.llm_timeout,
+                priority=run_config.rewrite_priority)
+            style = rewrite_styles.resolve_style(options.style_id, store)
+            last_detail = None
+
+            def cancelled() -> bool:
+                with search_create_lock:
+                    return bool(series_state["cancel_requested"])
+
+            def progress(event: dict) -> None:
+                nonlocal last_detail
+                detail = str(event.get("detail") or "")
+                stats = dict(event.get("stats") or {})
+                with search_create_lock:
+                    series_state.update(
+                        stage=event.get("stage"),
+                        detail=detail,
+                        current=int(event.get("current") or 0),
+                        total=int(event.get("total") or 0)
+                        or series_state["total"],
+                        stats=stats,
+                        series_id=stats.get("series_id")
+                        or series_state["series_id"],
+                    )
+                    if detail and detail != last_detail:
+                        line = (
+                            f"{datetime.now().strftime('%H:%M:%S')} {detail}")
+                        series_state["logs"].append(line)
+                        if len(series_state["logs"]) > 500:
+                            del series_state["logs"][:-500]
+                if detail and detail != last_detail:
+                    _op_log(op_conn, op_id, detail)
+                    last_detail = detail
+                update_op(op_conn, op_id, stats={
+                    "stage": event.get("stage"),
+                    "current": event.get("current", 0),
+                    "total": event.get("total", 0),
+                    **stats,
+                })
+
+            try:
+                result = run_series_create(
+                    store, provider, options, style=style,
+                    promotion_footer=run_config.promotion_footer or "",
+                    seo_tags_enabled=run_config.seo_tags_enabled,
+                    sensitive_words=load_words(run_config),
+                    progress=progress, should_stop=cancelled)
+                series_id = result.get("series_id")
+                with search_create_lock:
+                    series_state.update(
+                        status=result.get("status") or "done",
+                        series_id=series_id,
+                        stats=dict(result.get("stats") or {}))
+                update_op(op_conn, op_id, target_id=series_id or 0)
+                finish_op(op_conn, op_id, result.get("stats"))
+            except SearchCreateCancelled:
+                with search_create_lock:
+                    series_state.update(
+                        status="cancelled", error=None, detail="系列创作已取消")
+                cancel_op(op_conn, op_id)
+            except ValueError as exc:
+                logger.warning("series-create stopped: %s", exc)
+                with search_create_lock:
+                    series_state.update(
+                        status="error", error=str(exc), detail="任务失败")
+                fail_op(op_conn, op_id, str(exc))
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("series-create failed")
+                with search_create_lock:
+                    series_state.update(
+                        status="error", error=str(exc), detail="任务失败")
+                fail_op(op_conn, op_id, str(exc))
+            finally:
+                with search_create_lock:
+                    series_state.update(
+                        running=False,
+                        finished_at=datetime.now(timezone.utc).isoformat())
+                op_conn.close()
+
+        threading.Thread(
+            target=worker, daemon=True, name="series-create").start()
+        return {"ok": True, "started": True, **_series_public_state()}
+
+    @app.get("/api/series/status")
+    def api_series_status():
+        state = _series_public_state()
+        # A series run outlives page refreshes and server restarts, so the
+        # chapter rows — not this process's memory — decide what is shown.
+        store = get_store()
+        row = (store.get_series(state["series_id"]) if state["series_id"]
+               else store.latest_series())
+        if row is not None:
+            series = _series_payload(store, row)
+            state["series"] = series
+            state["series_id"] = series["id"]
+            if state["status"] == "idle":
+                state.update({
+                    "status": series["status"],
+                    "running": False,
+                    "total": series["parts"],
+                    "current": series["chapters_done"],
+                    "error": series["error"],
+                    "started_at": series["created_at"],
+                    "finished_at": series["finished_at"],
+                    "topic": series["topic"],
+                    "request": {
+                        "topic": series["topic"], "lang": series["lang"],
+                        "depth": series["depth"], "parts": series["parts"],
+                        "style_id": series["style_id"],
+                    },
+                })
+        else:
+            state["series"] = None
+        return {"ok": True, **state}
+
+    @app.post("/api/series/cancel")
+    def api_series_cancel():
+        denied = LG.require(license_mgr, LF.SERIES_CREATE)
+        if denied is not None:
+            return denied
+        with search_create_lock:
+            if not series_state["running"]:
+                return JSONResponse(
+                    {"ok": False, "error": "没有运行中的系列创作任务"},
+                    status_code=409)
+            series_state["cancel_requested"] = True
+            series_state["detail"] = "正在取消，已完成的章节会保留…"
+        return {"ok": True, "cancel_requested": True}
+
+    @app.get("/api/series")
+    def api_series_list(limit: int = 50):
+        store = get_store()
+        return {
+            "ok": True,
+            "series": [_series_payload(store, row)
+                       for row in store.list_series(limit=max(1, min(limit, 200)))],
+        }
+
+    @app.get("/api/series/{series_id}")
+    def api_series_detail(series_id: int):
+        store = get_store()
+        row = store.get_series(series_id)
+        if row is None:
+            return JSONResponse(
+                {"ok": False, "error": "系列不存在"}, status_code=404)
+        return {"ok": True, "series": _series_payload(store, row)}
+
+    @app.get("/api/series/{series_id}/drafts")
+    def api_series_drafts(series_id: int):
+        store = get_store()
+        if store.get_series(series_id) is None:
+            return JSONResponse(
+                {"ok": False, "error": "系列不存在"}, status_code=404)
+        return {
+            "ok": True,
+            "drafts": [
+                {
+                    "id": row["id"],
+                    "series_order": row["series_order"],
+                    "status": row["status"],
+                    "title": row["article_title"],
+                    "updated_at": row["updated_at"],
+                }
+                for row in store.get_series_drafts(series_id)
+            ],
+        }
 
     @app.post("/run")
     def trigger_run():

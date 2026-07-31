@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -254,6 +255,10 @@ class Store:
             meta["citations"] = draft.citations
         if getattr(draft, "search_meta", None):
             meta["search_meta"] = draft.search_meta
+        if getattr(draft, "series_part_label", ""):
+            meta["series_part_label"] = draft.series_part_label
+        if getattr(draft, "prerequisites", None):
+            meta["prerequisites"] = draft.prerequisites
         if draft.title_cn:
             meta["title_cn"] = draft.title_cn
         if draft.score is not None:
@@ -284,21 +289,25 @@ class Store:
             self.conn.execute(
                 """UPDATE drafts SET article_id=?, draft_path=?,
                    cover_image=?, title_cn=?, status=?, updated_at=?, score=?,
-                   origin=?
+                   origin=?, series_id=?, series_order=?
                    WHERE id=?""",
                 (draft.article_id, draft.draft_path,
                  draft.cover_image, draft.title_cn, draft.status,
                  now_iso, draft.score, getattr(draft, "origin", "rewrite"),
+                 getattr(draft, "series_id", None),
+                 getattr(draft, "series_order", None),
                  draft.id))
         else:
             cur = self.conn.execute(
                 """INSERT INTO drafts
                 (article_id, draft_path, cover_image, title_cn,
-                 status, updated_at, score, origin)
-                VALUES (?,?,?,?,?,?,?,?)""",
+                 status, updated_at, score, origin, series_id, series_order)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (draft.article_id, draft.draft_path,
                  draft.cover_image, draft.title_cn, draft.status,
-                 now_iso, draft.score, getattr(draft, "origin", "rewrite")))
+                 now_iso, draft.score, getattr(draft, "origin", "rewrite"),
+                 getattr(draft, "series_id", None),
+                 getattr(draft, "series_order", None)))
             draft.id = cur.lastrowid
         if draft.id is not None:
             self.conn.execute(
@@ -331,6 +340,91 @@ class Store:
                 post = frontmatter.load(str(abs_path))
                 post["score"] = score
                 abs_path.write_text(frontmatter.dumps(post), encoding="utf-8")
+
+    # ── knowledge series ─────────────────────────────────────────────────
+    # Chapter rows are the single source of truth for a series run's progress:
+    # the job outlives page refreshes and server restarts, so in-memory state
+    # can only ever be a cache of these.
+
+    def create_series(self, *, title: str, topic: str, lang: str, depth: str,
+                      parts: int, style_id: str | None) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO series
+               (title, topic, lang, depth, parts, style_id, status, created_at)
+               VALUES (?,?,?,?,?,?,'running',?)""",
+            (title, topic, lang, depth, int(parts), style_id,
+             datetime.now(timezone.utc).isoformat()))
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def finish_series(self, series_id: int, status: str,
+                      error: str | None = None) -> None:
+        self.conn.execute(
+            "UPDATE series SET status=?, error=?, finished_at=? WHERE id=?",
+            (status, error, datetime.now(timezone.utc).isoformat(), series_id))
+        self.conn.commit()
+
+    def get_series(self, series_id: int):
+        return self.conn.execute(
+            "SELECT * FROM series WHERE id=?", (series_id,)).fetchone()
+
+    def list_series(self, limit: int | None = None):
+        sql = "SELECT * FROM series ORDER BY id DESC"
+        params: list = []
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        return self.conn.execute(sql, params).fetchall()
+
+    def latest_series(self):
+        return self.conn.execute(
+            "SELECT * FROM series ORDER BY id DESC LIMIT 1").fetchone()
+
+    def add_chapters(self, series_id: int, chapters: list[dict]) -> list[int]:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        ids: list[int] = []
+        for index, chapter in enumerate(chapters, 1):
+            cur = self.conn.execute(
+                """INSERT INTO series_chapters
+                   (series_id, chapter_order, title, scope, search_queries,
+                    prerequisites, status, updated_at)
+                   VALUES (?,?,?,?,?,?,'pending',?)""",
+                (series_id, index,
+                 str(chapter.get("title") or f"第 {index} 章"),
+                 str(chapter.get("scope") or ""),
+                 json.dumps(chapter.get("search_queries") or [],
+                            ensure_ascii=False),
+                 json.dumps(chapter.get("prerequisites") or [],
+                            ensure_ascii=False),
+                 now_iso))
+            ids.append(int(cur.lastrowid))
+        self.conn.commit()
+        return ids
+
+    def list_chapters(self, series_id: int):
+        return self.conn.execute(
+            "SELECT * FROM series_chapters WHERE series_id=? "
+            "ORDER BY chapter_order", (series_id,)).fetchall()
+
+    def update_chapter(self, chapter_id: int, **fields) -> None:
+        allowed = [key for key in ("status", "error", "draft_id", "summary")
+                   if key in fields]
+        if not allowed:
+            return
+        params = [fields[key] for key in allowed]
+        params.append(datetime.now(timezone.utc).isoformat())
+        params.append(chapter_id)
+        self.conn.execute(
+            f"UPDATE series_chapters SET {', '.join(f'{k}=?' for k in allowed)},"
+            " updated_at=? WHERE id=?", params)
+        self.conn.commit()
+
+    def get_series_drafts(self, series_id: int):
+        return self.conn.execute(
+            "SELECT drafts.*, articles.title AS article_title "
+            "FROM drafts LEFT JOIN articles ON articles.id = drafts.article_id "
+            "WHERE drafts.series_id=? ORDER BY drafts.series_order",
+            (series_id,)).fetchall()
 
     def article_video_flags(self, rows) -> dict[int, bool]:
         """Return video flags, lazily backfilling legacy rows in one commit."""

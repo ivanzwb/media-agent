@@ -78,3 +78,7 @@ class Draft:
     sources: list[dict] = field(default_factory=list)
     citations: list[dict] = field(default_factory=list)
     search_meta: dict = field(default_factory=dict)
+    series_id: int | None = None
+    series_order: int | None = None
+    series_part_label: str = ""
+    prerequisites: list[str] = field(default_factory=list)

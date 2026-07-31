@@ -300,6 +300,83 @@ def rank_by_topic(articles: list[Article], topic: str, provider: LLMProvider,
         [article for _, article in ranked], limit)
 
 
+def _url_key(url: str) -> str:
+    parts = urlsplit(str(url or "").strip())
+    host = parts.netloc.lower().removeprefix("www.")
+    path = parts.path.rstrip("/") or "/"
+    return f"{host}{path}?{parts.query}" if parts.query else f"{host}{path}"
+
+
+def collect_references(queries: list[str], options: SearchCreateOptions,
+                       provider: LLMProvider, *, topic: str | None = None,
+                       seen_urls: set[str] | None = None,
+                       progress: ProgressCallback | None = None,
+                       should_stop: Callable[[], bool] | None = None,
+                       stats: dict | None = None) -> list[Article]:
+    """Search, scrape, dedup, filter and rank references for one piece.
+
+    Shared by single-draft search creation and per-chapter series research so
+    the two never drift apart. Returns however many references survive —
+    deciding whether that is enough is the caller's business, since a series
+    tolerates a starved chapter while a single draft does not.
+
+    ``seen_urls`` scopes deduplication above one piece: pass a set of
+    ``_url_key`` values to keep later chapters off the sources earlier ones
+    already used. It is only read here — callers decide which of the returned
+    references they actually keep, and record those themselves.
+    """
+    topic = topic or options.topic
+    _check_cancel(should_stop)
+    _emit(progress, "search", "正在搜索相关文章…",
+          total=len(queries), stats=stats)
+    hits = search_queries(
+        queries, options, progress=progress, should_stop=should_stop,
+        stats=stats)
+    if seen_urls is not None:
+        hits = [hit for hit in hits if _url_key(hit.url) not in seen_urls]
+    if stats is not None:
+        stats["urls"] = len(hits)
+    if not hits:
+        return []
+
+    _check_cancel(should_stop)
+    _emit(progress, "scrape", f"准备抓取 {len(hits)} 个页面…",
+          total=len(hits), stats=stats)
+    articles = scrape_search_hits(
+        hits, options, progress=progress, should_stop=should_stop, stats=stats)
+    articles = dedup(articles)
+    before_near_dedup = len(articles)
+    articles = dedup_near_content(articles)
+    near_duplicates = before_near_dedup - len(articles)
+    if stats is not None:
+        stats["near_duplicates"] = near_duplicates
+    if near_duplicates:
+        _emit(
+            progress, "filter",
+            f"内容近重：移除 {near_duplicates} 篇转载或近似页面", stats=stats)
+
+    _check_cancel(should_stop)
+    _emit(progress, "filter", "正在过滤低质量和不相关内容…", stats=stats)
+    age_filtered = filter_by_age(
+        articles, options.time_range_days,
+        progress=lambda message: _emit(
+            progress, "filter", message, stats=stats))
+    if options.time_range_days and len(age_filtered) < 2:
+        if stats is not None:
+            stats["time_range_relaxed"] = True
+        _emit(
+            progress, "filter",
+            f"最近 {options.time_range_days} 天资料不足，已自动扩大到不限时间",
+            stats=stats)
+    else:
+        articles = age_filtered
+    articles = filter_relevant(
+        articles, provider, enabled=True, content_scope="informational",
+        progress=lambda message: _emit(
+            progress, "filter", message, stats=stats))
+    return rank_by_topic(articles, topic, provider, options.ref_count)
+
+
 def run_search_create(store, provider: LLMProvider,
                       options: SearchCreateOptions, *, style=None,
                       promotion_footer: str = "",
@@ -329,49 +406,11 @@ def run_search_create(store, provider: LLMProvider,
     queries = expand_search_queries(options.topic, options.lang, provider)
     stats["queries"] = len(queries)
 
-    _check_cancel(should_stop)
-    _emit(progress, "search", "正在搜索相关文章…",
-          total=len(queries), stats=stats)
-    hits = search_queries(
-        queries, options, progress=progress, should_stop=should_stop, stats=stats)
-    stats["urls"] = len(hits)
-    if not hits:
+    articles = collect_references(
+        queries, options, provider, progress=progress,
+        should_stop=should_stop, stats=stats)
+    if not stats["urls"]:
         raise ValueError("没有搜索到可用的文章链接")
-
-    _check_cancel(should_stop)
-    _emit(progress, "scrape", f"准备抓取 {len(hits)} 个页面…",
-          total=len(hits), stats=stats)
-    articles = scrape_search_hits(
-        hits, options, progress=progress, should_stop=should_stop, stats=stats)
-    articles = dedup(articles)
-    before_near_dedup = len(articles)
-    articles = dedup_near_content(articles)
-    stats["near_duplicates"] = before_near_dedup - len(articles)
-    if stats["near_duplicates"]:
-        _emit(
-            progress, "filter",
-            f"内容近重：移除 {stats['near_duplicates']} 篇转载或近似页面",
-            stats=stats)
-
-    _check_cancel(should_stop)
-    _emit(progress, "filter", "正在过滤低质量和不相关内容…", stats=stats)
-    age_filtered = filter_by_age(
-        articles, options.time_range_days,
-        progress=lambda message: _emit(
-            progress, "filter", message, stats=stats))
-    if options.time_range_days and len(age_filtered) < 2:
-        stats["time_range_relaxed"] = True
-        _emit(
-            progress, "filter",
-            f"最近 {options.time_range_days} 天资料不足，已自动扩大到不限时间",
-            stats=stats)
-    else:
-        articles = age_filtered
-    articles = filter_relevant(
-        articles, provider, enabled=True, content_scope="informational",
-        progress=lambda message: _emit(
-            progress, "filter", message, stats=stats))
-    articles = rank_by_topic(articles, options.topic, provider, options.ref_count)
     if len(articles) < 2:
         raise ValueError("有效参考资料不足 2 篇，请调整主题或时间范围后重试")
     stats["kept"] = len(articles)
