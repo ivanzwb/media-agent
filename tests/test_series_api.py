@@ -45,23 +45,28 @@ def valid_payload() -> dict:
     }
 
 
-def seed_series(tmp_path, *, status: str = "partial") -> int:
+def seed_series(tmp_path, *, status: str = "partial", written: bool = True,
+                second_draft: bool = False) -> int:
     config = Config(data_dir=tmp_path)
     conn = connect(config.db_path)
     init_db(conn)
     store = Store(conn, config)
     series_id = store.create_series(
         title="强化学习", topic="强化学习", lang="zh", depth="beginner",
-        parts=2, style_id=None)
+        parts=2, style_id=None, status=status)
     chapter_ids = store.add_chapters(series_id, [
         {"title": "第一章", "scope": "打底", "search_queries": ["q1"],
-         "prerequisites": []},
+         "prerequisites": [], "preflight_hits": 9},
         {"title": "第二章", "scope": "展开", "search_queries": ["q2"],
-         "prerequisites": ["第一章"]},
+         "prerequisites": ["第一章"], "preflight_hits": 1},
     ])
-    store.update_chapter(chapter_ids[0], status="done", draft_id=7,
-                         summary="开头段落")
-    store.update_chapter(chapter_ids[1], status="failed", error="资料不足")
+    if written:
+        store.update_chapter(chapter_ids[0], status="done", draft_id=7,
+                             summary="开头段落")
+        store.update_chapter(
+            chapter_ids[1],
+            **({"status": "done", "draft_id": 8} if second_draft
+               else {"status": "failed", "error": "资料不足"}))
     store.finish_series(series_id, status)
     return series_id
 
@@ -239,6 +244,130 @@ def test_series_detail_and_list(tmp_path):
 
     assert client.get("/api/series/9999").status_code == 404
     assert client.get("/api/series/9999/drafts").status_code == 404
+
+
+def test_plan_leaves_the_series_waiting_for_approval(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_plan(store, provider, options, **kwargs):
+        captured["options"] = options
+        captured["status"] = kwargs.get("status")
+        kwargs["progress"]({
+            "stage": "outline", "detail": "提纲已生成，共 4 章",
+            "current": 0, "total": 4, "stats": {"series_id": 1},
+        })
+        series_id = store.create_series(
+            title=options.topic, topic=options.topic, lang=options.lang,
+            depth=options.depth, parts=2, style_id=None, status="planned")
+        store.add_chapters(series_id, [
+            {"title": "第一章", "search_queries": ["q1"], "preflight_hits": 9},
+            {"title": "第二章", "search_queries": ["q2"], "preflight_hits": 1},
+        ])
+        return series_id, [], {}
+
+    monkeypatch.setattr("app.web.server.plan_series", fake_plan)
+    client = make_client(tmp_path, pro=True)
+    assert client.post(
+        "/api/series/plan", json=valid_payload()).status_code == 200
+    state = wait_terminal(client)
+
+    assert captured["status"] == "planned"
+    assert captured["options"].parts == 4
+    assert state["status"] == "planned"
+    chapters = state["series"]["chapters"]
+    # The per-chapter counts travel to the UI, which is where the outline is
+    # judged worth running or worth fixing.
+    assert [item["preflight_hits"] for item in chapters] == [9, 1]
+    assert [item["status"] for item in chapters] == ["pending", "pending"]
+
+
+def test_plan_requires_pro(tmp_path):
+    client = make_client(tmp_path, pro=False)
+    assert client.post(
+        "/api/series/plan", json=valid_payload()).status_code == 403
+
+
+def test_outline_edits_replace_the_chapters(tmp_path):
+    client = make_client(tmp_path, pro=True)
+    series_id = seed_series(tmp_path, status="planned", written=False)
+
+    response = client.put(f"/api/series/{series_id}/outline", json={
+        "chapters": [
+            {"title": "改过的开头", "scope": "打底",
+             "search_queries": [" 改过的词 ", ""], "prerequisites": []},
+            {"title": "第二章", "search_queries": ["q2"]},
+            {"title": "补的一章", "search_queries": []},
+        ],
+    })
+
+    assert response.status_code == 200
+    chapters = response.json()["series"]["chapters"]
+    assert [item["order"] for item in chapters] == [1, 2, 3]
+    assert [item["title"] for item in chapters] == [
+        "改过的开头", "第二章", "补的一章"]
+    assert chapters[0]["search_queries"] == ["改过的词"]
+    # A chapter left without terms would search for nothing at all.
+    assert chapters[2]["search_queries"] == ["补的一章"]
+    assert response.json()["series"]["parts"] == 3
+    # The preflight count survives a retitle but not a change of terms.
+    assert [item["preflight_hits"] for item in chapters] == [None, 1, None]
+
+
+def test_outline_edits_are_validated(tmp_path):
+    client = make_client(tmp_path, pro=True)
+    series_id = seed_series(tmp_path, status="planned", written=False)
+    chapter = {"title": "一章", "search_queries": ["q"]}
+    for bad in ({"chapters": [chapter] * 2}, {"chapters": [chapter] * 11},
+                {"chapters": [{"title": "  "}]}, {"chapters": "nope"},
+                {"chapters": [{"title": "x", "search_queries": "q"}]}):
+        assert client.put(
+            f"/api/series/{series_id}/outline", json=bad).status_code == 400, bad
+    assert client.put(
+        "/api/series/9999/outline",
+        json={"chapters": [chapter] * 3}).status_code == 404
+
+
+def test_outline_is_frozen_once_a_chapter_is_written(tmp_path):
+    client = make_client(tmp_path, pro=True)
+    series_id = seed_series(tmp_path)  # chapter 1 already has a draft
+
+    response = client.put(f"/api/series/{series_id}/outline", json={
+        "chapters": [{"title": f"第 {index} 章", "search_queries": ["q"]}
+                     for index in range(1, 4)],
+    })
+    assert response.status_code == 409
+    assert "提纲" in response.json()["error"]
+
+
+def test_run_writes_the_approved_outline(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_run(store, provider, series_id, **kwargs):
+        captured["series_id"] = series_id
+        captured["kwargs"] = kwargs
+        return {"series_id": series_id, "status": "done", "draft_ids": [31],
+                "stats": {"series_id": series_id, "chapters_done": 2}}
+
+    monkeypatch.setattr("app.web.server.run_series_chapters", fake_run)
+    client = make_client(tmp_path, pro=True)
+    series_id = seed_series(tmp_path, status="planned", written=False)
+
+    assert client.post(f"/api/series/{series_id}/run").status_code == 200
+    state = wait_terminal(client)
+    assert state["status"] == "done"
+    assert captured["series_id"] == series_id
+    assert captured["kwargs"]["seo_tags_enabled"] is True
+
+
+def test_run_rejects_a_series_with_nothing_left_to_write(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr("app.store._web_image_for_title", lambda *args: None)
+    client = make_client(tmp_path, pro=True)
+    series_id = seed_series(tmp_path, status="done", second_draft=True)
+
+    response = client.post(f"/api/series/{series_id}/run")
+    assert response.status_code == 409
+    assert client.post("/api/series/9999/run").status_code == 404
 
 
 def retry_url(series_id: int, chapter_id: int) -> str:

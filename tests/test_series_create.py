@@ -10,8 +10,8 @@ from app.db import connect, init_db
 from app.models import Article
 from app.pipeline.search_create import SearchCreateCancelled
 from app.pipeline.series_create import (
-    SeriesCreateOptions, generate_series_outline, probe_topic, retry_chapter,
-    run_series_create)
+    SeriesCreateOptions, generate_series_outline, plan_series, probe_topic,
+    retry_chapter, run_series_chapters, run_series_create)
 from app.sources.web_search import SearchHit
 from app.store import Store
 
@@ -371,6 +371,85 @@ def test_options_reject_out_of_range_part_counts():
 def test_chapter_search_ignores_the_recency_window():
     """Knowledge series cover settled material, not the last 30 days."""
     assert options().chapter_options().time_range_days is None
+
+
+def test_plan_stops_before_writing_and_records_what_it_found(
+        tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch,
+         hits_for=lambda query: [] if "q2" in query or "第二章" in query
+         else hits,
+         articles_by_url=articles_by_url)
+
+    series_id, chapters, _ = plan_series(
+        store, ScriptedProvider(), options(), status="planned")
+
+    assert store.get_series(series_id)["status"] == "planned"
+    rows = store.list_chapters(series_id)
+    assert [row["status"] for row in rows] == ["pending"] * 3
+    assert list(store.get_series_drafts(series_id)) == []
+    # The per-chapter counts are what makes the warning actionable.
+    assert [row["preflight_hits"] for row in rows] == [12, 0, 12]
+    assert len(chapters) == 3
+
+
+def test_a_reviewed_outline_is_what_gets_written(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+    series_id, _, _ = plan_series(
+        store, ScriptedProvider(), options(), status="planned")
+
+    store.replace_chapters(series_id, [
+        {"title": "第三章", "scope": "收束", "search_queries": ["q3"],
+         "prerequisites": []},
+        {"title": "改过的开头", "scope": "打底",
+         "search_queries": ["改过的词"], "prerequisites": ["第三章"]},
+        {"title": "补的一章", "scope": "补充", "search_queries": ["q1"],
+         "prerequisites": []},
+    ])
+    result = run_series_chapters(store, ScriptedProvider(), series_id)
+
+    assert result["status"] == "done"
+    assert store.get_series(series_id)["parts"] == 3
+    drafts = store.get_series_drafts(series_id)
+    assert len(drafts) == 3
+    body = store.read_draft_body(drafts[1]["id"])
+    assert body["search_meta"]["chapter"] == "改过的开头"
+    assert body["search_meta"]["queries"] == ["改过的词"]
+    assert body["series_part_label"] == "第 2 章"
+
+
+def test_outline_cannot_be_replaced_once_a_chapter_is_written(
+        tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+    result = run_series_create(store, ScriptedProvider(), options())
+
+    with pytest.raises(ValueError, match="不能再改提纲"):
+        store.replace_chapters(result["series_id"], [
+            {"title": "改过的", "search_queries": ["q"]}])
+
+
+def test_writing_resumes_only_the_chapters_without_a_draft(
+        tmp_path, monkeypatch):
+    store, series_id, hits, articles_by_url = starved_series(
+        tmp_path, monkeypatch)
+    scrape_calls: list[list[str]] = []
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url, scrape_calls=scrape_calls)
+
+    result = run_series_chapters(store, ScriptedProvider(), series_id)
+
+    # Only the starved chapter is written again; the other two are left alone.
+    assert result["stats"]["chapters_done"] == 1
+    assert result["status"] == "done"
+    assert len(scrape_calls) == 1
+    assert len(store.get_series_drafts(series_id)) == 3
 
 
 def starved_series(tmp_path, monkeypatch):

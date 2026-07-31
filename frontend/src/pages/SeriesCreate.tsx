@@ -3,7 +3,10 @@ import {
   Alert, App as AntApp, Button, Card, Collapse, ConfigProvider, Form, Input,
   List, Progress, Select, Space, Tag, Typography,
 } from "antd";
-import { BookOutlined, CloseCircleOutlined } from "@ant-design/icons";
+import {
+  ArrowDownOutlined, ArrowUpOutlined, BookOutlined, CloseCircleOutlined,
+  DeleteOutlined, PlusOutlined,
+} from "@ant-design/icons";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useEffect, useMemo, useState } from "react";
@@ -28,6 +31,8 @@ interface Chapter {
   error: string | null;
   draft_id: number | null;
   prerequisites: string[];
+  search_queries: string[];
+  preflight_hits: number | null;
 }
 
 interface Series {
@@ -35,6 +40,7 @@ interface Series {
   title: string;
   topic: string;
   parts: number;
+  ref_count: number;
   status: string;
   error: string | null;
   knowledge_map: string;
@@ -58,6 +64,14 @@ interface SeriesStatus {
   series?: Series | null;
   topic?: string;
   request?: Partial<SeriesForm> & { style_id?: string | null };
+}
+
+interface EditableChapter {
+  title: string;
+  scope: string;
+  search_queries: string[];
+  prerequisites: string[];
+  preflight_hits: number | null;
 }
 
 interface SeriesForm {
@@ -90,6 +104,7 @@ const STAGE_LABEL: Record<string, string> = {
 };
 
 const SERIES_STATUS: Record<string, { label: string; color: string }> = {
+  planned: { label: "待写作", color: "blue" },
   running: { label: "运行中", color: "processing" },
   done: { label: "已完成", color: "success" },
   partial: { label: "部分完成", color: "warning" },
@@ -110,6 +125,9 @@ export default function SeriesCreate() {
   const [submitting, setSubmitting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [retrying, setRetrying] = useState<number | null>(null);
+  const [planning, setPlanning] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [outline, setOutline] = useState<EditableChapter[]>([]);
 
   const { data: styleData } = useQuery({
     queryKey: ["rewrite-styles"],
@@ -146,9 +164,24 @@ export default function SeriesCreate() {
     : status?.current || 0;
   const percent = total ? Math.round((finished / total) * 100) : 0;
 
+  const reviewing = !active && series?.status === "planned";
+
   useEffect(() => {
     if (!active) setCancelling(false);
   }, [active]);
+
+  // The editor works on a copy: a half-finished edit must survive the polling
+  // that keeps the rest of the page current.
+  useEffect(() => {
+    if (!reviewing || !series) { setOutline([]); return; }
+    setOutline(series.chapters.map((chapter) => ({
+      title: chapter.title,
+      scope: chapter.scope,
+      search_queries: chapter.search_queries,
+      prerequisites: chapter.prerequisites,
+      preflight_hits: chapter.preflight_hits,
+    })));
+  }, [reviewing, series?.id]);
 
   // A finished run changes the history, and the history is what the user comes
   // back to days later.
@@ -174,6 +207,30 @@ export default function SeriesCreate() {
       form.setFieldValue("style", saved.style_id || "");
     }
   }, [form, status?.request]);
+
+  async function plan(values: SeriesForm) {
+    if (!isPro) { openLicenseGuide(); return; }
+    setPlanning(true);
+    try {
+      await api.post("/api/series/plan", {
+        topic: values.topic.trim(),
+        lang: values.lang,
+        depth: values.depth,
+        parts: values.parts,
+        ref_count: values.ref_count,
+        style_id: values.style || null,
+        engines: values.engines,
+      });
+      message.success("正在生成提纲，稍后可以逐章调整再开跑");
+      await qc.invalidateQueries({ queryKey: ["series-status"] });
+    } catch (e: any) {
+      const detail = e?.response?.data?.error || e?.response?.data?.detail || "启动失败";
+      if (e?.response?.status === 403) openLicenseGuide();
+      message.error(detail);
+    } finally {
+      setPlanning(false);
+    }
+  }
 
   async function submit(values: SeriesForm) {
     setSubmitting(true);
@@ -217,6 +274,71 @@ export default function SeriesCreate() {
         </Space>
       ),
       onOk: () => submit(values),
+    });
+  }
+
+  function editChapter(index: number, patch: Partial<EditableChapter>) {
+    setOutline((rows) => rows.map(
+      (row, position) => (position === index ? { ...row, ...patch } : row)));
+  }
+
+  function moveChapter(index: number, delta: number) {
+    setOutline((rows) => {
+      const next = [...rows];
+      const target = index + delta;
+      if (target < 0 || target >= next.length) return rows;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  async function saveOutline(seriesId: number, rows: EditableChapter[]) {
+    await api.put(`/api/series/${seriesId}/outline`, {
+      chapters: rows.map((row) => ({
+        title: row.title,
+        scope: row.scope,
+        search_queries: row.search_queries,
+        prerequisites: row.prerequisites,
+      })),
+    });
+  }
+
+  // The outline decides what every chapter can find, so it is worth a minute
+  // of the user's attention before it turns into twenty minutes of writing.
+  async function startWriting() {
+    if (!series) return;
+    const invalid = outline.find((row) => !row.title.trim());
+    if (invalid) { message.error("章节标题不能为空"); return; }
+    setStarting(true);
+    try {
+      await saveOutline(series.id, outline);
+      await api.post(`/api/series/${series.id}/run`, {});
+      message.success("已开始逐章写作，可以离开本页");
+      await qc.invalidateQueries({ queryKey: ["series-status"] });
+    } catch (e: any) {
+      if (e?.response?.status === 403) openLicenseGuide();
+      message.error(e?.response?.data?.error || e?.response?.data?.detail || "启动失败");
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  function confirmWriting() {
+    if (!series) return;
+    const refs = series.ref_count || 5;
+    modal.confirm({
+      title: `确认按这份提纲写 ${outline.length} 章？`,
+      icon: null,
+      okText: "开始写作",
+      cancelText: "再改改",
+      content: (
+        <Space direction="vertical" size={4} style={{ marginTop: 8 }}>
+          <Text>预计大模型调用约 {outline.length * 3} 次，网页抓取约 {outline.length * refs * 2} 个页面。</Text>
+          <Text>预计耗时 {outline.length * 3}–{outline.length * 6} 分钟，期间无法同时进行搜索创作。</Text>
+          <Text type="secondary">中途可以取消，已写完的章节会保留为草稿。</Text>
+        </Space>
+      ),
+      onOk: startWriting,
     });
   }
 
@@ -282,7 +404,7 @@ export default function SeriesCreate() {
       )}
 
       <Card title="系列选项" style={{ borderColor: "#d6e4ff" }}>
-        <Form<SeriesForm> form={form} layout="vertical" onFinish={confirmAndStart}
+        <Form<SeriesForm> form={form} layout="vertical" onFinish={plan}
           initialValues={{
             lang: "zh", depth: "intermediate", parts: 5, ref_count: 5, style: "",
             engines: ["bing", "baidu", "duckduckgo", "google", "brave"],
@@ -341,11 +463,16 @@ export default function SeriesCreate() {
               ]} />
             </Form.Item>
           </Space>
-          <Form.Item style={{ marginBottom: 0 }}>
+          <Form.Item style={{ marginBottom: 0 }}
+            extra="提纲会先做一次资料预检，确认后才进入逐章写作。">
             <Space>
               <Button type="primary" htmlType="submit" icon={<BookOutlined />}
-                loading={submitting} disabled={active}>
-                开始系列创作
+                loading={planning} disabled={active}>
+                生成提纲
+              </Button>
+              <Button loading={submitting} disabled={active}
+                onClick={() => form.validateFields().then(confirmAndStart)}>
+                直接开跑（不审提纲）
               </Button>
               {active && (
                 // Form 的 disabled 会经 context 连带禁用内部按钮，取消按钮必须跳出该 context
@@ -359,7 +486,75 @@ export default function SeriesCreate() {
         </Form>
       </Card>
 
-      {(series || (status && state !== "idle")) && (
+      {reviewing && series && (
+        <Card title={`提纲待确认：《${series.title}》`}
+          style={{ borderColor: "#adc6ff" }}
+          extra={<Text type="secondary">{outline.length} 章</Text>}>
+          <Paragraph type="secondary">
+            检索词决定每章能找到什么资料，标题和范围决定这一章写什么。
+            资料偏少的章节现在改一改，比写到那一章再失败划算。
+          </Paragraph>
+          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+            {outline.map((chapter, index) => {
+              const thin = chapter.preflight_hits !== null
+                && chapter.preflight_hits < 4;
+              return (
+                <Card key={index} size="small" type="inner"
+                  title={
+                    <Space>
+                      <Text type="secondary">第 {index + 1} 章</Text>
+                      {chapter.preflight_hits !== null && (
+                        <Tag color={thin ? "warning" : "success"}>
+                          预检资料 {chapter.preflight_hits} 条
+                        </Tag>
+                      )}
+                    </Space>
+                  }
+                  extra={
+                    <Space size={0}>
+                      <Button type="text" size="small" icon={<ArrowUpOutlined />}
+                        disabled={index === 0}
+                        onClick={() => moveChapter(index, -1)} />
+                      <Button type="text" size="small" icon={<ArrowDownOutlined />}
+                        disabled={index === outline.length - 1}
+                        onClick={() => moveChapter(index, 1)} />
+                      <Button type="text" size="small" danger
+                        icon={<DeleteOutlined />} disabled={outline.length <= 3}
+                        onClick={() => setOutline(
+                          outline.filter((_, position) => position !== index))} />
+                    </Space>
+                  }>
+                  <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                    <Input value={chapter.title} maxLength={120}
+                      placeholder="章节标题"
+                      onChange={(e) => editChapter(index, { title: e.target.value })} />
+                    <Input value={chapter.scope} maxLength={200}
+                      placeholder="这一章讲什么（可留空）"
+                      onChange={(e) => editChapter(index, { scope: e.target.value })} />
+                    <Select mode="tags" value={chapter.search_queries}
+                      style={{ width: "100%" }} tokenSeparators={[","]}
+                      placeholder="检索词，回车添加"
+                      onChange={(value) => editChapter(
+                        index, { search_queries: value, preflight_hits: null })} />
+                  </Space>
+                </Card>
+              );
+            })}
+          </Space>
+          <Space style={{ marginTop: 16 }} wrap>
+            <Button type="primary" icon={<BookOutlined />} loading={starting}
+              onClick={confirmWriting}>开始逐章写作</Button>
+            <Button disabled={outline.length >= 10}
+              icon={<PlusOutlined />}
+              onClick={() => setOutline([...outline, {
+                title: "", scope: "", search_queries: [],
+                prerequisites: [], preflight_hits: null,
+              }])}>添加章节</Button>
+          </Space>
+        </Card>
+      )}
+
+      {!reviewing && (series || (status && state !== "idle")) && (
         <Card
           title={
             <Space>
@@ -475,11 +670,13 @@ export default function SeriesCreate() {
                         <Text type="secondary">
                           {chapter.title}（{chapter.error || "未生成"}）
                         </Text>
-                        <Button type="link" size="small" disabled={active}
-                          loading={retrying === chapter.id}
-                          onClick={() => retryChapter(item.id, chapter.id)}>
-                          重跑本章
-                        </Button>
+                        {item.status !== "planned" && (
+                          <Button type="link" size="small" disabled={active}
+                            loading={retrying === chapter.id}
+                            onClick={() => retryChapter(item.id, chapter.id)}>
+                            重跑本章
+                          </Button>
+                        )}
                       </>
                     )}
                   </div>

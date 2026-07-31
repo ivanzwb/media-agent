@@ -349,17 +349,25 @@ class Store:
     def create_series(self, *, title: str, topic: str, lang: str, depth: str,
                       parts: int, style_id: str | None,
                       knowledge_map: str = "", ref_count: int = 5,
-                      engines: list[str] | None = None) -> int:
+                      engines: list[str] | None = None,
+                      status: str = "running") -> int:
         cur = self.conn.execute(
             """INSERT INTO series
                (title, topic, lang, depth, parts, style_id, ref_count, engines,
                 knowledge_map, status, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,'running',?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (title, topic, lang, depth, int(parts), style_id, int(ref_count),
              json.dumps(list(engines or []), ensure_ascii=False),
-             knowledge_map, datetime.now(timezone.utc).isoformat()))
+             knowledge_map, status,
+             datetime.now(timezone.utc).isoformat()))
         self.conn.commit()
         return int(cur.lastrowid)
+
+    def mark_series_running(self, series_id: int) -> None:
+        self.conn.execute(
+            "UPDATE series SET status='running', error=NULL, finished_at=NULL"
+            " WHERE id=?", (series_id,))
+        self.conn.commit()
 
     def finish_series(self, series_id: int, status: str,
                       error: str | None = None) -> None:
@@ -391,8 +399,8 @@ class Store:
             cur = self.conn.execute(
                 """INSERT INTO series_chapters
                    (series_id, chapter_order, title, scope, search_queries,
-                    prerequisites, status, updated_at)
-                   VALUES (?,?,?,?,?,?,'pending',?)""",
+                    prerequisites, preflight_hits, status, updated_at)
+                   VALUES (?,?,?,?,?,?,?,'pending',?)""",
                 (series_id, index,
                  str(chapter.get("title") or f"第 {index} 章"),
                  str(chapter.get("scope") or ""),
@@ -400,10 +408,28 @@ class Store:
                             ensure_ascii=False),
                  json.dumps(chapter.get("prerequisites") or [],
                             ensure_ascii=False),
+                 chapter.get("preflight_hits"),
                  now_iso))
             ids.append(int(cur.lastrowid))
         self.conn.commit()
         return ids
+
+    def replace_chapters(self, series_id: int,
+                         chapters: list[dict]) -> list[int]:
+        """Swap in a reviewed outline, before any chapter has been written.
+
+        Editing an outline is reordering as much as rewording, and chapter
+        order is a column, so the rows are rebuilt rather than patched.
+        """
+        written = [row for row in self.list_chapters(series_id)
+                   if row["draft_id"]]
+        if written:
+            raise ValueError("已经写出草稿的系列不能再改提纲")
+        self.conn.execute(
+            "DELETE FROM series_chapters WHERE series_id=?", (series_id,))
+        self.conn.execute(
+            "UPDATE series SET parts=? WHERE id=?", (len(chapters), series_id))
+        return self.add_chapters(series_id, chapters)
 
     def list_chapters(self, series_id: int):
         return self.conn.execute(

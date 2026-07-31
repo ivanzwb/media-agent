@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS series_chapters (
     scope TEXT,
     search_queries TEXT NOT NULL DEFAULT '[]',
     prerequisites TEXT NOT NULL DEFAULT '[]',
+    preflight_hits INTEGER,
     status TEXT NOT NULL DEFAULT 'pending',
     error TEXT,
     draft_id INTEGER,
@@ -149,6 +150,12 @@ def init_db(conn: sqlite3.Connection) -> None:
     try:
         conn.execute(
             "ALTER TABLE series ADD COLUMN engines TEXT NOT NULL DEFAULT '[]'")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    # Migrate: chapters created before the outline could be reviewed.
+    try:
+        conn.execute(
+            "ALTER TABLE series_chapters ADD COLUMN preflight_hits INTEGER")
     except sqlite3.OperationalError:
         pass  # column already exists
     # Migrate: link drafts that belong to a knowledge series. Ordering and

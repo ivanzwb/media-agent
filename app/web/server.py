@@ -49,7 +49,9 @@ from app.pipeline.rewriter import rewrite
 from app.pipeline.search_create import (
     SearchCreateCancelled, SearchCreateOptions, run_search_create)
 from app.pipeline.series_create import (
-    SeriesCreateOptions, retry_chapter, run_series_create)
+    MAX_PARTS as SERIES_MAX_PARTS, MIN_PARTS as SERIES_MIN_PARTS,
+    SeriesCreateOptions, plan_series, retry_chapter, run_series_chapters,
+    run_series_create)
 from app.pipeline import styles as rewrite_styles
 from app.pipeline import style_learner
 from app.wechat import components as editor_components
@@ -2896,13 +2898,13 @@ def create_app(config: Config | None = None,
 
     # ── knowledge series creation ────────────────────────────────────────
 
-    def _chapter_payload(row) -> dict:
-        def _loads(value, fallback):
-            try:
-                return json.loads(value or "")
-            except (TypeError, ValueError, json.JSONDecodeError):
-                return fallback
+    def _loads(value, fallback):
+        try:
+            return json.loads(value or "")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return fallback
 
+    def _chapter_payload(row) -> dict:
         return {
             "id": row["id"],
             "order": row["chapter_order"],
@@ -2910,6 +2912,8 @@ def create_app(config: Config | None = None,
             "scope": row["scope"] or "",
             "search_queries": _loads(row["search_queries"], []),
             "prerequisites": _loads(row["prerequisites"], []),
+            "preflight_hits": (row["preflight_hits"]
+                               if "preflight_hits" in row.keys() else None),
             "status": row["status"],
             "error": row["error"],
             "draft_id": row["draft_id"],
@@ -2927,6 +2931,9 @@ def create_app(config: Config | None = None,
             "depth": row["depth"],
             "parts": row["parts"],
             "style_id": row["style_id"],
+            "ref_count": row["ref_count"] if "ref_count" in row.keys() else 5,
+            "engines": _loads(
+                row["engines"] if "engines" in row.keys() else "", []),
             "knowledge_map": row["knowledge_map"] or "",
             "status": row["status"],
             "error": row["error"],
@@ -2959,44 +2966,86 @@ def create_app(config: Config | None = None,
                 "topic": series_state["request"].get("topic"),
             }
 
+    def _series_options_from(payload) -> tuple[SeriesCreateOptions, dict]:
+        if not isinstance(payload, dict):
+            raise ValueError("请求体必须为 JSON 对象")
+        raw_engines = payload.get("engines", list(DEFAULT_SEARCH_ENGINES))
+        if not isinstance(raw_engines, list):
+            raise ValueError("搜索引擎必须为数组")
+        style_id = str(payload.get("style_id") or "").strip() or None
+        options = SeriesCreateOptions(
+            topic=str(payload.get("topic") or ""),
+            lang=str(payload.get("lang") or "zh"),
+            depth=str(payload.get("depth") or "intermediate"),
+            parts=payload.get("parts", 5),
+            style_id=style_id,
+            engines=[str(engine) for engine in raw_engines],
+            ref_count=int(payload.get("ref_count", 5)),
+            workers=config.workers,
+            proxy=config.fetch_proxy,
+        )
+        options.validate()
+        if style_id and rewrite_styles.get_style(style_id, get_store()) is None:
+            raise ValueError("写作风格不存在")
+        return options, {
+            "topic": options.topic,
+            "lang": options.lang,
+            "depth": options.depth,
+            "parts": options.parts,
+            "ref_count": options.ref_count,
+            "style_id": options.style_id,
+            "engines": list(options.engines),
+        }
+
+    @app.post("/api/series/plan")
+    async def api_series_plan(request: Request):
+        """Outline only: the run itself waits for the user to approve it."""
+        denied = LG.require(license_mgr, LF.SERIES_CREATE)
+        if denied is not None:
+            return denied
+        try:
+            options, request_snapshot = _series_options_from(
+                await request.json())
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400)
+
+        with search_create_lock:
+            busy = _heavy_job_busy()
+            if busy:
+                return JSONResponse(
+                    {"ok": False, "error": f"已有{busy}任务正在进行"},
+                    status_code=409)
+            series_state.update(
+                running=True, status="running", stage="probe",
+                detail="正在生成提纲", current=0, total=options.parts, stats={},
+                logs=[], error=None, series_id=None, op_id=None,
+                started_at=datetime.now(timezone.utc).isoformat(),
+                finished_at=None, cancel_requested=False,
+                request=request_snapshot)
+
+        def run(store, provider, run_config, style, progress, cancelled):
+            options.workers = run_config.workers
+            options.proxy = run_config.fetch_proxy
+            stats = {**request_snapshot, "series_id": None,
+                     "chapters_done": 0, "chapters_failed": 0}
+            series_id, _, _ = plan_series(
+                store, provider, options, status="planned", progress=progress,
+                should_stop=cancelled, stats=stats)
+            return {"series_id": series_id, "status": "planned",
+                    "draft_ids": [], "stats": stats}
+
+        _start_series_job("series_plan", options.style_id, run)
+        return {"ok": True, "started": True, **_series_public_state()}
+
     @app.post("/api/series/create")
     async def api_series_create(request: Request):
         denied = LG.require(license_mgr, LF.SERIES_CREATE)
         if denied is not None:
             return denied
         try:
-            payload = await request.json()
-            if not isinstance(payload, dict):
-                raise ValueError("请求体必须为 JSON 对象")
-            raw_engines = payload.get("engines", list(DEFAULT_SEARCH_ENGINES))
-            if not isinstance(raw_engines, list):
-                raise ValueError("搜索引擎必须为数组")
-            style_id = str(payload.get("style_id") or "").strip() or None
-            options = SeriesCreateOptions(
-                topic=str(payload.get("topic") or ""),
-                lang=str(payload.get("lang") or "zh"),
-                depth=str(payload.get("depth") or "intermediate"),
-                parts=payload.get("parts", 5),
-                style_id=style_id,
-                engines=[str(engine) for engine in raw_engines],
-                ref_count=int(payload.get("ref_count", 5)),
-                workers=config.workers,
-                proxy=config.fetch_proxy,
-            )
-            options.validate()
-            validation_store = get_store()
-            if style_id and rewrite_styles.get_style(
-                    style_id, validation_store) is None:
-                raise ValueError("写作风格不存在")
-            request_snapshot = {
-                "topic": options.topic,
-                "lang": options.lang,
-                "depth": options.depth,
-                "parts": options.parts,
-                "ref_count": options.ref_count,
-                "style_id": options.style_id,
-                "engines": list(options.engines),
-            }
+            options, request_snapshot = _series_options_from(
+                await request.json())
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400)
@@ -3151,6 +3200,8 @@ def create_app(config: Config | None = None,
                     "request": {
                         "topic": series["topic"], "lang": series["lang"],
                         "depth": series["depth"], "parts": series["parts"],
+                        "ref_count": series["ref_count"],
+                        "engines": series["engines"],
                         "style_id": series["style_id"],
                     },
                 })
@@ -3209,6 +3260,130 @@ def create_app(config: Config | None = None,
                 for row in store.get_series_drafts(series_id)
             ],
         }
+
+    def _reviewed_chapters(payload) -> list[dict]:
+        if not isinstance(payload, dict):
+            raise ValueError("请求体必须为 JSON 对象")
+        raw = payload.get("chapters")
+        if not isinstance(raw, list):
+            raise ValueError("章节必须为数组")
+        if not SERIES_MIN_PARTS <= len(raw) <= SERIES_MAX_PARTS:
+            raise ValueError(
+                f"章节数必须在 {SERIES_MIN_PARTS}–{SERIES_MAX_PARTS} 之间")
+
+        def strings(value) -> list[str]:
+            if not isinstance(value, list):
+                raise ValueError("检索词与前置知识必须为数组")
+            return [text for text in
+                    (str(item).strip() for item in value) if text]
+
+        chapters: list[dict] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                raise ValueError("每个章节必须为 JSON 对象")
+            title = str(item.get("title") or "").strip()
+            if not title:
+                raise ValueError("章节标题不能为空")
+            if len(title) > 120:
+                raise ValueError("章节标题不能超过 120 个字符")
+            chapters.append({
+                "title": title,
+                "scope": str(item.get("scope") or "").strip(),
+                # An empty term list would send the chapter into research with
+                # nothing to search for, so it falls back to its own title.
+                "search_queries": strings(item.get("search_queries") or []
+                                          ) or [title],
+                "prerequisites": strings(item.get("prerequisites") or []),
+            })
+        return chapters
+
+    @app.put("/api/series/{series_id}/outline")
+    async def api_series_outline(series_id: int, request: Request):
+        """Accept a reviewed outline, before any of it has been written."""
+        denied = LG.require(license_mgr, LF.SERIES_CREATE)
+        if denied is not None:
+            return denied
+        store = get_store()
+        if store.get_series(series_id) is None:
+            return JSONResponse(
+                {"ok": False, "error": "系列不存在"}, status_code=404)
+        try:
+            chapters = _reviewed_chapters(await request.json())
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400)
+        with search_create_lock:
+            busy = _heavy_job_busy()
+            if busy:
+                return JSONResponse(
+                    {"ok": False, "error": f"已有{busy}任务正在进行"},
+                    status_code=409)
+        # A count only describes the terms it was measured with, so it follows
+        # a chapter through reordering and retitling but not through a rewrite.
+        measured = {
+            json.dumps(_loads(row["search_queries"], []), ensure_ascii=False):
+                row["preflight_hits"]
+            for row in store.list_chapters(series_id)}
+        for chapter in chapters:
+            chapter["preflight_hits"] = measured.get(
+                json.dumps(chapter["search_queries"], ensure_ascii=False))
+        try:
+            store.replace_chapters(series_id, chapters)
+        except ValueError as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=409)
+        return {"ok": True,
+                "series": _series_payload(store, store.get_series(series_id))}
+
+    @app.post("/api/series/{series_id}/run")
+    def api_series_run(series_id: int):
+        """Write the chapters of an outline the user has signed off on."""
+        denied = LG.require(license_mgr, LF.SERIES_CREATE)
+        if denied is not None:
+            return denied
+        store = get_store()
+        row = store.get_series(series_id)
+        if row is None:
+            return JSONResponse(
+                {"ok": False, "error": "系列不存在"}, status_code=404)
+        chapters = store.list_chapters(series_id)
+        pending = [item for item in chapters if not item["draft_id"]]
+        if not pending:
+            return JSONResponse(
+                {"ok": False, "error": "该系列的章节都已写完"}, status_code=409)
+
+        with search_create_lock:
+            busy = _heavy_job_busy()
+            if busy:
+                return JSONResponse(
+                    {"ok": False, "error": f"已有{busy}任务正在进行"},
+                    status_code=409)
+            series_state.update(
+                running=True, status="running", stage="research",
+                detail=f"开始写作，共 {len(pending)} 章待完成",
+                current=0, total=len(chapters), stats={}, logs=[], error=None,
+                series_id=series_id, op_id=None,
+                started_at=datetime.now(timezone.utc).isoformat(),
+                finished_at=None, cancel_requested=False,
+                request={
+                    "topic": row["topic"], "lang": row["lang"],
+                    "depth": row["depth"], "parts": row["parts"],
+                    "ref_count": row["ref_count"],
+                    "style_id": row["style_id"],
+                    "engines": json.loads(row["engines"] or "[]"),
+                })
+
+        def run(job_store, provider, run_config, style, progress, cancelled):
+            return run_series_chapters(
+                job_store, provider, series_id, style=style,
+                promotion_footer=run_config.promotion_footer or "",
+                seo_tags_enabled=run_config.seo_tags_enabled,
+                sensitive_words=load_words(run_config),
+                workers=run_config.workers, proxy=run_config.fetch_proxy,
+                progress=progress, should_stop=cancelled)
+
+        _start_series_job("series_write", row["style_id"], run)
+        return {"ok": True, "started": True, **_series_public_state()}
 
     @app.post("/api/series/{series_id}/chapters/{chapter_id}/retry")
     def api_series_chapter_retry(series_id: int, chapter_id: int):

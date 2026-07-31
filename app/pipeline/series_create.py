@@ -357,6 +357,8 @@ def preflight_chapters(chapters: list[dict], options: SeriesCreateOptions,
                 chapters[index - 1]["search_queries"] = queries
                 seeds[index] = retried
 
+    for index, chapter in enumerate(chapters, 1):
+        chapter["preflight_hits"] = len(seeds.get(index, []))
     starved = [chapters[index - 1]["title"] for index in range(1, total + 1)
                if len(seeds[index]) < _PREFLIGHT_MIN_HITS]
     if stats is not None:
@@ -491,7 +493,9 @@ def _write_chapter(context: _ChapterContext, chapter: dict, chapter_id: int, *,
         style=context.style, lang=options.lang,
         promotion_footer=context.promotion_footer,
         seo_tags_enabled=context.seo_tags_enabled,
-        context_note=_chapter_context(written, options.lang))
+        # Only what the reader has read by this point in the series.
+        context_note=_chapter_context(
+            [item for item in written if item["order"] < index], options.lang))
 
     primary = saved_articles[0]
     draft = Draft(
@@ -543,28 +547,19 @@ def _write_chapter(context: _ChapterContext, chapter: dict, chapter_id: int, *,
     return saved_draft.id, summary
 
 
-def run_series_create(store, provider: LLMProvider,
-                      options: SeriesCreateOptions, *, style=None,
-                      promotion_footer: str = "",
-                      seo_tags_enabled: bool = True,
-                      sensitive_words: set[str] | None = None,
-                      progress: ProgressCallback | None = None,
-                      should_stop: Callable[[], bool] | None = None) -> dict:
-    options.validate()
-    stats = {
-        "topic": options.topic,
-        "lang": options.lang,
-        "depth": options.depth,
-        "parts": options.parts,
-        "ref_count": options.ref_count,
-        "style_id": options.style_id,
-        "engines": list(options.engines),
-        "series_id": None,
-        "grounding_hits": 0,
-        "chapters_done": 0,
-        "chapters_failed": 0,
-    }
+def plan_series(store, provider: LLMProvider, options: SeriesCreateOptions, *,
+                status: str = "running",
+                progress: ProgressCallback | None = None,
+                should_stop: Callable[[], bool] | None = None,
+                stats: dict | None = None
+                ) -> tuple[int, list[dict], dict[int, list[SearchHit]]]:
+    """Decide what the series will cover, and record it.
 
+    Everything up to the first chapter being written: grounding, the field's
+    shape, the outline, and the feasibility check. Cheap enough — searches and
+    two model calls — to be worth doing before the user commits to the run.
+    """
+    options.validate()
     grounding = probe_topic(
         options, progress=progress, should_stop=should_stop, stats=stats)
 
@@ -584,10 +579,11 @@ def run_series_create(store, provider: LLMProvider,
         title=options.topic, topic=options.topic, lang=options.lang,
         depth=options.depth, parts=len(chapters), style_id=options.style_id,
         knowledge_map=knowledge_map, ref_count=options.ref_count,
-        engines=list(options.engines))
-    stats["series_id"] = series_id
-    stats["parts"] = len(chapters)
+        engines=list(options.engines), status=status)
     total = len(chapters)
+    if stats is not None:
+        stats["series_id"] = series_id
+        stats["parts"] = total
     _emit(progress, "outline", f"提纲已生成，共 {total} 章",
           current=0, total=total, stats=stats)
 
@@ -603,33 +599,74 @@ def run_series_create(store, provider: LLMProvider,
         # Losing the check costs a chance to fix the outline, not the run.
         logger.warning("章节预检失败：%s", exc)
 
-    chapter_ids = store.add_chapters(series_id, chapters)
+    store.add_chapters(series_id, chapters)
+    return series_id, chapters, seeds
+
+
+def run_series_chapters(store, provider: LLMProvider, series_id: int, *,
+                        chapter_ids: list[int] | None = None,
+                        seeds: dict[int, list[SearchHit]] | None = None,
+                        style=None, promotion_footer: str = "",
+                        seo_tags_enabled: bool = True,
+                        sensitive_words: set[str] | None = None,
+                        workers: int = 6, proxy: str | None = None,
+                        stats: dict | None = None,
+                        progress: ProgressCallback | None = None,
+                        should_stop: Callable[[], bool] | None = None) -> dict:
+    """Write the chapters of a planned series, in order.
+
+    Reads what to write from the chapter rows rather than from an outline in
+    memory, so a reviewed outline, a resumed run and a single-chapter rerun all
+    take the same path.
+    """
+    series = store.get_series(series_id)
+    if series is None:
+        raise ValueError("系列不存在")
+    rows = store.list_chapters(series_id)
+    targets = [row for row in rows
+               if (chapter_ids is None or row["id"] in chapter_ids)
+               and not row["draft_id"]]
+    options = _series_options(series, workers=workers, proxy=proxy)
     search_options = options.chapter_options()
     search_options.validate()
-    seen_urls: set[str] = set()
-    written: list[dict] = []
-    draft_ids: list[int] = []
+    stats = stats if stats is not None else {}
+    stats.setdefault("series_id", series_id)
+    stats.setdefault("topic", options.topic)
+    stats.setdefault("parts", len(rows))
+    stats.setdefault("chapters_done", 0)
+    stats.setdefault("chapters_failed", 0)
 
+    if targets:
+        store.mark_series_running(series_id)
+    total = len(rows)
+    # Sources already spoken for, and the chapters the reader has already read.
+    seen_urls = {_url_key(url) for url in store.series_source_urls(series_id)}
+    written = [{"order": row["chapter_order"], "title": row["title"],
+                "summary": row["summary"] or ""}
+               for row in rows if row["status"] == "done"]
+    draft_ids: list[int] = []
     context = _ChapterContext(
         store=store, provider=provider, options=options,
         search_options=search_options, series_id=series_id, style=style,
         promotion_footer=promotion_footer, seo_tags_enabled=seo_tags_enabled,
         sensitive_words=sensitive_words or set())
 
-    for index, (chapter, chapter_id) in enumerate(
-            zip(chapters, chapter_ids), 1):
-        title = chapter["title"]
+    for row in targets:
+        index = row["chapter_order"]
+        title = row["title"]
         try:
             draft_id, summary = _write_chapter(
-                context, chapter, chapter_id, index=index, total=total,
-                seen_urls=seen_urls, written=written, hits=seeds.get(index),
-                progress=progress, should_stop=should_stop, stats=stats)
+                context, _chapter_from_row(row), row["id"], index=index,
+                total=total, seen_urls=seen_urls, written=written,
+                hits=(seeds or {}).get(index), progress=progress,
+                should_stop=should_stop, stats=stats)
             draft_ids.append(draft_id)
             written.append(
                 {"order": index, "title": title, "summary": summary})
+            written.sort(key=lambda item: item["order"])
             stats["chapters_done"] += 1
         except SearchCreateCancelled:
-            store.update_chapter(chapter_id, status="cancelled")
+            store.update_chapter(row["id"], status="cancelled")
             store.finish_series(series_id, "cancelled")
             raise
         except Exception as exc:  # noqa: BLE001
@@ -637,28 +674,62 @@ def run_series_create(store, provider: LLMProvider,
             # so every failure is recorded on the chapter and the run moves on.
             logger.warning("系列第 %d 章失败：%s", index, exc)
             stats["chapters_failed"] += 1
-            store.update_chapter(chapter_id, status="failed", error=str(exc))
+            store.update_chapter(row["id"], status="failed", error=str(exc))
             _emit(progress, "research",
                   f"第 {index}/{total} 章《{title}》未完成：{exc}",
                   current=index, total=total, stats=stats)
 
-    if stats["chapters_done"] == 0:
-        status = "failed"
-    elif stats["chapters_failed"]:
-        status = "partial"
+    status = store.refresh_series_status(series_id)
+    if len(targets) == 1 and chapter_ids is not None:
+        row = targets[0]
+        _emit(progress, "done",
+              f"第 {row['chapter_order']} 章《{row['title']}》"
+              + ("已重新生成" if draft_ids else "仍未完成"),
+              current=row["chapter_order"], total=total, stats=stats)
     else:
-        status = "done"
-    store.finish_series(series_id, status)
-    _emit(progress, "done",
-          f"系列完成：{stats['chapters_done']} 章成功，"
-          f"{stats['chapters_failed']} 章失败",
-          current=total, total=total, stats=stats)
+        _emit(progress, "done",
+              f"系列完成：{stats['chapters_done']} 章成功，"
+              f"{stats['chapters_failed']} 章失败",
+              current=total, total=total, stats=stats)
     return {
         "series_id": series_id,
         "status": status,
         "draft_ids": draft_ids,
         "stats": stats,
     }
+
+
+def run_series_create(store, provider: LLMProvider,
+                      options: SeriesCreateOptions, *, style=None,
+                      promotion_footer: str = "",
+                      seo_tags_enabled: bool = True,
+                      sensitive_words: set[str] | None = None,
+                      progress: ProgressCallback | None = None,
+                      should_stop: Callable[[], bool] | None = None) -> dict:
+    """Plan and write a series in one go, without stopping for review."""
+    options.validate()
+    stats = {
+        "topic": options.topic,
+        "lang": options.lang,
+        "depth": options.depth,
+        "parts": options.parts,
+        "ref_count": options.ref_count,
+        "style_id": options.style_id,
+        "engines": list(options.engines),
+        "series_id": None,
+        "grounding_hits": 0,
+        "chapters_done": 0,
+        "chapters_failed": 0,
+    }
+    series_id, _, seeds = plan_series(
+        store, provider, options, progress=progress, should_stop=should_stop,
+        stats=stats)
+    return run_series_chapters(
+        store, provider, series_id, seeds=seeds, style=style,
+        promotion_footer=promotion_footer, seo_tags_enabled=seo_tags_enabled,
+        sensitive_words=sensitive_words, workers=options.workers,
+        proxy=options.proxy, stats=stats, progress=progress,
+        should_stop=should_stop)
 
 
 def _loads(value, fallback):
@@ -669,90 +740,48 @@ def _loads(value, fallback):
     return parsed if isinstance(parsed, type(fallback)) else fallback
 
 
-def retry_chapter(store, provider: LLMProvider, series_id: int,
-                  chapter_id: int, *, style=None, promotion_footer: str = "",
-                  seo_tags_enabled: bool = True,
-                  sensitive_words: set[str] | None = None,
-                  workers: int = 6, proxy: str | None = None,
-                  progress: ProgressCallback | None = None,
-                  should_stop: Callable[[], bool] | None = None) -> dict:
-    """Research and write one chapter again, in place.
-
-    The counterpart to chapter-level failure isolation: a chapter that came up
-    short is worth another attempt on its own, and rerunning the whole series
-    to get it would discard everything that did work. Reuses the series' own
-    search settings so the rerun is comparable to the original attempt.
-    """
-    series = store.get_series(series_id)
-    if series is None:
-        raise ValueError("系列不存在")
-    chapters = store.list_chapters(series_id)
-    row = next((item for item in chapters if item["id"] == chapter_id), None)
-    if row is None:
-        raise ValueError("章节不存在")
-    if row["draft_id"]:
-        raise ValueError("该章已有草稿，请在草稿编辑页修改，避免覆盖已有改动")
-
+def _series_options(series, *, workers: int = 6,
+                    proxy: str | None = None) -> SeriesCreateOptions:
+    """The options the series was created with, so later work matches it."""
     options = SeriesCreateOptions(
         topic=series["topic"], lang=series["lang"], depth=series["depth"],
-        parts=series["parts"], style_id=series["style_id"],
+        # Chapter count no longer decides anything here — the chapter rows do —
+        # so a stored count outside the range must not block writing them.
+        parts=min(max(int(series["parts"] or MIN_PARTS), MIN_PARTS), MAX_PARTS),
+        style_id=series["style_id"],
         engines=_loads(series["engines"], []) or list(DEFAULT_SEARCH_ENGINES),
         ref_count=series["ref_count"] or 5, workers=workers, proxy=proxy)
     options.validate()
-    search_options = options.chapter_options()
-    search_options.validate()
+    return options
 
-    chapter = {
+
+def _chapter_from_row(row) -> dict:
+    return {
         "title": row["title"],
         "scope": row["scope"] or "",
         "search_queries": _loads(row["search_queries"], []) or [row["title"]],
         "prerequisites": _loads(row["prerequisites"], []),
     }
-    order = row["chapter_order"]
-    stats = {
-        "topic": options.topic,
-        "series_id": series_id,
-        "chapter_id": chapter_id,
-        "chapter": row["title"],
-        "parts": len(chapters),
-        "chapters_done": 0,
-        "chapters_failed": 0,
-    }
-    # The other chapters' sources stay off-limits, exactly as during the run.
-    seen_urls = {_url_key(url)
-                 for url in store.series_source_urls(series_id)}
-    written = [{"order": item["chapter_order"], "title": item["title"],
-                "summary": item["summary"] or ""}
-               for item in chapters
-               if item["chapter_order"] < order and item["status"] == "done"]
 
-    context = _ChapterContext(
-        store=store, provider=provider, options=options,
-        search_options=search_options, series_id=series_id, style=style,
-        promotion_footer=promotion_footer, seo_tags_enabled=seo_tags_enabled,
-        sensitive_words=sensitive_words or set())
-    try:
-        draft_id, _ = _write_chapter(
-            context, chapter, chapter_id, index=order, total=len(chapters),
-            seen_urls=seen_urls, written=written, progress=progress,
-            should_stop=should_stop, stats=stats)
-    except SearchCreateCancelled:
-        store.update_chapter(chapter_id, status="cancelled")
-        store.refresh_series_status(series_id)
-        raise
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("系列第 %d 章重跑失败：%s", order, exc)
-        stats["chapters_failed"] = 1
-        store.update_chapter(chapter_id, status="failed", error=str(exc))
-        status = store.refresh_series_status(series_id)
-        _emit(progress, "done", f"第 {order} 章《{row['title']}》仍未完成：{exc}",
-              current=order, total=len(chapters), stats=stats)
-        return {"series_id": series_id, "chapter_id": chapter_id,
-                "status": status, "draft_ids": [], "stats": stats}
 
-    stats["chapters_done"] = 1
-    status = store.refresh_series_status(series_id)
-    _emit(progress, "done", f"第 {order} 章《{row['title']}》已重新生成",
-          current=order, total=len(chapters), stats=stats)
-    return {"series_id": series_id, "chapter_id": chapter_id,
-            "status": status, "draft_ids": [draft_id], "stats": stats}
+def retry_chapter(store, provider: LLMProvider, series_id: int,
+                  chapter_id: int, **kwargs) -> dict:
+    """Research and write one chapter again, in place.
+
+    The counterpart to chapter-level failure isolation: a chapter that came up
+    short is worth another attempt on its own, and rerunning the whole series
+    to get it would discard everything that did work.
+    """
+    if store.get_series(series_id) is None:
+        raise ValueError("系列不存在")
+    row = next((item for item in store.list_chapters(series_id)
+                if item["id"] == chapter_id), None)
+    if row is None:
+        raise ValueError("章节不存在")
+    if row["draft_id"]:
+        raise ValueError("该章已有草稿，请在草稿编辑页修改，避免覆盖已有改动")
+    result = run_series_chapters(
+        store, provider, series_id, chapter_ids=[chapter_id],
+        stats={"chapter_id": chapter_id, "chapter": row["title"]}, **kwargs)
+    result["chapter_id"] = chapter_id
+    return result
