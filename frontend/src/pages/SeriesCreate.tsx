@@ -7,12 +7,12 @@ import {
   ArrowDownOutlined, ArrowUpOutlined, BookOutlined, CloseCircleOutlined,
   DeleteOutlined, PlusOutlined,
 } from "@ant-design/icons";
-import DOMPurify from "dompurify";
-import { marked } from "marked";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { api, getJson } from "../api/client";
 import { useLicense } from "../api/hooks";
+import { CHAPTER_STATUS, Series, exportUrl } from "../api/series";
+import KnowledgeMap from "../components/KnowledgeMap";
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -20,34 +20,6 @@ interface RewriteStyle {
   id: string;
   name: string;
   is_builtin?: boolean;
-}
-
-interface Chapter {
-  id: number;
-  order: number;
-  title: string;
-  scope: string;
-  status: string;
-  error: string | null;
-  draft_id: number | null;
-  prerequisites: string[];
-  search_queries: string[];
-  preflight_hits: number | null;
-}
-
-interface Series {
-  id: number;
-  title: string;
-  topic: string;
-  parts: number;
-  ref_count: number;
-  status: string;
-  error: string | null;
-  knowledge_map: string;
-  chapters: Chapter[];
-  chapters_done: number;
-  chapters_failed: number;
-  created_at: string;
 }
 
 interface SeriesStatus {
@@ -84,15 +56,6 @@ interface SeriesForm {
   engines: Array<"bing" | "baidu" | "duckduckgo" | "google" | "brave">;
 }
 
-const CHAPTER_STATUS: Record<string, { label: string; color: string }> = {
-  pending: { label: "待开始", color: "default" },
-  researching: { label: "检索资料", color: "processing" },
-  writing: { label: "写作中", color: "processing" },
-  done: { label: "已完成", color: "success" },
-  failed: { label: "未完成", color: "error" },
-  cancelled: { label: "已取消", color: "warning" },
-};
-
 const STAGE_LABEL: Record<string, string> = {
   probe: "检索该主题的公开资料",
   map: "梳理知识脉络",
@@ -101,15 +64,6 @@ const STAGE_LABEL: Record<string, string> = {
   research: "逐章检索资料",
   write: "逐章写作",
   done: "已完成",
-};
-
-const SERIES_STATUS: Record<string, { label: string; color: string }> = {
-  planned: { label: "待写作", color: "blue" },
-  running: { label: "运行中", color: "processing" },
-  done: { label: "已完成", color: "success" },
-  partial: { label: "部分完成", color: "warning" },
-  cancelled: { label: "已取消", color: "warning" },
-  failed: { label: "失败", color: "error" },
 };
 
 function isActive(data?: SeriesStatus) {
@@ -133,11 +87,6 @@ export default function SeriesCreate() {
     queryKey: ["rewrite-styles"],
     queryFn: () => getJson<{ styles: RewriteStyle[] }>("/api/rewrite-styles"),
   });
-  const historyQuery = useQuery({
-    queryKey: ["series-list"],
-    queryFn: () => getJson<{ series: Series[] }>("/api/series"),
-    retry: false,
-  });
   const statusQuery = useQuery({
     queryKey: ["series-status"],
     queryFn: () => getJson<SeriesStatus>("/api/series/status"),
@@ -150,13 +99,7 @@ export default function SeriesCreate() {
   const series = status?.series || null;
   const isPro = !!(license?.active || license?.dev);
 
-  const knowledgeMapHtml = useMemo(() => {
-    const source = series?.knowledge_map?.trim();
-    if (!source) return "";
-    return DOMPurify.sanitize(marked.parse(source, { async: false }) as string);
-  }, [series?.knowledge_map]);
   const thinChapters = status?.stats?.preflight_thin || [];
-  const history = historyQuery.data?.series || [];
 
   const total = series?.parts || status?.total || 0;
   const finished = series
@@ -494,6 +437,16 @@ export default function SeriesCreate() {
             检索词决定每章能找到什么资料，标题和范围决定这一章写什么。
             资料偏少的章节现在改一改，比写到那一章再失败划算。
           </Paragraph>
+          {series.knowledge_map && (
+            // The outline is a walk through this map; judging one without
+            // seeing the other is guesswork.
+            <Collapse style={{ marginBottom: 16 }} size="small"
+              defaultActiveKey="map" items={[{
+                key: "map",
+                label: "知识架构（章节划分依据）",
+                children: <KnowledgeMap source={series.knowledge_map} />,
+              }]} />
+          )}
           <Space direction="vertical" size={12} style={{ width: "100%" }}>
             {outline.map((chapter, index) => {
               const thin = chapter.preflight_hits !== null
@@ -585,13 +538,24 @@ export default function SeriesCreate() {
               description="现在取消并换个说法重来，比等它跑到那一章更省时间。" />
           )}
 
-          {knowledgeMapHtml && (
+          {series?.knowledge_map && (
             <Collapse style={{ marginTop: 16 }} size="small" items={[{
-              key: "map",
-              label: "知识脉络（用于校准章节划分）",
-              children: <div className="ma-knowledge-map"
-                dangerouslySetInnerHTML={{ __html: knowledgeMapHtml }} />,
-            }]} />
+                key: "map",
+                label: "知识架构（章节划分依据）",
+                children: <KnowledgeMap source={series.knowledge_map} />,
+              }]} />
+          )}
+
+          {series && series.chapters_done > 0 && (
+            <Space style={{ marginTop: 16 }} wrap>
+              <Text type="secondary">导出整个系列：</Text>
+              <Button size="small" href={exportUrl(series.id, "md")}>
+                Markdown
+              </Button>
+              <Button size="small" href={exportUrl(series.id, "html")}>
+                网页（可打印为 PDF）
+              </Button>
+            </Space>
           )}
 
           {series && series.chapters.length > 0 && (
@@ -642,50 +606,11 @@ export default function SeriesCreate() {
         </Card>
       )}
 
-      {history.length > 0 && (
-        <Card title={`历史系列（${history.length}）`}>
-          <Collapse accordion size="small" items={history.map((item) => ({
-            key: String(item.id),
-            label: (
-              <Space wrap>
-                <Text strong>{item.title}</Text>
-                <Tag color={SERIES_STATUS[item.status]?.color || "default"}>
-                  {SERIES_STATUS[item.status]?.label || item.status}
-                </Tag>
-                <Text type="secondary">
-                  {item.chapters_done}/{item.parts} 章
-                  {item.chapters_failed > 0 ? ` · ${item.chapters_failed} 章未完成` : ""}
-                </Text>
-              </Space>
-            ),
-            children: (
-              <Space direction="vertical" size={4} style={{ width: "100%" }}>
-                {item.chapters.map((chapter) => (
-                  <div key={chapter.id}>
-                    <Text type="secondary">第 {chapter.order} 章　</Text>
-                    {chapter.draft_id ? (
-                      <Link to={`/drafts/${chapter.draft_id}/edit`}>{chapter.title}</Link>
-                    ) : (
-                      <>
-                        <Text type="secondary">
-                          {chapter.title}（{chapter.error || "未生成"}）
-                        </Text>
-                        {item.status !== "planned" && (
-                          <Button type="link" size="small" disabled={active}
-                            loading={retrying === chapter.id}
-                            onClick={() => retryChapter(item.id, chapter.id)}>
-                            重跑本章
-                          </Button>
-                        )}
-                      </>
-                    )}
-                  </div>
-                ))}
-              </Space>
-            ),
-          }))} />
-        </Card>
-      )}
+      <Text type="secondary">
+        以前写过的系列都在
+        <Link to="/series"> 系列管理 </Link>
+        里，可以在那里看知识架构、导出整套文档或补写没写完的章节。
+      </Text>
     </Space>
   );
 }

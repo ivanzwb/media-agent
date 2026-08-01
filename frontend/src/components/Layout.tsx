@@ -13,6 +13,7 @@ const NAV = [
   { key: "/", label: "仪表盘" },
   { key: "/archive", label: "归档" },
   { key: "/drafts", label: "草稿" },
+  { key: "/series", label: "系列" },
   { key: "/sources", label: "来源" },
   { key: "/settings", label: "设置" },
 ];
@@ -108,6 +109,7 @@ export default function Layout() {
         <ul style={{ lineHeight: 2, color: "#555" }}>
           <li>无限 LLM 改写（含套用模板重写文章）</li>
           <li>搜索多方资料并生成带引用的主题文章</li>
+          <li>把一个知识主题拆成有递进关系的系列，逐章成稿并整套导出</li>
           <li>从多篇样例学习、管理和导入导出自定义转写风格</li>
           <li>AI 智能推荐与一键 / 批量发现来源</li>
           <li>讲解视频生成（含数字人主播）</li>

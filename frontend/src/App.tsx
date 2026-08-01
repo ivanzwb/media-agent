@@ -8,6 +8,7 @@ import Settings from "./pages/Settings";
 import DraftEdit from "./pages/DraftEdit";
 import SearchCreate from "./pages/SearchCreate";
 import SeriesCreate from "./pages/SeriesCreate";
+import SeriesLibrary from "./pages/SeriesLibrary";
 import Placeholder from "./pages/Placeholder";
 
 export default function App() {
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="/drafts/:id/edit" element={<DraftEdit />} />
         <Route path="/search-create" element={<SearchCreate />} />
         <Route path="/series-create" element={<SeriesCreate />} />
+        <Route path="/series" element={<SeriesLibrary />} />
         <Route path="/sources" element={<Sources />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Placeholder title="未找到页面" />} />

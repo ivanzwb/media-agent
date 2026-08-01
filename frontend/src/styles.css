@@ -10,6 +10,10 @@ body {
 .ma-knowledge-map ul { list-style: disc; padding-inline-start: 20px; margin: 0; }
 .ma-knowledge-map ul ul { list-style: circle; }
 .ma-knowledge-map li { margin: 2px 0; line-height: 1.7; }
+.ma-mermaid { overflow-x: auto; text-align: center; padding: 8px 0; }
+.ma-mermaid svg { max-width: 100%; height: auto; }
+.ma-knowledge-source { margin: 0; padding: 12px; border-radius: 8px;
+  background: #f5f6f8; font-size: 12px; line-height: 1.7; overflow-x: auto; }
 
 /* ── DraftEdit: lock page at 100vh, only editor scrollbar ── */
 body:has(.ma-draft-edit),

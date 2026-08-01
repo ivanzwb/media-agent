@@ -147,35 +147,93 @@ def probe_topic(options: SeriesCreateOptions, *,
     return "\n".join(lines)
 
 
-_LIST_LINE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
+_MERMAID_HEADER = re.compile(r"^(?:graph|flowchart)\b", re.IGNORECASE)
+_MERMAID_ARROW = re.compile(r"\s*(?:-{2,}>|={2,}>|-{3,}|\.{2,}>)\s*")
+_MERMAID_SIDE = re.compile(
+    r'^(?P<id>[^\[\](){}"|]+?)\s*'
+    r'(?:\[\s*"?(?P<square>[^\]"]*)"?\s*\]'
+    r'|\(\s*"?(?P<round>[^)"]*)"?\s*\)'
+    r'|\{\s*"?(?P<brace>[^}"]*)"?\s*\})?$')
+_MERMAID_UNSAFE = re.compile(r'["\[\]{}()<>|;`#]+')
+_MAP_NODE_CHARS = 40
 
 
-def _clean_markdown_list(raw: str) -> str:
-    """Keep the nested list and drop everything the model wrapped it in.
+def _mermaid_label(text: str) -> str:
+    return " ".join(_MERMAID_UNSAFE.sub(" ", text or "").split())[:_MAP_NODE_CHARS]
 
-    The map is rendered as Markdown in the UI, so a stray prose preamble or
-    code fence would show up verbatim.
+
+def _clean_mermaid(raw: str) -> str:
+    """Rebuild the diagram from the parts that are certainly valid.
+
+    A diagram the model writes freehand fails on punctuation the renderer
+    treats as syntax, and a broken diagram is worse than none. So the text is
+    read for nodes and edges and written out again in one canonical form,
+    with generated ids: whatever the model called its nodes cannot break it.
     """
-    lines: list[str] = []
+    ids: dict[str, str] = {}
+    labels: dict[str, str] = {}
+    edges: list[tuple[str, str]] = []
+
+    def node(side: str) -> str | None:
+        match = _MERMAID_SIDE.match(side.strip())
+        if not match:
+            return None
+        origin = (match.group("id") or "").strip()
+        written = (match.group("square") or match.group("round")
+                   or match.group("brace"))
+        label = _mermaid_label(written if written is not None else origin)
+        if not origin or not label:
+            return None
+        key = ids.setdefault(origin, f"N{len(ids) + 1}")
+        if written is not None:
+            labels[key] = label
+        else:
+            labels.setdefault(key, label)
+        return key
+
     for line in str(raw or "").splitlines():
-        if line.strip().startswith("```"):
+        text = line.strip().rstrip(";")
+        if not text or text.startswith("```") or _MERMAID_HEADER.match(text):
             continue
-        if _LIST_LINE.match(line):
-            lines.append(line.rstrip())
-        elif lines and not line.strip():
-            break  # the list has ended; whatever follows is commentary
-    text = "\n".join(lines)
-    return text[:_MAP_CHARS].rstrip()
+        # Edge captions break more often than they explain.
+        text = re.sub(r"\|[^|]*\|", "", text)
+        sides = _MERMAID_ARROW.split(text)
+        if len(sides) >= 2:
+            chain = [node(side) for side in sides]
+            edges += [(left, right) for left, right in zip(chain, chain[1:])
+                      if left and right and left != right]
+        elif "[" in text:
+            node(text)
+
+    # A node nothing connects to came from a stray line of prose, not the map.
+    linked = {key for edge in edges for key in edge}
+    if len(linked) < 2:
+        return ""
+    lines = ["graph TD"]
+    lines += [f'    {key}["{label}"]' for key, label in labels.items()
+              if key in linked]
+    seen: set[tuple[str, str]] = set()
+    for edge in edges:
+        if edge not in seen:
+            seen.add(edge)
+            lines.append(f"    {edge[0]} --> {edge[1]}")
+    text = ""
+    for line in lines:
+        # Truncating mid-line would leave a diagram that cannot be parsed.
+        if len(text) + len(line) + 1 > _MAP_CHARS:
+            break
+        text += line + "\n"
+    return text.rstrip()
 
 
 def generate_knowledge_map(topic: str, grounding: str, provider: LLMProvider,
                            *, depth: str, lang: str = "zh") -> str:
-    """Sketch the shape of the field as a nested Markdown list.
+    """Sketch the shape of the field as a diagram, before the outline exists.
 
-    Written before the outline so the chapter split follows the subject's own
-    structure rather than a generic "background, principles, practice" arc.
-    Rendered as Markdown rather than a diagram: the frontend already renders
-    Markdown, and a nested list carries the hierarchy without a new dependency.
+    Written first so the chapter split follows the subject's own structure
+    rather than a generic "background, principles, practice" arc. A graph says
+    which ideas hang off which more plainly than prose, and it doubles as the
+    reader-facing picture of what the series covers.
     """
     language = {"zh": "中文", "en": "English",
                 "bilingual": "中英双语"}.get(lang, "中文")
@@ -183,16 +241,18 @@ def generate_knowledge_map(topic: str, grounding: str, provider: LLMProvider,
         f"该主题公开资料的标题与摘要，用于校准术语：\n{grounding}\n\n"
         if grounding.strip() else "")
     prompt = (
-        f"梳理知识主题「{topic}」的核心脉络。深度定位：{_DEPTH_LABELS[depth]}。"
-        f"输出语言：{language}。\n\n"
+        f"梳理知识主题「{topic}」的核心脉络，画成一张 Mermaid 图。"
+        f"深度定位：{_DEPTH_LABELS[depth]}。输出语言：{language}。\n\n"
         f"{grounding_block}"
-        "只输出一个嵌套的 Markdown 无序列表，最多三层：第一层是该领域的主要分支，"
-        "第二层是分支下的关键概念或方法，第三层可选，用于补充典型应用或常见误区。"
-        "每项一行，控制在 20 字以内。\n"
-        "不要输出标题、说明文字或代码围栏。"
+        "第一行写 graph TD，其后每行一条边，形如：\n"
+        'A["根主题"] --> B["主要分支"]\n'
+        "要求：8-16 个节点，最多三层；根节点是该主题本身，第二层是主要分支，"
+        "第三层是分支下的关键概念或方法。\n"
+        "节点文字不超过 12 字，且不得包含括号、引号、分号。"
+        "不要使用 mindmap、subgraph、classDef、style，不要输出代码围栏或说明文字。"
     )
     try:
-        return _clean_markdown_list(
+        return _clean_mermaid(
             provider.chat([Message(role="user", content=prompt)]))
     except Exception as exc:  # noqa: BLE001
         # The map is for orientation, not correctness; losing it must not stop
@@ -245,7 +305,8 @@ def generate_series_outline(topic: str, grounding: str, provider: LLMProvider,
         if grounding.strip() else ""
     )
     map_block = (
-        f"该领域的核心脉络如下，章节划分应覆盖其中的主要分支：\n{knowledge_map}\n\n"
+        "该领域的核心脉络如下（Mermaid 图，A --> B 表示 B 是 A 的下一层），"
+        f"章节划分应覆盖其中的主要分支：\n{knowledge_map}\n\n"
         if knowledge_map.strip() else ""
     )
     prompt = (

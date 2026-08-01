@@ -817,7 +817,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
             {data.series && (
               <Card size="small" style={{ marginTop: 12 }}
                 title={`系列：${data.series.title}`}
-                extra={<Link to="/series-create">查看系列</Link>}>
+                extra={<Link to="/series">查看系列</Link>}>
                 <Space direction="vertical" size={6} style={{ width: "100%" }}>
                   {data.series.chapters.map((chapter: SeriesChapterNav) => {
                     const current = chapter.order === data.series?.order;

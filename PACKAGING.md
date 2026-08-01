@@ -95,7 +95,7 @@ CosyVoice 与 SadTalker 不直接塞入主应用包，而是使用独立托管 R
 - 公钥完整性自校验
 - Free / Pro 功能门控与每日免费转写额度
 
-Pro 功能目录位于 `app/licensing/features.py`，包括无限转写、搜索创作、风格学习、AI 来源发现、讲解视频、平台同步、声音复刻和定时调度。
+Pro 功能目录位于 `app/licensing/features.py`，包括无限转写、搜索创作、知识系列创作、风格学习、AI 来源发现、讲解视频、平台同步、声音复刻和定时调度。
 
 进一步加固：
 

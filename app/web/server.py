@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, Form, Query, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse, Response
@@ -52,6 +53,7 @@ from app.pipeline.series_create import (
     MAX_PARTS as SERIES_MAX_PARTS, MIN_PARTS as SERIES_MIN_PARTS,
     SeriesCreateOptions, plan_series, retry_chapter, run_series_chapters,
     run_series_create)
+from app.pipeline.series_export import series_html, series_markdown
 from app.pipeline import styles as rewrite_styles
 from app.pipeline import style_learner
 from app.wechat import components as editor_components
@@ -3384,6 +3386,45 @@ def create_app(config: Config | None = None,
 
         _start_series_job("series_write", row["style_id"], run)
         return {"ok": True, "started": True, **_series_public_state()}
+
+    @app.get("/api/series/{series_id}/export")
+    def api_series_export(series_id: int, format: str = "md"):
+        """Download the whole series as one document."""
+        denied = LG.require(license_mgr, LF.SERIES_CREATE)
+        if denied is not None:
+            return denied
+        if format not in ("md", "html"):
+            return JSONResponse(
+                {"ok": False, "error": "导出格式必须为 md 或 html"},
+                status_code=400)
+        store = get_store()
+        row = store.get_series(series_id)
+        if row is None:
+            return JSONResponse(
+                {"ok": False, "error": "系列不存在"}, status_code=404)
+        try:
+            if format == "md":
+                content = series_markdown(store, series_id)
+                media_type = "text/markdown; charset=utf-8"
+            else:
+                content = series_html(store, series_id, config=config)
+                media_type = "text/html; charset=utf-8"
+        except ValueError as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=409)
+        # The title is Chinese far more often than not, so the readable name
+        # goes in the encoded field and ASCII keeps old clients working.
+        name = re.sub(r"[^\w\u4e00-\u9fff-]+", "-",
+                      row["title"] or "series").strip("-") or "series"
+        quoted = quote(f"{name}.{format}")
+        return Response(
+            content=content, media_type=media_type,
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="series-{series_id}.{format}"; '
+                    f"filename*=UTF-8''{quoted}",
+            },
+        )
 
     @app.post("/api/series/{series_id}/chapters/{chapter_id}/retry")
     def api_series_chapter_retry(series_id: int, chapter_id: int):

@@ -10,9 +10,9 @@ from app.db import connect, init_db
 from app.models import Article
 from app.pipeline.search_create import SearchCreateCancelled
 from app.pipeline.series_create import (
-    SeriesCreateOptions, _series_nav_note, generate_series_outline,
-    plan_series, probe_topic, retry_chapter, run_series_chapters,
-    run_series_create)
+    SeriesCreateOptions, _series_nav_note, generate_knowledge_map,
+    generate_series_outline, plan_series, probe_topic, retry_chapter,
+    run_series_chapters, run_series_create)
 from app.sources.web_search import SearchHit
 from app.store import Store
 
@@ -43,7 +43,18 @@ OUTLINE = (
 )
 
 
-KNOWLEDGE_MAP = "- 基础概念\n  - 马尔可夫决策过程\n- 核心算法\n  - 时序差分"
+KNOWLEDGE_MAP = (
+    'graph TD\n'
+    '    N1["强化学习"]\n'
+    '    N2["基础概念"]\n'
+    '    N3["马尔可夫决策过程"]\n'
+    '    N4["核心算法"]\n'
+    '    N5["时序差分"]\n'
+    '    N1 --> N2\n'
+    '    N2 --> N3\n'
+    '    N1 --> N4\n'
+    '    N4 --> N5'
+)
 
 
 class ScriptedProvider:
@@ -372,6 +383,39 @@ def test_options_reject_out_of_range_part_counts():
 def test_chapter_search_ignores_the_recency_window():
     """Knowledge series cover settled material, not the last 30 days."""
     assert options().chapter_options().time_range_days is None
+
+
+def test_the_map_is_rebuilt_into_a_diagram_that_parses():
+    """Whatever the model calls its nodes must not reach the renderer."""
+    provider = ScriptedProvider()
+    provider.chat = lambda messages, **opts: (  # type: ignore[assignment]
+        "```mermaid\n"
+        "flowchart LR\n"
+        "  强化学习[强化学习 (RL)] -->|包含| 基础(基础概念)\n"
+        "  基础 --> MDP{马尔可夫决策过程};\n"
+        "  强化学习 --> 基础\n"
+        "```\n"
+        "希望这张图对你有帮助。")
+
+    diagram = generate_knowledge_map("强化学习", "", provider,
+                                     depth="intermediate")
+
+    assert diagram.splitlines() == [
+        "graph TD",
+        '    N1["强化学习 RL"]',      # the parentheses that would break it
+        '    N2["基础概念"]',
+        '    N3["马尔可夫决策过程"]',
+        "    N1 --> N2",
+        "    N2 --> N3",             # the repeated edge appears once
+    ]
+
+
+def test_an_unusable_map_is_dropped_rather_than_shown_broken():
+    provider = ScriptedProvider()
+    provider.chat = lambda messages, **opts: (  # type: ignore[assignment]
+        "抱歉，我无法为这个主题绘制脉络图。")
+    assert generate_knowledge_map(
+        "强化学习", "", provider, depth="intermediate") == ""
 
 
 def test_each_chapter_points_at_its_neighbours(tmp_path, monkeypatch):

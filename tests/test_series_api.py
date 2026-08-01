@@ -370,6 +370,60 @@ def test_run_rejects_a_series_with_nothing_left_to_write(
     assert client.post("/api/series/9999/run").status_code == 404
 
 
+def test_series_export_downloads_one_document(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.store._web_image_for_title", lambda *args: None)
+    client = make_client(tmp_path, pro=True)
+    config = Config(data_dir=tmp_path)
+    store = Store(connect(config.db_path), config)
+    series_id = store.create_series(
+        title="强化学习", topic="强化学习", lang="zh", depth="beginner",
+        parts=1, style_id=None)
+    article = store.save_article(Article(
+        title="Source", content_md="facts", url="https://source.test/c",
+        source_name="Source", source_type="scrape",
+        published_at=datetime.now(timezone.utc), images=[], raw_summary=None,
+        fetched_at=datetime.now(timezone.utc), topic="强化学习"))
+    draft = store.save_draft(Draft(
+        article_id=article.id, title_candidates=["第一章成稿"],
+        body_md="## 小节\n正文。", topic="强化学习", source_url=article.url,
+        source_name=article.source_name, origin="series",
+        series_id=series_id, series_order=1, series_part_label="第 1 章"))
+    chapter_ids = store.add_chapters(
+        series_id, [{"title": "第一章", "search_queries": ["q"]}])
+    store.update_chapter(chapter_ids[0], status="done", draft_id=draft.id)
+
+    markdown = client.get(f"/api/series/{series_id}/export?format=md")
+    assert markdown.status_code == 200
+    assert markdown.headers["content-type"].startswith("text/markdown")
+    assert "attachment;" in markdown.headers["content-disposition"]
+    assert markdown.text.startswith("# 强化学习")
+
+    page = client.get(f"/api/series/{series_id}/export?format=html")
+    assert page.status_code == 200
+    assert page.headers["content-type"].startswith("text/html")
+    assert page.text.startswith("<!DOCTYPE html>")
+
+
+def test_series_export_rejects_what_it_cannot_produce(tmp_path):
+    client = make_client(tmp_path, pro=True)
+    series_id = seed_series(tmp_path, status="planned", written=False)
+
+    assert client.get(
+        f"/api/series/{series_id}/export?format=pdf").status_code == 400
+    assert client.get("/api/series/9999/export").status_code == 404
+    # Planned but unwritten: there is nothing to compile yet.
+    nothing = client.get(f"/api/series/{series_id}/export")
+    assert nothing.status_code == 409
+    assert "章节" in nothing.json()["error"]
+
+
+def test_series_export_requires_pro(tmp_path):
+    client = make_client(tmp_path, pro=False)
+    series_id = seed_series(tmp_path)
+    assert client.get(
+        f"/api/series/{series_id}/export").status_code == 403
+
+
 def retry_url(series_id: int, chapter_id: int) -> str:
     return f"/api/series/{series_id}/chapters/{chapter_id}/retry"
 
