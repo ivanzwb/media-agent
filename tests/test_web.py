@@ -247,6 +247,45 @@ def test_publish_wechat_waits_for_terminal_failure(tmp_path, monkeypatch):
     assert "PUB1" in status["error"]
 
 
+def test_publish_wechat_honors_body_md_override(tmp_path, monkeypatch):
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    store.set_setting("wechat_appid", "wx123")
+    store.set_setting("wechat_appsecret", "secret")
+    monkeypatch.setattr("app.web.server.localize_article",
+                        lambda article, config, **kwargs: None)
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+    monkeypatch.setattr("app.wechat.get_wechat_client",
+                        lambda cfg: FakeClient())
+    published: dict = {}
+
+    def fake_publish(cli, cfg, meta, mode="draft", **kw):
+        published["meta"] = meta
+        return {"ok": True, "draft_media_id": "DRAFT1",
+                "title": "原标题", "mode": mode}
+
+    monkeypatch.setattr("app.wechat.publish.publish_article", fake_publish)
+    r = client.post(f"/drafts/{draft.id}/publish/wechat",
+                    data={"mode": "draft", "kind": "article",
+                          "body_md": "## 覆盖标题\n发布用覆盖正文。"})
+    assert r.status_code == 202
+    status = {}
+    for _ in range(100):
+        status = client.get(
+            f"/api/draft/{draft.id}/publish/wechat/status").json()
+        if status["done"]:
+            break
+        time.sleep(0.01)
+    assert status["ok"] is True
+    assert published["meta"]["body_md"] == "## 覆盖标题\n发布用覆盖正文。"
+    # the override only reaches the publish worker; the stored draft is intact
+    assert store.read_draft_body(draft.id)["body_md"] == "## 钩子\n正文内容"
+
+
 def test_channels_prepare_returns_caption(tmp_path):
     # 视频号 half-auto prepare: returns a caption + the create URL. No video
     # was generated, so has_video is False (still ok=True).
@@ -397,6 +436,56 @@ def test_styled_html_toutiao(tmp_path):
                     data={"platform": "toutiao"})
     assert r.status_code == 200
     assert r.json()["platform"] == "toutiao"
+
+
+def test_styled_html_uses_body_md_override(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    r = client.post(f"/drafts/{draft.id}/styled-html",
+                    data={"platform": "wechat", "theme": "default",
+                          "body_md": "## 覆盖标题\n覆盖正文段落。"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["ok"] is True
+    assert "覆盖正文段落" in j["html"]
+    assert "正文内容" not in j["html"]
+    # the override lives only in the rendered response, not in the draft
+    assert store.read_draft_body(draft.id)["body_md"] == "## 钩子\n正文内容"
+
+
+def test_mermaid_image_upload_saves_and_returns_url(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    payload = b"\x89PNG\r\n\x1a\nmermaid!"
+    r = client.post(f"/api/draft/{draft.id}/mermaid-image",
+                    files={"file": ("chart.png", payload, "image/png")})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["ok"] is True
+    assert j["url"].startswith(f"/media/mermaid-draft-{draft.id}/")
+    assert j["path"] == j["url"].rsplit("/", 1)[-1]
+    saved = store.config.media_dir / f"mermaid-draft-{draft.id}" / j["path"]
+    assert saved.read_bytes() == payload
+
+
+def test_mermaid_image_rejects_empty_file(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    r = client.post(f"/api/draft/{draft.id}/mermaid-image",
+                    files={"file": ("chart.png", b"", "image/png")})
+    assert r.status_code == 400
+    j = r.json()
+    assert j["ok"] is False
+    assert j["error"] == "empty file"
+
+
+def test_mermaid_image_falls_back_to_png_extension(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    r = client.post(f"/api/draft/{draft.id}/mermaid-image",
+                    files={"file": ("chart.txt", b"\x89PNG", "text/plain")})
+    assert r.status_code == 200
+    assert r.json()["url"].endswith(".png")
 
 
 # ── License gating (free tier) ──────────────────────────────────────────────

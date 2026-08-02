@@ -10,6 +10,7 @@
 // styled output instead of literal directive text.
 
 import type { CSSProperties } from "react";
+import MermaidBlock from "../components/MermaidBlock";
 
 // Flatten an mdast node's text content (soft breaks -> \n).
 function _nodeText(n: any): string {
@@ -486,6 +487,23 @@ const _VIDEO_STYLE: CSSProperties = {
 
 // Extra react-markdown component overrides used by the live preview.
 export const previewComponents = {
+  // A fenced ```mermaid block renders as a live diagram instead of raw
+  // source. The pipeline asks models to insert diagrams into search/series
+  // drafts, so the preview must show them rendered. react-markdown v9 renders
+  // fenced code as <pre><code class="language-...">; intercept the <pre> and
+  // swap the whole block for MermaidBlock (the copy button injected by
+  // @uiw/react-markdown-preview is useless on a rendered diagram).
+  pre: ({ children }: any) => {
+    const codeEl = Array.isArray(children) ? children[0] : children;
+    const cls = codeEl?.props?.className;
+    if (typeof cls === "string" && /language-mermaid/i.test(cls)) {
+      const text = Array.isArray(codeEl.props.children)
+        ? codeEl.props.children.join("")
+        : String(codeEl.props.children ?? "");
+      return <MermaidBlock code={text} />;
+    }
+    return <pre>{children}</pre>;
+  },
   // Backward-compatible repair for drafts where a model emitted
   // `![](clip.mp4)`. Markdown has no video-image syntax, so render direct
   // video files as players instead of broken <img> elements.

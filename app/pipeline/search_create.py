@@ -7,13 +7,16 @@ import re
 from typing import Callable
 from urllib.parse import urlsplit
 
+from app.config import Config
 from app.llm.base import LLMProvider, Message
 from app.models import Article, Draft
 from app.pipeline.orchestrator import filter_by_age
 from app.pipeline.relevance import filter_relevant
 from app.pipeline.rewriter import _extract_json
 from app.pipeline.sanitizer import sanitize_draft
-from app.pipeline.synthesizer import synthesize
+from app.pipeline.localize import localize_reference_images
+from app.pipeline.synthesizer import (
+    expand_image_refs, referenced_images, synthesize)
 from app.sources.dedup import dedup, dedup_near_content
 from app.sources.scraper import scrape_single
 from app.sources.web_search import (
@@ -388,6 +391,7 @@ def run_search_create(store, provider: LLMProvider,
                       promotion_footer: str = "",
                       seo_tags_enabled: bool = True,
                       sensitive_words: set[str] | None = None,
+                      config: Config | None = None,
                       progress: ProgressCallback | None = None,
                       should_stop: Callable[[], bool] | None = None) -> dict:
     options.validate()
@@ -435,6 +439,20 @@ def run_search_create(store, provider: LLMProvider,
         style=style, lang=options.lang,
         promotion_footer=promotion_footer,
         seo_tags_enabled=seo_tags_enabled)
+
+    # 模型可能用 [[IMG:N]] 引用了参考资料的配图：把被引用的图片下载到本地
+    # （data/media/），再把占位符展开为 ![](/media/...) 路径。
+    if config is not None:
+        refs = referenced_images(result.body_md, saved_articles)
+        if refs:
+            _emit(progress, "synthesize",
+                  f"正在本地化正文引用的 {len(refs)} 张参考配图…", stats=stats)
+            local_map = localize_reference_images(
+                refs, config,
+                progress=lambda m: _emit(
+                    progress, "synthesize", f"参考配图 {m}", stats=stats))
+            result.body_md = expand_image_refs(
+                result.body_md, saved_articles, local_map)
 
     _check_cancel(should_stop)
     _emit(progress, "fact_check", "多源事实校验完成，正在保存草稿…",

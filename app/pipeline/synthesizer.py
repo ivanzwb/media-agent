@@ -11,6 +11,7 @@ from app.pipeline.rewriter import (
 
 _SOURCE_CHARS = 2500
 _TOTAL_SOURCE_CHARS = 18000
+_MAX_REF_IMAGES = 12  # 参考资料配图清单上限，与 _MAX_IMG 对齐
 
 
 @dataclass
@@ -21,7 +22,8 @@ class SynthesisResult:
     flagged_claims: list[str] = field(default_factory=list)
 
 
-def _source_block(articles: list[Article]) -> str:
+def _source_block(articles: list[Article],
+                  include_images: bool = False) -> str:
     blocks: list[str] = []
     used = 0
     for index, article in enumerate(articles, 1):
@@ -31,13 +33,88 @@ def _source_block(articles: list[Article]) -> str:
         content = (article.content_md or article.raw_summary or "")[
             :min(_SOURCE_CHARS, remaining)]
         used += len(content)
-        blocks.append(
+        block = (
             f"[{index}] 标题：{article.title}\n"
             f"来源：{article.source_name}\n"
             f"URL：{article.url}\n"
             f"正文：\n{content}"
         )
+        if include_images:
+            imgs = [u for u in (article.images or [])
+                    if u.startswith(("http://", "https://"))][:_MAX_REF_IMAGES]
+            if imgs:
+                block += "\n配图：\n" + "\n".join(
+                    f"- 图{i}（{u}）" for i, u in enumerate(imgs, 1))
+        blocks.append(block)
     return "\n\n---\n\n".join(blocks)
+
+
+_IMG_REF_RE = re.compile(r"\[\[IMG:(\d+)\]\]")
+
+
+def _image_manifest(articles: list[Article]) -> list[str]:
+    """Ordered list of http(s) image URLs across articles — the same order the
+    model sees in the source block's 配图 lists (图1..图N per article)."""
+    manifest: list[str] = []
+    for article in articles:
+        for u in (article.images or []):
+            if u.startswith(("http://", "https://")):
+                manifest.append(u)
+    return manifest
+
+
+def referenced_images(body_md: str, articles: list[Article]) -> list[str]:
+    """Image URLs actually referenced by [[IMG:N]] placeholders in body_md."""
+    manifest = _image_manifest(articles)
+    refs: list[str] = []
+    for m in _IMG_REF_RE.finditer(body_md):
+        try:
+            n = int(m.group(1))
+        except ValueError:
+            continue
+        if 0 <= n < len(manifest):
+            url = manifest[n]
+            if url not in refs:
+                refs.append(url)
+    return refs
+
+
+def expand_image_refs(body_md: str, articles: list[Article],
+                      local_map: dict[str, str]) -> str:
+    """Replace [[IMG:N]] with ![](<local web path>) using an old→new URL map.
+    Placeholders with no local copy (or out of range) are left as-is."""
+    manifest = _image_manifest(articles)
+
+    def _repl(m: re.Match) -> str:
+        try:
+            n = int(m.group(1))
+        except ValueError:
+            return m.group(0)
+        if not (0 <= n < len(manifest)):
+            return m.group(0)
+        new = local_map.get(manifest[n])
+        if not new:
+            return m.group(0)
+        return f"![]({new})"
+
+    return _IMG_REF_RE.sub(_repl, body_md)
+
+
+def _visual_instruction(has_images: bool) -> str:
+    parts = [
+        "### 可视化（按需）",
+        "如果适合，正文可包含：",
+        "- Mermaid 流程图：用 ```mermaid 代码围栏包裹，如 flowchart 或"
+        " sequenceDiagram，节点文本用简短中文，避免复杂子图语法，确保围栏闭合。",
+    ]
+    if has_images:
+        parts.append(
+            "- 引用资料配图：在正文需要配图的位置单独成行写 [[IMG:N]]，"
+            "N 从 0 开始，对应参考资料中「配图」列表的顺序（图1→[[IMG:0]]）。"
+            "只引用与上下文相关的图，不要为凑数而引用。"
+        )
+    parts.append("没有合适的图或图无助于表达时，不要强行插入。")
+    return "\n".join(parts)
 
 
 def _coerce_citations(value, source_count: int) -> list[dict]:
@@ -185,7 +262,8 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
                *, style=None, lang: str = "zh",
                promotion_footer: str = "",
                seo_tags_enabled: bool = True,
-               context_note: str = "") -> SynthesisResult:
+               context_note: str = "",
+               include_images: bool = True) -> SynthesisResult:
     if len(articles) < 2:
         raise ValueError("多源综合至少需要 2 篇有效参考资料")
 
@@ -205,10 +283,14 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
     }.get(lang, "简体中文")
     guidance = _style_guidance(style)
     examples = _style_examples(style)
+    has_images = include_images and any(
+        u.startswith(("http://", "https://")) for a in articles
+        for u in (a.images or []))
     content_rules = "\n\n".join(filter(None, [
         f"### 写作风格\n{guidance}" if guidance else "",
         examples,
         _series_context_instruction(context_note),
+        _visual_instruction(has_images),
         _promotion_instruction(promotion_footer),
         _seo_instruction(seo_tags_enabled),
     ]))
@@ -220,11 +302,12 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
         "只输出 JSON 对象，字段：\n"
         '- "title_candidates": 3 个不夸大的候选标题\n'
         '- "body_md": Markdown 正文，关键事实后使用 [1]、[2] 等引用标记；'
-        "正文中不要出现任何链接或网址\n"
+        "正文中不要出现任何链接或网址；"
+        "Mermaid 流程图必须用 ```mermaid 代码围栏包裹\n"
         '- "citations": [{"claim":"正文中的关键事实",'
         '"source_indexes":[1,2],"quote":"可选的原文短句"}]\n'
         "不要输出代码围栏或额外说明。\n\n"
-        f"参考资料：\n{_source_block(articles)}"
+        f"参考资料：\n{_source_block(articles, include_images=has_images)}"
     )
 
     parsed = None

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import html
 import mimetypes
 import os
@@ -246,6 +247,36 @@ def localize_article(article: Article, config: Config, progress=None,
             emit(f"正文链接已更新 {replaced} 处")
 
     return article
+
+
+def localize_reference_images(urls: list[str], config: Config, progress=None,
+                              source_url: str | None = None,
+                              max_images: int = 12) -> dict[str, str]:
+    """Download a set of reference image URLs into data/media/<folder>/ and
+    return a map {original_url: /media/<folder>/<name>} for the URLs that were
+    localized (already-local or failed URLs are excluded from the map).
+
+    Used to materialize the images a draft's [[IMG:N]] placeholders reference.
+    """
+    emit = progress or _noop
+    urls = [u for u in (urls or []) if u][:max_images]
+    if not urls:
+        return {}
+    # Stable folder per URL set: same references resolve to the same folder.
+    folder = hashlib.sha1(
+        "|".join(sorted(urls)).encode("utf-8")).hexdigest()[:16]
+    dest = config.media_dir / folder
+    dest.mkdir(parents=True, exist_ok=True)
+    workers = config.workers
+    emit(f"下载参考配图 {len(urls)} 张（并发 {workers}）")
+    local = _download_set(urls, dest, folder, _download_image, workers,
+                          emit, source_url=source_url)
+    mapping: dict[str, str] = {}
+    for old, new in zip(urls, local):
+        if new != old and _is_local(new):
+            mapping[old] = new
+    emit(f"参考配图本地化完成 {len(mapping)}/{len(urls)} 张")
+    return mapping
 
 
 def localize_one(article_id: int, store, config: Config, progress=None,

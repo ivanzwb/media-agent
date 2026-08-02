@@ -4,7 +4,8 @@ from app.config import Config
 from app.models import Article
 from app.pipeline import localize as loc
 from app.pipeline.localize import (
-    localize_article, local_media_file, normalize_url)
+    localize_article, localize_reference_images, local_media_file,
+    normalize_url)
 
 
 def test_normalize_url_handles_unicode_and_scheme():
@@ -256,3 +257,93 @@ def test_content_video_extraction():
     vids = content_videos(body)
     assert "https://www.youtube.com/embed/abc" in vids
     assert "https://cdn/clip.mp4" in vids
+
+
+def test_localize_reference_images_downloads_and_maps(tmp_path, monkeypatch):
+    cfg = Config(data_dir=tmp_path)
+    cfg.ensure_dirs()
+    monkeypatch.setattr(loc.httpx, "get", lambda *a, **k: _Resp())
+
+    urls = ["https://img.cdn/a.png", "https://img.cdn/b.png"]
+    mapping = localize_reference_images(urls, cfg)
+
+    assert set(mapping) == set(urls)
+    folders = set()
+    for old, new in mapping.items():
+        assert new.startswith("/media/") and new != old
+        p = local_media_file(new, cfg)
+        assert p is not None and p.exists()
+        folders.add(p.parent)
+    assert len(folders) == 1  # one sha1-derived folder for the whole set
+
+
+def test_localize_reference_images_empty_and_blank_returns_empty(tmp_path):
+    cfg = Config(data_dir=tmp_path)
+    cfg.ensure_dirs()
+    assert localize_reference_images([], cfg) == {}
+    assert localize_reference_images([""], cfg) == {}
+
+
+def test_localize_reference_images_caps_at_max_images(tmp_path, monkeypatch):
+    cfg = Config(data_dir=tmp_path)
+    cfg.ensure_dirs()
+    calls: list[tuple[list[str], str]] = []
+
+    def recording_download_set(urls, dest, folder, fn, workers, emit,
+                               source_url=None):
+        calls.append((list(urls), folder))
+        return _fake_download_set(urls, dest, folder, fn, workers, emit,
+                                  source_url=source_url)
+
+    monkeypatch.setattr(loc, "_download_set", recording_download_set)
+    urls = ["https://img.cdn/a.png", "", "https://img.cdn/b.png",
+            "https://img.cdn/c.png", "https://img.cdn/d.png"]
+    mapping = localize_reference_images(urls, cfg, max_images=2)
+
+    used, folder = calls[0]
+    assert used == ["https://img.cdn/a.png", "https://img.cdn/b.png"]
+    assert mapping == {
+        "https://img.cdn/a.png": f"/media/{folder}/dl-1",
+        "https://img.cdn/b.png": f"/media/{folder}/dl-2",
+    }
+
+
+def test_localize_reference_images_excludes_failed_and_local(
+        tmp_path, monkeypatch):
+    cfg = Config(data_dir=tmp_path)
+    cfg.ensure_dirs()
+
+    def flaky_get(url, *a, **k):
+        if "broken" in url:
+            raise RuntimeError("403")
+        return _Resp()
+
+    monkeypatch.setattr(loc.httpx, "get", flaky_get)
+    urls = ["https://img.cdn/ok.png", "https://img.cdn/broken.png",
+            "/media/already/local.png"]
+    mapping = localize_reference_images(urls, cfg)
+
+    assert set(mapping) == {"https://img.cdn/ok.png"}
+    assert mapping["https://img.cdn/ok.png"].startswith("/media/")
+
+
+def test_localize_reference_images_folder_stable_across_order(
+        tmp_path, monkeypatch):
+    cfg = Config(data_dir=tmp_path)
+    cfg.ensure_dirs()
+    folders: list[str] = []
+
+    def recording_download_set(urls, dest, folder, fn, workers, emit,
+                               source_url=None):
+        folders.append(folder)
+        return _fake_download_set(urls, dest, folder, fn, workers, emit,
+                                  source_url=source_url)
+
+    monkeypatch.setattr(loc, "_download_set", recording_download_set)
+    urls = ["https://img.cdn/a.png", "https://img.cdn/b.png"]
+    localize_reference_images(urls, cfg)
+    localize_reference_images(list(reversed(urls)), cfg)
+
+    assert len(folders) == 2
+    assert folders[0] == folders[1]
+    assert len(folders[0]) == 16

@@ -13,7 +13,9 @@ from app.models import Article
 from app.pipeline.search_create import (
     SearchCreateCancelled, SearchCreateOptions, expand_search_queries,
     rank_by_topic, run_search_create, scrape_search_hits)
-from app.pipeline.synthesizer import synthesize
+from app.pipeline.synthesizer import (
+    _image_manifest, _visual_instruction, expand_image_refs, referenced_images,
+    synthesize)
 from app.sources.web_search import (
     SearchHit, filter_hits_for_query, merge_search_hits, normalize_search_url,
     search_baidu_text, search_bing_text, search_ddgs_text, search_query)
@@ -446,6 +448,88 @@ def test_synthesize_uses_content_style_settings_and_examples():
     assert "**标签**：#AI #智能体" in result.body_md
 
 
+def test_image_manifest_lists_http_images_across_articles_in_order():
+    rows = [article(1), article(2)]
+    rows[0].images = ["https://img.cdn/a.png", "/media/keep.png"]
+    rows[1].images = ["https://img.cdn/b.jpg", "ftp://x/y.png"]
+    assert _image_manifest(rows) == [
+        "https://img.cdn/a.png", "https://img.cdn/b.jpg"]
+
+
+def test_referenced_images_returns_used_in_range_deduped():
+    rows = [article(1), article(2)]
+    rows[0].images = ["https://img.cdn/a.png", "https://img.cdn/b.png"]
+    rows[1].images = ["https://img.cdn/c.png"]
+    body = "见 [[IMG:0]] 与 [[IMG:0]]，还有 [[IMG:2]] 和越界 [[IMG:9]]。"
+    assert referenced_images(body, rows) == [
+        "https://img.cdn/a.png", "https://img.cdn/c.png"]
+
+
+def test_expand_image_refs_replaces_mapped_and_keeps_others():
+    rows = [article(1), article(2)]
+    rows[0].images = ["https://img.cdn/a.png", "https://img.cdn/b.png"]
+    body = "[[IMG:0]] 与 [[IMG:1]]，越界 [[IMG:9]]。"
+    local_map = {"https://img.cdn/a.png": "/media/hash/dl-1.png"}
+    assert expand_image_refs(body, rows, local_map) == (
+        "![](/media/hash/dl-1.png) 与 [[IMG:1]]，越界 [[IMG:9]]。")
+
+
+def test_visual_instruction_always_asks_for_mermaid_fence():
+    assert "```mermaid" in _visual_instruction(True)
+    assert "```mermaid" in _visual_instruction(False)
+
+
+def test_visual_instruction_teaches_img_refs_only_when_images_exist():
+    assert "[[IMG:N]]" in _visual_instruction(True)
+    assert "[[IMG:N]]" not in _visual_instruction(False)
+
+
+def test_synthesize_prompt_teaches_mermaid_and_img_refs():
+    class CaptureProvider(MockProvider):
+        def __init__(self):
+            super().__init__([
+                '{"title_candidates":["标题"],"body_md":"## 正文\\n事实 [1]。"}',
+                '{"flagged_claims":[]}',
+            ])
+            self.calls = []
+
+        def chat(self, messages, **opts):
+            self.calls.append(messages)
+            return super().chat(messages, **opts)
+
+    rows = [article(1), article(2)]
+    rows[0].images = ["https://img.cdn/a.png", "https://img.cdn/b.png"]
+    rows[1].images = ["https://img.cdn/c.png"]
+    provider = CaptureProvider()
+    synthesize("AI", rows, provider)
+    prompt = provider.calls[0][-1].content
+    assert "```mermaid" in prompt
+    assert "[[IMG:N]]" in prompt
+    assert "配图：" in prompt
+    assert "- 图1（https://img.cdn/a.png）" in prompt
+
+
+def test_synthesize_prompt_without_images_omits_img_refs():
+    class CaptureProvider(MockProvider):
+        def __init__(self):
+            super().__init__([
+                '{"title_candidates":["标题"],"body_md":"## 正文\\n事实 [1]。"}',
+                '{"flagged_claims":[]}',
+            ])
+            self.calls = []
+
+        def chat(self, messages, **opts):
+            self.calls.append(messages)
+            return super().chat(messages, **opts)
+
+    provider = CaptureProvider()
+    synthesize("AI", [article(1), article(2)], provider)
+    prompt = provider.calls[0][-1].content
+    assert "```mermaid" in prompt
+    assert "[[IMG:N]]" not in prompt
+    assert "配图：" not in prompt
+
+
 def test_run_search_create_mock_end_to_end(tmp_path, monkeypatch):
     config = Config(data_dir=tmp_path)
     config.ensure_dirs()
@@ -485,3 +569,87 @@ def test_run_search_create_mock_end_to_end(tmp_path, monkeypatch):
     assert meta["sensitive_hits"] == ["最佳×1"]
     assert result["stats"]["time_range_relaxed"] is True
     assert any("自动扩大到不限时间" in event["detail"] for event in events)
+
+
+class _Resp:
+    content = b"\x89PNG\r\n\x1a\nfake"
+    headers = {"content-type": "image/png"}
+
+    def raise_for_status(self):
+        ...
+
+
+def _wire_search_e2e(monkeypatch, rows):
+    monkeypatch.setattr(
+        "app.pipeline.search_create.search_queries",
+        lambda *args, **kwargs: [
+            SearchHit("one", rows[0].url), SearchHit("two", rows[1].url)])
+    monkeypatch.setattr(
+        "app.pipeline.search_create.scrape_search_hits",
+        lambda *args, **kwargs: rows)
+    monkeypatch.setattr("app.store._web_image_for_title", lambda *args: None)
+
+
+def _img_search_script():
+    return [
+        '{"queries":["AI research"]}',
+        "[0,1]",
+        '{"scores":[{"index":0,"score":90},{"index":1,"score":80}]}',
+        '{"title_candidates":["综合标题"],'
+        '"body_md":"## 正文\\n图 [[IMG:0]] 与 [[IMG:2]]，越界 [[IMG:9]]。\\n'
+        '事实 [1] 和事实 [2]。",'
+        '"citations":[{"claim":"事实","source_indexes":[1,2]}]}',
+        '{"flagged_claims":[]}',
+    ]
+
+
+def test_run_search_create_localizes_referenced_images(tmp_path, monkeypatch):
+    config = Config(data_dir=tmp_path)
+    config.ensure_dirs()
+    conn = connect(config.db_path)
+    init_db(conn)
+    store = Store(conn, config)
+    rows = [article(1, days_old=365), article(2, days_old=365)]
+    rows[0].images = ["https://img.cdn/a.png", "https://img.cdn/b.png"]
+    rows[1].images = ["https://img.cdn/c.png"]
+    _wire_search_e2e(monkeypatch, rows)
+    monkeypatch.setattr("app.pipeline.localize.httpx.get",
+                        lambda *a, **k: _Resp())
+
+    result = run_search_create(
+        store, MockProvider(_img_search_script()),
+        SearchCreateOptions(topic="AI", time_range_days=30, ref_count=5),
+        config=config)
+
+    assert result["draft_id"]
+    body = store.read_draft_body(result["draft_id"])["body_md"]
+    assert "[[IMG:0]]" not in body
+    assert "[[IMG:2]]" not in body
+    assert "[[IMG:9]]" in body        # out-of-range placeholder is kept
+    assert body.count("![](/media/") == 2
+    # the two referenced images really landed under data/media/<hash>/
+    files = [p for p in config.media_dir.glob("*/*") if p.is_file()]
+    assert len(files) == 2
+
+
+def test_run_search_create_without_config_keeps_img_placeholders(
+        tmp_path, monkeypatch):
+    config = Config(data_dir=tmp_path)
+    config.ensure_dirs()
+    conn = connect(config.db_path)
+    init_db(conn)
+    store = Store(conn, config)
+    rows = [article(1, days_old=365), article(2, days_old=365)]
+    rows[0].images = ["https://img.cdn/a.png", "https://img.cdn/b.png"]
+    rows[1].images = ["https://img.cdn/c.png"]
+    _wire_search_e2e(monkeypatch, rows)
+
+    result = run_search_create(
+        store, MockProvider(_img_search_script()),
+        SearchCreateOptions(topic="AI", time_range_days=30, ref_count=5))
+
+    assert result["draft_id"]
+    body = store.read_draft_body(result["draft_id"])["body_md"]
+    assert "[[IMG:0]]" in body
+    assert "[[IMG:2]]" in body
+    assert "![](/media/" not in body

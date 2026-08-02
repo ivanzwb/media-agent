@@ -683,3 +683,39 @@ def test_retry_reuses_the_series_own_search_settings(tmp_path, monkeypatch):
 
     assert list(seen[0].engines) == ["baidu", "bing"]
     assert seen[0].ref_count == 10
+
+
+def test_chapters_localize_referenced_images(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    for index, row in enumerate(articles_by_url.values()):
+        row.images = [f"https://img.cdn/{index}-1.png",
+                      f"https://img.cdn/{index}-2.png",
+                      f"https://img.cdn/{index}-3.png"]
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+    monkeypatch.setattr(
+        "app.pipeline.series_create.localize_reference_images",
+        lambda urls, config, **kw: {u: f"/media/refs/{i}.png"
+                                    for i, u in enumerate(urls)})
+
+    class ImgProvider(ScriptedProvider):
+        def chat(self, messages, **opts):
+            prompt = messages[-1].content
+            if "title_candidates" in prompt and "系列文章提纲" not in prompt:
+                return ('{"title_candidates":["成稿"],'
+                        '"body_md":"## 小节\\n图 [[IMG:0]] 与 [[IMG:2]]。'
+                        '\\n\\n正文 [1] 与 [2]。",'
+                        '"citations":[]}')
+            return super().chat(messages, **opts)
+
+    result = run_series_create(store, ImgProvider(), options(),
+                               config=store.config)
+
+    assert result["status"] == "done"
+    assert len(result["draft_ids"]) == 3
+    body = store.read_draft_body(result["draft_ids"][0])["body_md"]
+    assert "[[IMG:0]]" not in body
+    assert "[[IMG:2]]" not in body
+    assert "![](/media/refs/0.png)" in body
+    assert "![](/media/refs/1.png)" in body

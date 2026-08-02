@@ -16,6 +16,7 @@ import { api, getJson, postForm } from "../api/client";
 import { useLocalState } from "../api/hooks";
 import SceneEditor from "../components/SceneEditor";
 import { remarkAppDirectives, previewComponents } from "../lib/mdPreview";
+import { convertMermaidInMarkdown, dataUrlToFile } from "../lib/mermaidExport";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -517,6 +518,24 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     void poll();
   }
 
+  // Render every ```mermaid fence in `source` to PNG, upload each to the
+  // draft's mermaid-image endpoint, and return markdown where the fences are
+  // replaced with ![](/media/...) links. The WeChat / styled-html pipelines
+  // then carry the images through the normal media path — their
+  // markdown_to_html has no code-fence handling, so raw fences would publish
+  // as garbage. Throws with a descriptive message on the first failure
+  // (fence-free drafts return `count: 0` with no mermaid module loaded).
+  async function withMermaidPngs(source: string): Promise<{ markdown: string; count: number }> {
+    return convertMermaidInMarkdown(source, async (pngDataUrl) => {
+      const file = dataUrlToFile(pngDataUrl);
+      const r = await postForm<{ ok: boolean; url?: string; error?: string }>(
+        `/api/draft/${data.id}/mermaid-image`,
+        { file });
+      if (!r.ok || !r.url) throw new Error(r.error || "mermaid 图片上传失败");
+      return r.url;
+    });
+  }
+
   async function publishWeChat(mode: "draft" | "publish") {
     // A ref closes the same-render double-click window before React state
     // updates; the backend independently coalesces concurrent requests.
@@ -526,9 +545,10 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     message.loading({ content: "正在保存并准备微信推送…", key: "wx", duration: 0 });
     try {
       await onSave();
+      const { markdown: bodyMd, count } = await withMermaidPngs(body);
       const r = await postForm<{ ok: boolean; running: boolean; mode: "draft" | "publish"; error?: string }>(
         `/drafts/${data.id}/publish/wechat`,
-        { mode, kind: "article", theme: "default" });
+        { mode, kind: "article", theme: "default", ...(count > 0 ? { body_md: bodyMd } : {}) });
       if (!r.ok) throw new Error(r.error || "微信推送启动失败");
       startWeChatPolling(r.mode || mode);
     } catch (e: any) {
@@ -542,7 +562,10 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
 
   // theme selector removed on trunk — the component system replaces it.
   async function copyStyledHtml(plat: "wechat" | "toutiao", openUrl?: string) {
-    const r = await postForm<{ ok: boolean; html?: string; error?: string }>(`/drafts/${data.id}/styled-html`, { platform: plat, theme: "default" });
+    // Same mermaid → PNG handling as publishWeChat: raw fences would render
+    // as garbage in the copied HTML (markdown_to_html has no fence handling).
+    const { markdown: bodyMd, count } = await withMermaidPngs(body);
+    const r = await postForm<{ ok: boolean; html?: string; error?: string }>(`/drafts/${data.id}/styled-html`, { platform: plat, theme: "default", ...(count > 0 ? { body_md: bodyMd } : {}) });
     if (!r.ok || !r.html) { message.error(r.error || "生成失败"); return; }
     try {
       if ((window as any).ClipboardItem) {

@@ -21,12 +21,15 @@ from urllib.parse import urlsplit
 
 from app.llm.base import LLMProvider, Message
 from app.models import Article, Draft
+from app.config import Config
 from app.pipeline.rewriter import _extract_json
 from app.pipeline.sanitizer import sanitize_draft
 from app.pipeline.search_create import (
     ProgressCallback, SearchCreateCancelled, SearchCreateOptions, _check_cancel,
     _emit, _topic_search_terms, _url_key, collect_references, search_queries)
-from app.pipeline.synthesizer import synthesize
+from app.pipeline.localize import localize_reference_images
+from app.pipeline.synthesizer import (
+    expand_image_refs, referenced_images, synthesize)
 from app.sources.web_search import DEFAULT_SEARCH_ENGINES, SearchHit
 
 logger = logging.getLogger(__name__)
@@ -550,6 +553,7 @@ class _ChapterContext:
     seo_tags_enabled: bool = True
     sensitive_words: set[str] = field(default_factory=set)
     chapter_titles: list[str] = field(default_factory=list)
+    config: Config | None = None
 
 
 def _write_chapter(context: _ChapterContext, chapter: dict, chapter_id: int, *,
@@ -598,6 +602,23 @@ def _write_chapter(context: _ChapterContext, chapter: dict, chapter_id: int, *,
         # Only what the reader has read by this point in the series.
         context_note=_chapter_context(
             [item for item in written if item["order"] < index], options.lang))
+
+    # 模型可能用 [[IMG:N]] 引用了参考资料的配图：把被引用的图片下载到本地
+    # （data/media/），再把占位符展开为 ![](/media/...) 路径。
+    if context.config is not None:
+        refs = referenced_images(result.body_md, saved_articles)
+        if refs:
+            _emit(progress, "write",
+                  f"第 {index}/{total} 章《{title}》：正在本地化 "
+                  f"{len(refs)} 张参考配图…", current=index, total=total,
+                  stats=stats)
+            local_map = localize_reference_images(
+                refs, context.config,
+                progress=lambda m: _emit(
+                    progress, "write", f"参考配图 {m}",
+                    current=index, total=total, stats=stats))
+            result.body_md = expand_image_refs(
+                result.body_md, saved_articles, local_map)
 
     primary = saved_articles[0]
     body_md = _series_nav_note(
@@ -715,6 +736,7 @@ def run_series_chapters(store, provider: LLMProvider, series_id: int, *,
                         seo_tags_enabled: bool = True,
                         sensitive_words: set[str] | None = None,
                         workers: int = 6, proxy: str | None = None,
+                        config: Config | None = None,
                         stats: dict | None = None,
                         progress: ProgressCallback | None = None,
                         should_stop: Callable[[], bool] | None = None) -> dict:
@@ -755,7 +777,8 @@ def run_series_chapters(store, provider: LLMProvider, series_id: int, *,
         search_options=search_options, series_id=series_id, style=style,
         promotion_footer=promotion_footer, seo_tags_enabled=seo_tags_enabled,
         sensitive_words=sensitive_words or set(),
-        chapter_titles=[row["title"] for row in rows])
+        chapter_titles=[row["title"] for row in rows],
+        config=config)
 
     for row in targets:
         index = row["chapter_order"]
@@ -810,6 +833,7 @@ def run_series_create(store, provider: LLMProvider,
                       promotion_footer: str = "",
                       seo_tags_enabled: bool = True,
                       sensitive_words: set[str] | None = None,
+                      config: Config | None = None,
                       progress: ProgressCallback | None = None,
                       should_stop: Callable[[], bool] | None = None) -> dict:
     """Plan and write a series in one go, without stopping for review."""
@@ -834,7 +858,7 @@ def run_series_create(store, provider: LLMProvider,
         store, provider, series_id, seeds=seeds, style=style,
         promotion_footer=promotion_footer, seo_tags_enabled=seo_tags_enabled,
         sensitive_words=sensitive_words, workers=options.workers,
-        proxy=options.proxy, stats=stats, progress=progress,
+        proxy=options.proxy, config=config, stats=stats, progress=progress,
         should_stop=should_stop)
 
 

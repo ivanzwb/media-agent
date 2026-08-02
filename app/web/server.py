@@ -2813,6 +2813,7 @@ def create_app(config: Config | None = None,
                     promotion_footer=run_config.promotion_footer or "",
                     seo_tags_enabled=run_config.seo_tags_enabled,
                     sensitive_words=load_words(run_config),
+                    config=run_config,
                     progress=progress, should_stop=cancelled)
                 draft_id = result.get("draft_id")
                 with search_create_lock:
@@ -3074,6 +3075,7 @@ def create_app(config: Config | None = None,
                 promotion_footer=run_config.promotion_footer or "",
                 seo_tags_enabled=run_config.seo_tags_enabled,
                 sensitive_words=load_words(run_config),
+                config=run_config,
                 progress=progress, should_stop=cancelled)
 
         _start_series_job("series_create", options.style_id, run)
@@ -3382,6 +3384,7 @@ def create_app(config: Config | None = None,
                 seo_tags_enabled=run_config.seo_tags_enabled,
                 sensitive_words=load_words(run_config),
                 workers=run_config.workers, proxy=run_config.fetch_proxy,
+                config=run_config,
                 progress=progress, should_stop=cancelled)
 
         _start_series_job("series_write", row["style_id"], run)
@@ -3475,6 +3478,7 @@ def create_app(config: Config | None = None,
                 seo_tags_enabled=run_config.seo_tags_enabled,
                 sensitive_words=load_words(run_config),
                 workers=run_config.workers, proxy=run_config.fetch_proxy,
+                config=run_config,
                 progress=progress, should_stop=cancelled)
 
         _start_series_job("series_chapter_retry", row["style_id"], run)
@@ -3843,6 +3847,39 @@ def create_app(config: Config | None = None,
 
         return {"ok": True, "path": name,
                 "url": f"/videos/draft-{draft_id}/{name}"}
+
+    @app.post("/api/draft/{draft_id}/mermaid-image")
+    async def api_draft_mermaid_image(draft_id: int,
+                                      file: UploadFile = File(...)):
+        """Save a browser-rendered mermaid PNG for a draft's 微信 export.
+
+        The frontend renders ```mermaid fences to PNG in the browser (see
+        spider-media's MermaidConverter), uploads them here, then substitutes
+        ![](/media/...) for the fence before publishing. Files land in
+        data/media/mermaid-draft-{id}/, which the /media/{folder}/{name} route
+        and the 微信 publish path (local_media_file) both serve.
+        """
+        import uuid
+        from fastapi.responses import JSONResponse
+
+        out_dir = config.media_dir / f"mermaid-draft-{draft_id}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        ext = (Path(file.filename or "image.png").suffix
+               if file.filename else ".png")
+        if ext.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+            ext = ".png"
+        name = f"mermaid-{uuid.uuid4().hex[:12]}{ext}"
+        dest = out_dir / name
+
+        content = await file.read()
+        if not content:
+            return JSONResponse({"ok": False, "error": "empty file"},
+                                status_code=400)
+        dest.write_bytes(content)
+
+        return {"ok": True, "path": name,
+                "url": f"/media/mermaid-draft-{draft_id}/{name}"}
 
     @app.post("/api/script/{draft_id}/ai-bg")
     async def api_ai_bg(draft_id: int, prompt: str = Form(...)):
@@ -4358,12 +4395,15 @@ def create_app(config: Config | None = None,
     @app.post("/drafts/{draft_id}/publish/wechat")
     def draft_publish_wechat(draft_id: int, mode: str = Form("draft"),
                              kind: str = Form("article"),
-                             theme: str = Form("default")):
+                             theme: str = Form("default"),
+                             body_md: str = Form("")):
         """One-click publish a draft to a WeChat Official Account.
 
         kind=article: 图文 -> mode "draft" (草稿箱) or "publish" (草稿+发布).
         kind=video:   upload the generated mp4 to 素材库.
         theme: visual formatting theme for the 图文.
+        body_md: optional pre-rendered body override (browser substitutes
+        mermaid fences with PNG images before publishing).
         """
         err = LG.require(license_mgr, LF.PLATFORM_SYNC)
         if err:
@@ -4410,6 +4450,10 @@ def create_app(config: Config | None = None,
                 worker_meta = worker_store.read_draft_body(draft_id)
                 if not worker_meta:
                     raise RuntimeError("draft not found")
+                # Browser-rendered body (mermaid fences already replaced with
+                # PNG images) takes precedence over the stored draft body.
+                if body_md:
+                    worker_meta = {**worker_meta, "body_md": body_md}
                 if kind == "video":
                     result = upload_video(
                         client, run_config, draft_id, worker_meta)
@@ -4462,10 +4506,15 @@ def create_app(config: Config | None = None,
 
     @app.post("/drafts/{draft_id}/styled-html")
     def draft_styled_html(draft_id: int, platform: str = Form("wechat"),
-                          theme: str = Form("default")):
+                          theme: str = Form("default"),
+                          body_md: str = Form("")):
         """Return themed, inline-CSS HTML (spider-media style) for a draft,
         with local images base64-embedded so it can be pasted straight into the
-        平台 editor (used for 头条, and as a manual fallback for 公众号)."""
+        平台 editor (used for 头条, and as a manual fallback for 公众号).
+
+        body_md: optional pre-rendered body override (mermaid fences replaced
+        with PNG images on the browser side).
+        """
         err = LG.require(license_mgr, LF.PLATFORM_SYNC)
         if err:
             return err
@@ -4474,6 +4523,8 @@ def create_app(config: Config | None = None,
         if not meta:
             return JSONResponse({"ok": False, "error": "draft not found"},
                                 status_code=404)
+        if body_md:
+            meta = {**meta, "body_md": body_md}
         run_config = _current_config(store)
         from app.wechat.formatter import render_styled_html, list_themes
         from app.wechat.publish import (
