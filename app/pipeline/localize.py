@@ -73,6 +73,19 @@ _FURNITURE_WORDS = (
     "placeholder", "watermark", "share", "weixin", "wechat",
     "app-download", "appdownload", "download-app", "button", "btn",
     "backtop", "gotop", "jiucuo",
+    "pixel", "beacon", "tracking", "sponsor", "/brands/",
+)
+
+# Tracking pixels are named for their size. Bounded by non-digits so that a
+# resolution like 2021x1080 is not read as one.
+_TRACKING_PIXEL_RE = re.compile(r"(?<!\d)1x1(?!\d)")
+
+# Counters and ad networks answer with an image, so their pixels reach the
+# picture list looking like any other. No path word gives them away.
+_FURNITURE_HOSTS = (
+    "px.ads.", "ads.", "adservice", "doubleclick", "googlesyndication",
+    "google-analytics", "googletagmanager", "scorecardresearch",
+    "omtrdc.net", "hm.baidu.com", "cnzz.com",
 )
 
 # Real article photos are hundreds of pixels on their short side; the icons
@@ -88,9 +101,15 @@ _SVG_VIEWBOX_RE = re.compile(
 
 def is_page_furniture(url: str) -> bool:
     """Does this URL look like site chrome rather than an article picture?"""
+    parts = urlsplit(url)
+    host = parts.netloc.lower()
+    if any(host.startswith(h) or f".{h}" in f".{host}"
+           for h in _FURNITURE_HOSTS):
+        return True
     # The path only: image CDNs carry whole other URLs in the query string.
-    path = urlsplit(url).path.lower()
-    return any(word in path for word in _FURNITURE_WORDS)
+    path = parts.path.lower()
+    return (any(word in path for word in _FURNITURE_WORDS)
+            or bool(_TRACKING_PIXEL_RE.search(path)))
 
 
 def _svg_size(path: Path) -> tuple[float, float] | None:

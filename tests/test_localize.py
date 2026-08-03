@@ -352,6 +352,28 @@ def test_a_downloaded_icon_never_makes_it_into_the_map(tmp_path, monkeypatch):
     assert list(mapping) == ["https://img.cdn/photo.png"]
 
 
+def test_counters_and_sponsor_strips_are_recognised_as_furniture():
+    """统计像素也是用图片应答的，路径上看不出破绽，只能认域名。"""
+    from app.pipeline.localize import is_page_furniture
+
+    assert is_page_furniture(
+        "https://px.ads.linkedin.com/collect/?pid=9956745&fmt=gif")
+    assert is_page_furniture("https://hm.baidu.com/hm.gif?id=1")
+    assert is_page_furniture(
+        "https://www.nvidia.com/content/dam/1x1-00000000.png")
+    assert is_page_furniture("https://0sec.ai/sponsors/aws-startups.png")
+    assert is_page_furniture("https://0sec.ai/brands/trust/hacknation.png")
+
+
+def test_a_resolution_in_the_filename_is_not_a_tracking_pixel():
+    """2021x1080 里也含 1x1，别把真照片当成统计像素。"""
+    from app.pipeline.localize import is_page_furniture
+
+    assert not is_page_furniture("https://img.cdn/photos/2021x1080/lab.jpg")
+    assert not is_page_furniture("https://uploads.site.com/2024/lab.jpg")
+    assert not is_page_furniture("https://downloads.site.com/2024/lab.jpg")
+
+
 def test_a_vector_logo_is_measured_rather_than_waved_through(tmp_path):
     """矢量图 PIL 读不了，尺寸写在标签里：271×32 是文字商标。"""
     from app.pipeline.localize import is_content_image

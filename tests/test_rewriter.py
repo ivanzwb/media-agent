@@ -8,6 +8,7 @@ from app.pipeline.rewriter import (
     _extract_json, _strip_code_fences, _extract_code_fenced_json,
     _repair_json_control_chars, _media_block, _relativize_media,
     _build_manifest, _apply_placeholders, _interleave_missing_images,
+    _prune_body_images,
     _extract_json_field, _extract_json_fallback, _normalize_video_markdown,
 )
 
@@ -260,8 +261,9 @@ def test_rewrite_keeps_inlined_images_in_position():
     assert b.index("pic1.png") < b.index("段落二")
     # video appended by _media_block since LLM didn't include it
     assert "youtube.com/embed/abc" in b
-    # pic2 appended as unused
-    assert "pic2.png" in b
+    # pic2 was left out on purpose — putting it back would override the
+    # rewrite's own choice and land it away from the text it belongs to.
+    assert "pic2.png" not in b
 
 
 def test_inline_content_handles_videos():
@@ -713,8 +715,8 @@ def test_media_block_does_not_treat_fallback_link_as_embed():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# _interleave_missing_images  — position unused images before section
-# headings instead of dumping at the end
+# _interleave_missing_images  — a safety net for a rewrite that came back
+# with no pictures at all, not a way to force every picture back in
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -779,16 +781,106 @@ def test_interleave_missing_images_no_images():
     assert _interleave_missing_images(body, []) == body
 
 
-def test_interleave_missing_images_mixed_missing_and_present():
-    """Only images not in body get interleaved; already-placed images stay."""
+def test_interleave_leaves_a_rewrite_that_chose_its_own_pictures_alone():
+    """留了一张就说明模型做过取舍，把落选的塞回去会打乱顺序、堆成十几张。"""
     body = "## A\n\n![](../../media/x/kept.png)\n\n## B\n\n## C"
     result = _interleave_missing_images(
-        body, ["/media/x/kept.png", "/media/x/missing1.png", "/media/x/missing2.png"])
-    assert result.count("kept.png") == 1  # unchanged
-    assert result.count("missing1.png") == 1
-    assert result.count("missing2.png") == 1
-    # missing before B, missing2 before C (or appended if only 2 headings)
-    assert result.index("missing1.png") > result.index("kept.png")
+        body, ["/media/x/kept.png", "/media/x/missing1.png",
+               "/media/x/missing2.png"])
+
+    assert result == body
+
+
+def test_interleave_hands_back_only_a_few_when_the_rewrite_kept_none():
+    """一张都没留才兜底，而且给三张，不是把十二张全倒进去。"""
+    body = "## A\n\ntext\n\n## B\n\ntext\n\n## C\n\ntext\n\n## D\n\ntext"
+    images = [f"/media/x/p{i}.png" for i in range(8)]
+
+    result = _interleave_missing_images(body, images)
+
+    assert result.count("![](") == 3
+    for i in range(3):
+        assert f"p{i}.png" in result
+    for i in range(3, 8):
+        assert f"p{i}.png" not in result
+
+
+def test_interleave_does_not_hand_back_page_furniture():
+    """兜底也不能把追踪像素、赞助商 logo 塞进正文。"""
+    body = "## A\n\ntext\n\n## B\n\ntext"
+    result = _interleave_missing_images(body, [
+        "https://www.nvidia.com/content/dam/1x1-00000000.png",
+        "https://px.ads.linkedin.com/collect/?pid=9956745&fmt=gif",
+        "https://0sec.ai/sponsors/aws-startups.png",
+    ])
+
+    assert result == body
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _prune_body_images  — repeats, invented links and page chrome
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_prune_drops_a_link_the_model_pieced_together_itself():
+    """两个前缀混着抄，拼出的地址原文没有、打不开，读起来还像重复。"""
+    real = "https://cdn.site.com/67116a97/68780f0b_chart.png"
+    invented = "https://cdn.site.com/67083eaf/68780f0b_chart.png"
+    body = f"开头\n\n![]({real})\n\n中间\n\n![]({invented})\n\n结尾"
+
+    result = _prune_body_images(body, [real, "https://cdn.site.com/67083eaf/a.png"])
+
+    assert real in result
+    assert invented not in result
+
+
+def test_prune_drops_a_hostname_the_model_typed_a_hyphen_into():
+    """真实案例：清单里是 springernature.com，正文抄成了 springer-nature.com。"""
+    real = "https://media.springernature.com/lw685/image/art-1.jpg"
+    body = f"![]({real})\n\n![](https://media.springer-nature.com/lw685/image/art-1.jpg)"
+
+    result = _prune_body_images(body, [real])
+
+    assert result.count("![](") == 1
+    assert "springer-nature.com" not in result
+
+
+def test_prune_keeps_one_copy_of_a_picture_used_twice():
+    body = "![](/media/x/a.png)\n\n正文\n\n![](../../media/x/a.png)"
+
+    result = _prune_body_images(body, ["/media/x/a.png"])
+
+    assert result.count("a.png") == 1
+
+
+def test_prune_leaves_pictures_alone_when_the_source_listed_none():
+    """有些归档的图片只在正文里，front-matter 是空的，这时无从校验。"""
+    body = "![](https://cursor.com/images/slack-plan-preview.png)"
+
+    assert _prune_body_images(body, []) == body
+
+
+def test_prune_takes_out_trackers_and_sponsor_badges():
+    body = ("![](https://www.nvidia.com/content/dam/1x1-00000000.png)\n\n"
+            "![](https://0sec.ai/sponsors/e2b.svg)\n\n"
+            "![](https://0sec.ai/photo-of-the-lab.png)")
+    images = ["https://www.nvidia.com/content/dam/1x1-00000000.png",
+              "https://0sec.ai/sponsors/e2b.svg",
+              "https://0sec.ai/photo-of-the-lab.png"]
+
+    result = _prune_body_images(body, images)
+
+    assert result.count("![](") == 1
+    assert "photo-of-the-lab.png" in result
+
+
+def test_prune_leaves_a_diagram_made_for_the_post():
+    """流程图是为这篇稿子生成的，不在原文清单里，不能当成编造的地址删掉。"""
+    body = "![](/images/diagrams/flow-1.png)\n\n![](https://x.com/a.png)"
+
+    result = _prune_body_images(body, ["https://x.com/a.png"])
+
+    assert "/images/diagrams/flow-1.png" in result
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -930,8 +1022,9 @@ def test_rewrite_through_manifest_flow():
     assert "![](/media/x/fig1.png)" in b
     # fig1 appears before 二、深度内容 (placed by LLM, not appended at end)
     assert b.index("fig1.png") < b.index("深度内容")
-    # fig2 was NOT placed by LLM → appended by _media_block as safety net
-    assert "fig2.png" in b
+    # fig2 was NOT placed by the LLM, and stays out: the rewrite keeps the
+    # pictures that earn their place and drops the rest.
+    assert "fig2.png" not in b
 
 
 # ── _extract_json_field ────────────────────────────────────────────────

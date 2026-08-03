@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from app.llm.base import LLMProvider, Message
 from app.models import Article, Draft
 from app.pipeline.anti_slop import ANTI_SLOP_SYSTEM_INSTRUCTION, post_process
+from app.pipeline.localize import content_images, is_page_furniture
 
 REWRITE_SYSTEM = (
     "你是资深自媒体编辑，负责将原文改写为深度中文自媒体报道。"
@@ -118,6 +119,9 @@ CHECK_INSTRUCTION = (
 
 _MAX_IMG = 12
 _MAX_VID = 8
+# How many pictures to place when the rewrite kept none, matching the two to
+# four the prompt asks for rather than the twelve the source may carry.
+_FALLBACK_IMG = 3
 _PLACEHOLDER_RE = re.compile(
     r"\[{1,2}\s*(IMG|VID|VIDEO)\s*:\s*(\d+)\s*\]{1,2}", re.I)
 _MD_IMAGE_RE = re.compile(
@@ -279,17 +283,65 @@ def _media_block(images: list[str], videos: list[str], existing: str) -> str:
     return "\n".join(parts)
 
 
-def _interleave_missing_images(body_md: str, images: list[str]) -> str:
-    """Distribute images NOT already in *body_md* at section boundaries
-    (``## …`` headings) instead of dumping them all at the end.
+def _canonical_media(url: str) -> str:
+    """One spelling per picture, so the same file compares equal.
 
-    Images whose URL (absolute or relativized) already appears in the body
-    are skipped to avoid duplicates.  The remaining images are spread across
-    natural section breaks in the article, giving a reading flow closer to
-    the original layout.  Any overflow past available section boundaries
-    falls back to appending at the end.
+    Archived lists keep the raw HTML, so a URL there can carry `&amp;` where
+    the body has a plain `&`.
     """
-    images = _unique(images or [])[:_MAX_IMG]
+    return re.sub(r"^(?:\.\./)+", "/", html.unescape((url or "").strip()))
+
+
+def _from_the_source(url: str) -> bool:
+    """Did this picture come from the article, rather than made for the post?"""
+    return (url.startswith(("http://", "https://"))
+            or _canonical_media(url).startswith("/media/"))
+
+
+def _prune_body_images(body_md: str, images: list[str]) -> str:
+    """Take out pictures that repeat, that were invented, or that are chrome.
+
+    Asked to reproduce long CDN links by hand, a model will graft one
+    article's path segment onto another's filename. The result 404s and reads
+    as a second copy of a picture already shown. Anything the source did not
+    offer is therefore dropped — but only where there is something to check
+    against.
+
+    *images* has to be everything the source offered, both its picture list
+    and the pictures its body points at: those two disagree more often than
+    not, one holding thumbnails where the other holds the full-size versions.
+    """
+    listed = {_canonical_media(u) for u in (images or [])}
+    seen: set[str] = set()
+
+    def keep(match: re.Match[str]) -> str:
+        url = match.group("url")
+        key = _canonical_media(url)
+        if key in seen:
+            return ""
+        if is_page_furniture(url):
+            return ""
+        if listed and _from_the_source(url) and key not in listed:
+            return ""
+        seen.add(key)
+        return match.group(0)
+
+    return re.sub(r"\n{3,}", "\n\n", _MD_IMAGE_RE.sub(keep, body_md))
+
+
+def _interleave_missing_images(body_md: str, images: list[str]) -> str:
+    """Place the source's pictures only when the rewrite kept none of them.
+
+    The model is asked to keep the two to four pictures that earn their place
+    and drop the rest. Putting the dropped ones back overrides that choice:
+    they land at section boundaries in list order, interleaved with the ones
+    the model did place, so the post ends up with a dozen pictures in an order
+    matching neither the model's reading nor the original article's. So this
+    steps in only when the rewrite came back with no pictures at all, and then
+    with a handful rather than the lot.
+    """
+    images = [u for u in _unique(images or []) if not is_page_furniture(u)]
+    images = images[:_MAX_IMG]
     if not images:
         return body_md
 
@@ -298,8 +350,9 @@ def _interleave_missing_images(body_md: str, images: list[str]) -> str:
     for u in images:
         if u not in body_md and _relativize_media(u) not in body_md:
             missing.append(u)
-    if not missing:
-        return body_md
+    if len(missing) < len(images):
+        return body_md  # the rewrite made its own selection; leave it alone
+    missing = missing[:_FALLBACK_IMG]
 
     # Collect insertion points: blank-line-bounded paragraph breaks plus
     # lines that start a new `##` section heading.
@@ -789,8 +842,10 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
     # videos. Convert known video URLs to iframe + fallback-link embeds.
     body_md = _normalize_video_markdown(body_md, videos)
 
-    # Distribute images the LLM didn't place inline across section boundaries
-    # (instead of dumping them all at the end).
+    # Drop repeats, hand-copied links that point nowhere, and page chrome.
+    body_md = _prune_body_images(body_md, images + content_images(body_raw))
+
+    # Only if the rewrite kept no pictures at all does it get given some.
     body_md = _interleave_missing_images(body_md, images)
 
     # Append any remaining (unused) videos at the end so nothing is lost
