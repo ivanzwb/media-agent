@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from app.llm.base import LLMProvider, Message
 from app.models import Article
 from app.pipeline.anti_slop import ANTI_SLOP_SYSTEM_INSTRUCTION, post_process
+from app.pipeline.localize import is_page_furniture
 from app.pipeline.rewriter import (
     _extract_json, _extract_json_fallback, _normalise_tags)
 
@@ -28,8 +29,15 @@ class SynthesisResult:
 
 
 def _article_images(article: Article) -> list[str]:
+    """The pictures worth offering the model, in the order they were found.
+
+    An article's image list is the whole page's <img> tags, so the site's
+    logos, share icons and QR codes come along with the photographs. Offering
+    those invites the model to place one mid-article.
+    """
     return [u for u in (article.images or [])
-            if u.startswith(("http://", "https://"))][:_MAX_REF_IMAGES]
+            if u.startswith(("http://", "https://"))
+            and not is_page_furniture(u)][:_MAX_REF_IMAGES]
 
 
 def _plain_source_text(content: str) -> str:

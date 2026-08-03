@@ -140,6 +140,43 @@ def test_drafts_without_markers_are_left_alone(tmp_path):
     assert repair_draft_images(store, config, apply=True) == []
 
 
+def _png(path, width, height):
+    from PIL import Image
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (width, height), "white").save(path)
+
+
+def test_icons_already_pasted_into_a_draft_are_taken_back_out(tmp_path):
+    """草稿 #65 的毛病：记号解析成了 66×66 的评论、分享图标。"""
+    config, store = setup(tmp_path)
+    _png(config.media_dir / "hash" / "photo.jpg", 1200, 800)
+    _png(config.media_dir / "hash" / "icon.png", 66, 66)
+    _png(config.media_dir / "hash" / "banner.png", 441, 62)
+    art = seed(store, [])
+    draft = draft_with(store, art, (
+        "开头\n\n![](/media/hash/photo.jpg)\n\n正文\n\n"
+        "![](/media/hash/icon.png)\n\n![](/media/hash/banner.png)\n\n结尾"))
+
+    repairs = repair_draft_images(store, config, apply=True)
+
+    body = store.read_draft_body(draft.id)["body_md"]
+    assert "![](/media/hash/photo.jpg)" in body
+    assert "icon.png" not in body and "banner.png" not in body
+    assert repairs[0].icons == ["/media/hash/icon.png",
+                                "/media/hash/banner.png"]
+    assert "\n\n\n" not in body
+
+
+def test_a_picture_that_is_no_longer_on_disk_is_left_where_it_is(tmp_path):
+    config, store = setup(tmp_path)
+    art = seed(store, [])
+    draft = draft_with(store, art, "开头\n\n![](/media/hash/gone.jpg)\n\n结尾")
+
+    repair_draft_images(store, config, apply=True)
+
+    assert "gone.jpg" in store.read_draft_body(draft.id)["body_md"]
+
+
 def test_the_marker_numbers_follow_the_order_the_sources_were_given(tmp_path):
     config, store = setup(tmp_path)
     first = seed(store, ["https://img.cdn/a.png", "https://img.cdn/b.png"])

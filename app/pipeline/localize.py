@@ -63,6 +63,70 @@ _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 
+# An article's image list is every <img> on the page, so the photographs
+# arrive mixed in with the site's furniture: comment/share icons, logos,
+# QR codes, avatars, back-to-top arrows. Two cheap checks keep that out of
+# a draft — the URL before downloading, the pixels after.
+_FURNITURE_WORDS = (
+    "qrcode", "qr-code", "qr_code", "ewm", "erweima", "zxcode",
+    "logo", "favicon", "icon", "avatar", "sprite", "spacer",
+    "placeholder", "watermark", "share", "weixin", "wechat",
+    "app-download", "appdownload", "download-app", "button", "btn",
+    "backtop", "gotop", "jiucuo",
+)
+
+# Real article photos are hundreds of pixels on their short side; the icons
+# that keep slipping through measure 66×66, and banner strips 441×62.
+_MIN_CONTENT_SIDE = 200
+
+_SVG_ATTR_RE = re.compile(r'\b(width|height)\s*=\s*["\']\s*([\d.]+)\s*(?:px)?'
+                          r'\s*["\']', re.I)
+_SVG_VIEWBOX_RE = re.compile(
+    r'viewBox\s*=\s*["\']\s*[-\d.]+[,\s]+[-\d.]+[,\s]+'
+    r'([\d.]+)[,\s]+([\d.]+)', re.I)
+
+
+def is_page_furniture(url: str) -> bool:
+    """Does this URL look like site chrome rather than an article picture?"""
+    # The path only: image CDNs carry whole other URLs in the query string.
+    path = urlsplit(url).path.lower()
+    return any(word in path for word in _FURNITURE_WORDS)
+
+
+def _svg_size(path: Path) -> tuple[float, float] | None:
+    """Read an SVG's drawing size, from width/height or failing that viewBox."""
+    try:
+        head = path.read_text("utf-8", errors="ignore")[:2000]
+    except OSError:
+        return None
+    attrs = {m.group(1).lower(): m.group(2)
+             for m in _SVG_ATTR_RE.finditer(head)}
+    try:
+        if "width" in attrs and "height" in attrs:
+            return float(attrs["width"]), float(attrs["height"])
+    except ValueError:  # a percentage or other relative unit
+        pass
+    box = _SVG_VIEWBOX_RE.search(head)
+    return (float(box.group(1)), float(box.group(2))) if box else None
+
+
+def is_content_image(path: Path) -> bool:
+    """Is the file big enough to be a picture worth showing?
+
+    Anything we cannot measure is kept — wrongly dropping a real photo costs
+    more than leaving one stray icon in.
+    """
+    if path.suffix.lower() == ".svg":
+        size = _svg_size(path)
+        return size is None or min(size) >= _MIN_CONTENT_SIDE
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            width, height = im.size
+    except Exception:  # noqa: BLE001 - unreadable or not a raster image
+        return True
+    return min(width, height) >= _MIN_CONTENT_SIDE
+
 # ---------------------------------------------------------------------------
 # Strategy-based media downloaders (fallback chain)
 # ---------------------------------------------------------------------------
@@ -272,9 +336,18 @@ def localize_reference_images(urls: list[str], config: Config, progress=None,
     local = _download_set(urls, dest, folder, _download_image, workers,
                           emit, source_url=source_url)
     mapping: dict[str, str] = {}
+    furniture = 0
     for old, new in zip(urls, local):
-        if new != old and _is_local(new):
-            mapping[old] = new
+        if new == old or not _is_local(new):
+            continue
+        # Measured here rather than guessed from the URL: a 66×66 comment
+        # icon and a photograph can sit under the same-looking path.
+        if not is_content_image(dest / Path(new).name):
+            furniture += 1
+            continue
+        mapping[old] = new
+    if furniture:
+        emit(f"其中 {furniture} 张是图标/角标类小图，已跳过")
     emit(f"参考配图本地化完成 {len(mapping)}/{len(urls)} 张")
     return mapping
 

@@ -594,6 +594,20 @@ def test_the_prompt_numbers_images_the_way_they_resolve():
     ) == "![](/media/h/c.png)"
 
 
+def test_the_pages_own_logos_and_buttons_are_not_offered_as_pictures():
+    """来源的图片清单是整页 <img>，评论图标和站点 logo 混在照片里。"""
+    rows = [article(1)]
+    rows[0].images = [
+        "https://mbdp01.bdstatic.com/static/landing-pc/img/logo_top.79f.png",
+        "https://pics1.baidu.com/feed/8c1001e93901213f103df46ec613.jpeg",
+        "https://mbdp01.bdstatic.com/static/landing-pc/img/icon_share.409.png",
+        "https://www.digitalchina.gov.cn/images/250311szfh_ewm.jpg",
+    ]
+
+    assert _image_manifest(rows) == [
+        "https://pics1.baidu.com/feed/8c1001e93901213f103df46ec613.jpeg"]
+
+
 def test_the_sources_own_image_markers_never_reach_the_model():
     """归档正文自带 [[IMG:N]]（抓取时插入），模型照抄就会写出配不上的记号。"""
     class CaptureProvider(MockProvider):

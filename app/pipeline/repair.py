@@ -1,44 +1,31 @@
-"""One-off repair for drafts that kept their [[IMG:N]] markers.
+"""One-off repair for the picture problems in drafts already written.
 
-Drafts written before the markers resolved reliably still carry literal
-"[[IMG:0]]" text in the body. This walks the saved drafts, works out which
-picture each marker was pointing at, downloads the ones that are still
-reachable, and clears the markers that cannot be resolved.
+Two of them, both from the era before image markers resolved reliably:
 
-The mapping is a reconstruction, not a record: nothing stored on the draft
-says which image a marker meant, so it is re-derived from the sources the
-draft lists, in the order they were given to the writer. Run without
-``apply`` first and read the mapping before letting it write.
+* Drafts still carrying literal "[[IMG:0]]" text. Which picture each marker
+  meant is a reconstruction, not a record — nothing on the draft says — so it
+  is re-derived from the sources the draft lists, in the order they were given
+  to the writer. Run without ``apply`` first and read the mapping.
+* Drafts whose markers did resolve, into a comment icon or a site logo. Those
+  are found by measuring the file, so no guessing is involved.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit
 
 from app.config import Config
-from app.pipeline.localize import localize_reference_images
+from app.pipeline.localize import (
+    is_content_image, is_page_furniture, local_media_file,
+    localize_reference_images)
 from app.pipeline.synthesizer import (
     _IMG_REF_RE, _MAX_REF_IMAGES, resolve_image_refs)
 
 logger = logging.getLogger(__name__)
 
-# An article's image list is whatever the page carried, which on news sites
-# means QR codes, app badges and share buttons sit alongside the photographs.
-# Putting one of those back into the body is worse than leaving a gap.
-_FURNITURE = (
-    "qrcode", "qr-code", "qr_code", "ewm", "erweima", "zxcode",
-    "logo", "favicon", "icon", "avatar", "sprite", "spacer",
-    "placeholder", "watermark", "share", "weixin", "wechat",
-    "app-download", "appdownload", "download-app", "button",
-)
-
-
-def _is_furniture(url: str) -> bool:
-    # The path only: query strings carry whole other URLs on image CDNs.
-    path = urlsplit(url).path.lower()
-    return any(word in path for word in _FURNITURE)
+_LOCAL_IMG_RE = re.compile(r"!\[[^\]]*\]\(((?:\.\./)*/?media/[^)\s]+)\)")
 
 
 @dataclass
@@ -48,11 +35,28 @@ class DraftRepair:
     resolved: list[str] = field(default_factory=list)
     dropped: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    icons: list[str] = field(default_factory=list)
     applied: bool = False
 
     @property
     def markers(self) -> int:
         return len(self.resolved) + len(self.dropped) + len(self.skipped)
+
+
+def strip_icon_images(body_md: str, config: Config) -> tuple[str, list[str]]:
+    """Remove body images whose file is too small to be a real picture."""
+    removed: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        url = match.group(1)
+        path = local_media_file(re.sub(r"^(\.\./)+", "/", url), config)
+        if path is None or is_content_image(path):
+            return match.group(0)
+        removed.append(url)
+        return ""
+
+    body = _LOCAL_IMG_RE.sub(replace, body_md)
+    return re.sub(r"\n{3,}", "\n\n", body), removed
 
 
 def _manifest(image_lists: list[list[str]]) -> list[str]:
@@ -94,44 +98,52 @@ def _remote_refs(body_md: str, manifest: list[str]) -> list[str]:
 
 def repair_draft_images(store, config: Config, *, apply: bool = False,
                         progress=None) -> list[DraftRepair]:
-    """Find drafts still carrying [[IMG:N]] and resolve or clear the markers.
+    """Resolve or clear leftover [[IMG:N]] markers, and drop embedded icons.
 
     Without *apply* nothing is written: the returned plan says what each
-    marker would become.
+    marker would become and which pictures would go.
     """
     emit = progress or (lambda _m: None)
     repairs: list[DraftRepair] = []
     for row in store.list_drafts():
         meta = store.read_draft_body(row["id"])
         body_md = meta.get("body_md") or ""
-        if "[[IMG:" not in body_md:
+        has_markers = "[[IMG:" in body_md
+        if not has_markers and not _LOCAL_IMG_RE.search(body_md):
             continue
         title = (meta.get("title_cn")
                  or (meta.get("title_candidates") or [""])[0]
                  or f"草稿 {row['id']}")
-        emit(f"草稿 {row['id']}《{title[:30]}》：发现残留记号")
 
-        found = _manifest(_source_images(store, row, meta))
-        skipped = {m.group(0): found[int(m.group(1))]
-                   for m in _IMG_REF_RE.finditer(body_md)
-                   if 0 <= int(m.group(1)) < len(found)
-                   and _is_furniture(found[int(m.group(1))])}
-        manifest = ["" if _is_furniture(u) else u for u in found]
+        new_body, resolved, dropped, skipped = body_md, [], [], {}
+        if has_markers:
+            emit(f"草稿 {row['id']}《{title[:30]}》：发现残留记号")
+            found = _manifest(_source_images(store, row, meta))
+            skipped = {m.group(0): found[int(m.group(1))]
+                       for m in _IMG_REF_RE.finditer(body_md)
+                       if 0 <= int(m.group(1)) < len(found)
+                       and is_page_furniture(found[int(m.group(1))])}
+            manifest = ["" if is_page_furniture(u) else u for u in found]
 
-        local_map: dict[str, str] = {}
-        refs = _remote_refs(body_md, manifest)
-        if refs and apply:
-            local_map = localize_reference_images(
-                refs, config, progress=lambda m: emit(f"  {m}"))
-        new_body, resolved, dropped = resolve_image_refs(
-            body_md, manifest, local_map if apply else
-            # A dry run cannot know whether a download will succeed, so it
-            # reports the remote URL a marker points at as resolvable.
-            {u: u for u in refs})
+            local_map: dict[str, str] = {}
+            refs = _remote_refs(body_md, manifest)
+            if refs and apply:
+                local_map = localize_reference_images(
+                    refs, config, progress=lambda m: emit(f"  {m}"))
+            new_body, resolved, dropped = resolve_image_refs(
+                body_md, manifest, local_map if apply else
+                # A dry run cannot know whether a download will succeed, so it
+                # reports the remote URL a marker points at as resolvable.
+                {u: u for u in refs})
+
+        new_body, icons = strip_icon_images(new_body, config)
+        if icons and not has_markers:
+            emit(f"草稿 {row['id']}《{title[:30]}》：正文里有 {len(icons)} 张图标")
         repair = DraftRepair(
             row["id"], title, resolved,
             [token for token in dropped if token not in skipped],
-            [f"{token} → {url}" for token, url in skipped.items()])
+            [f"{token} → {url}" for token, url in skipped.items()],
+            icons)
 
         if apply and new_body != body_md:
             store.update_draft_body(
@@ -140,6 +152,7 @@ def repair_draft_images(store, config: Config, *, apply: bool = False,
             repair.applied = True
             emit(f"  已修复：补回 {len(resolved)} 张，"
                  f"跳过版面装饰 {len(repair.skipped)} 处，"
-                 f"清除 {len(repair.dropped)} 处")
+                 f"清除记号 {len(repair.dropped)} 处，"
+                 f"移除图标 {len(icons)} 张")
         repairs.append(repair)
     return repairs

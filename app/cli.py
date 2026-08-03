@@ -76,23 +76,26 @@ def run(feeds: str = typer.Option("feeds.yaml", help="Path to feeds.yaml"),
 def repair_images(
         apply: bool = typer.Option(
             False, "--apply", help="真正写回草稿（默认只预演，不改动文件）")):
-    """修复历史草稿里残留的 [[IMG:N]] 记号：能补回图的补回，补不了的清掉。"""
+    """修复历史草稿的配图：补回残留的 [[IMG:N]] 记号，清掉正文里的图标小图。"""
     from app.pipeline.repair import repair_draft_images
     store = _store()
-    repairs = repair_draft_images(
+    repairs = [r for r in repair_draft_images(
         store, store.config, apply=apply, progress=typer.echo)
+        if r.markers or r.icons]
     if not repairs:
-        typer.echo("没有草稿残留 [[IMG:N]] 记号。")
+        typer.echo("没有需要修复的草稿。")
         return
     for repair in repairs:
         typer.echo(f"\n草稿 {repair.draft_id}《{repair.title[:40]}》"
-                   f"（{repair.markers} 处记号）")
+                   f"（{repair.markers} 处记号，{len(repair.icons)} 张图标）")
         for line in repair.resolved:
             typer.echo(f"  补回 {line}")
         for line in repair.skipped:
             typer.echo(f"  清除 {line}（二维码/图标等版面装饰）")
         for token in repair.dropped:
             typer.echo(f"  清除 {token}（找不到对应的图）")
+        for url in repair.icons:
+            typer.echo(f"  移除 {url}（尺寸过小，是图标不是配图）")
     if not apply:
         typer.echo("\n以上为预演，未改动任何文件。确认无误后加 --apply 执行。")
 

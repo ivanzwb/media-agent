@@ -327,6 +327,60 @@ def test_localize_reference_images_excludes_failed_and_local(
     assert mapping["https://img.cdn/ok.png"].startswith("/media/")
 
 
+def test_a_downloaded_icon_never_makes_it_into_the_map(tmp_path, monkeypatch):
+    """URL 看不出是不是图标，尺寸看得出：66×66 的不是配图。"""
+    from PIL import Image
+
+    cfg = Config(data_dir=tmp_path)
+    cfg.ensure_dirs()
+
+    def writing_download_set(urls, dest, folder, fn, workers, emit,
+                             source_url=None):
+        dest.mkdir(parents=True, exist_ok=True)
+        out = []
+        for i, u in enumerate(urls, 1):
+            name = f"dl-{i}.png"
+            size = (66, 66) if "small" in u else (800, 600)
+            Image.new("RGB", size, "white").save(dest / name)
+            out.append(f"/media/{folder}/{name}")
+        return out
+
+    monkeypatch.setattr(loc, "_download_set", writing_download_set)
+    mapping = localize_reference_images(
+        ["https://img.cdn/small.png", "https://img.cdn/photo.png"], cfg)
+
+    assert list(mapping) == ["https://img.cdn/photo.png"]
+
+
+def test_a_vector_logo_is_measured_rather_than_waved_through(tmp_path):
+    """矢量图 PIL 读不了，尺寸写在标签里：271×32 是文字商标。"""
+    from app.pipeline.localize import is_content_image
+
+    logo = tmp_path / "logo.svg"
+    logo.write_text('<svg height="32" viewBox="0 0 271 32" width="271" '
+                    'xmlns="http://www.w3.org/2000/svg"><path d="m7 9"/></svg>')
+    diagram = tmp_path / "diagram.svg"
+    diagram.write_text('<svg viewBox="0 0 800 600" width="100%">'
+                       '<path d="m7 9"/></svg>')
+    sizeless = tmp_path / "plain.svg"
+    sizeless.write_text('<svg><path d="m7 9"/></svg>')
+
+    assert is_content_image(logo) is False
+    assert is_content_image(diagram) is True  # 百分比宽度退回 viewBox
+    assert is_content_image(sizeless) is True  # 量不出就留着
+
+
+def test_an_unreadable_file_is_kept_rather_than_guessed_at(tmp_path):
+    """量不出尺寸就留着：错删一张真照片，比留一张图标更贵。"""
+    from app.pipeline.localize import is_content_image
+
+    broken = tmp_path / "broken.png"
+    broken.write_bytes(b"\x89PNG\r\n\x1a\nnot really a png")
+
+    assert is_content_image(broken) is True
+    assert is_content_image(tmp_path / "missing.png") is True
+
+
 def test_localize_reference_images_folder_stable_across_order(
         tmp_path, monkeypatch):
     cfg = Config(data_dir=tmp_path)
