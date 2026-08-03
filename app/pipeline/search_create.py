@@ -164,6 +164,13 @@ def search_queries(queries: list[str], options: SearchCreateOptions, *,
                    should_stop: Callable[[], bool] | None = None,
                    stats: dict | None = None) -> list[SearchHit]:
     groups: list[list[SearchHit]] = [[] for _ in queries]
+    detail_lines: list[list[str]] = [[] for _ in queries]
+
+    def make_on_detail(index: int) -> Callable[[str], None]:
+        def on_detail(message: str) -> None:
+            detail_lines[index].append(message)
+        return on_detail
+
     with ThreadPoolExecutor(max_workers=min(4, len(queries) or 1)) as executor:
         futures = {
             executor.submit(
@@ -175,6 +182,7 @@ def search_queries(queries: list[str], options: SearchCreateOptions, *,
                 engines=options.engines,
                 proxy=options.proxy,
                 timeout=options.search_timeout,
+                on_detail=make_on_detail(index),
             ): index
             for index, query in enumerate(queries)
         }
@@ -187,9 +195,17 @@ def search_queries(queries: list[str], options: SearchCreateOptions, *,
             except Exception:  # noqa: BLE001
                 groups[index] = []
             done += 1
-            _emit(progress, "search", f"已完成检索：{queries[index]}",
+            for line in detail_lines[index]:
+                _emit(progress, "search", f"{queries[index]}：{line}",
+                      current=done, total=len(queries), stats=stats)
+            _emit(progress, "search",
+                  f"已完成检索：{queries[index]}（原始命中 {len(groups[index])} 条）",
                   current=done, total=len(queries), stats=stats)
-    return merge_search_hits(groups)
+    merged = merge_search_hits(groups)
+    _emit(progress, "search",
+          f"检索完成：合并去重后共 {len(merged)} 条候选来源",
+          current=len(queries), total=len(queries), stats=stats)
+    return merged
 
 
 def scrape_search_hits(hits: list[SearchHit], options: SearchCreateOptions, *,

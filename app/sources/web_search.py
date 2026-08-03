@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -19,6 +20,9 @@ DEFAULT_SEARCH_ENGINES = ("bing", "baidu", "duckduckgo", "google", "brave")
 _NATIVE_ENGINES = ("bing", "baidu")
 SEARCH_RETRIES = 3
 _RETRY_BASE_DELAY = 0.4
+# How long a faster engine waits for a slower sibling to contribute results
+# before returning what already arrived.
+_PARALLEL_GRACE_SECONDS = 2.0
 
 _TRACKING = {
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
@@ -245,102 +249,183 @@ def search_baidu_text(query: str, *, max_results: int = 10,
     return hits
 
 
+def _run_engine_once(
+        query: str, engine: str, *, max_results: int,
+        timelimit: str | None, region: str | None,
+        proxy: str | None, timeout: int,
+) -> list[SearchHit]:
+    if engine == "bing":
+        return search_bing_text(
+            query, max_results=max_results, timelimit=timelimit,
+            region=region, proxy=proxy, timeout=timeout)
+    if engine == "baidu":
+        return search_baidu_text(
+            query, max_results=max_results, proxy=proxy, timeout=timeout)
+    return search_ddgs_text(
+        query, max_results=max_results, timelimit=timelimit,
+        region=region, engines=[engine], proxy=proxy, timeout=timeout)
+
+
+def _search_engine_with_retries(
+        query: str, engine: str, *, max_results: int,
+        timelimit: str | None, region: str | None,
+        proxy: str | None, timeout: int,
+        on_detail: Callable[[str], None] | None = None,
+) -> list[SearchHit]:
+    """Search one engine with retries; return only hits relevant to the query."""
+    for attempt in range(SEARCH_RETRIES + 1):
+        try:
+            hits = _run_engine_once(
+                query, engine, max_results=max_results, timelimit=timelimit,
+                region=region, proxy=proxy, timeout=timeout)
+            if on_detail:
+                on_detail(f"{engine} 返回 {len(hits)} 条")
+            relevant_hits = filter_hits_for_query(hits, query)
+            if relevant_hits:
+                if on_detail:
+                    on_detail(f"{engine} 保留 {len(relevant_hits)} 条相关结果")
+                return relevant_hits
+            if hits:
+                logger.warning(
+                    "%s 搜索 %r 返回 %d 条，但与完整检索词相关性不足",
+                    engine, query, len(hits))
+                if on_detail:
+                    on_detail(f"{engine} 结果与检索词相关性不足")
+                break
+            error_detail = "未返回结果"
+        except Exception as exc:  # noqa: BLE001
+            error_detail = str(exc)
+            if on_detail:
+                on_detail(f"{engine} 失败：{error_detail}")
+        if attempt >= SEARCH_RETRIES:
+            logger.warning(
+                "%s 搜索 %r 连续重试 %d 次后仍失败：%s",
+                engine, query, SEARCH_RETRIES, error_detail)
+            break
+        retry_number = attempt + 1
+        delay = _RETRY_BASE_DELAY * (2 ** attempt)
+        logger.warning(
+            "%s 搜索 %r 失败：%s；%.1f 秒后进行第 %d/%d 次重试",
+            engine, query, error_detail, delay, retry_number, SEARCH_RETRIES)
+        time.sleep(delay)
+    return []
+
+
+def _search_in_parallel(
+        query: str, engines: list[str], *, max_results: int,
+        timelimit: str | None, region: str | None,
+        proxy: str | None, timeout: int,
+        on_detail: Callable[[str], None] | None = None,
+) -> list[SearchHit]:
+    """Run independent engines concurrently and merge their relevant results.
+
+    Returns as soon as relevant hits arrive, giving still-running siblings a
+    short grace window to contribute their own results first. Engines that do
+    not finish within the grace period are abandoned — their thread finishes
+    in the background, so one down engine's retries never block a healthy
+    engine's results. A non-empty-but-irrelevant response (which the per-engine
+    retry loop treats as terminal) also falls through here.
+    """
+    if not engines:
+        return []
+    groups: list[list[SearchHit]] = []
+    executor = ThreadPoolExecutor(max_workers=len(engines))
+    futures = {
+        executor.submit(
+            _search_engine_with_retries, query, engine,
+            max_results=max_results, timelimit=timelimit, region=region,
+            proxy=proxy, timeout=timeout, on_detail=on_detail,
+        ): engine
+        for engine in engines
+    }
+    try:
+        for future in as_completed(futures):
+            try:
+                hits = future.result()
+            except Exception:  # noqa: BLE001
+                hits = []
+            if not hits:
+                continue
+            groups.append(hits)
+            pending = [item for item in futures if not item.done()]
+            if not pending:
+                break
+            done, _ = wait(pending, timeout=_PARALLEL_GRACE_SECONDS)
+            for sibling in done:
+                try:
+                    sibling_hits = sibling.result()
+                except Exception:  # noqa: BLE001
+                    sibling_hits = []
+                if sibling_hits:
+                    groups.append(sibling_hits)
+            break
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    return merge_search_hits(groups)
+
+
 def search_query(query: str, *, max_results: int = 10,
                  timelimit: str | None = None,
                  region: str | None = None,
                  engines: tuple[str, ...] | list[str] | None = None,
                  proxy: str | None = None,
                  timeout: int = 8,
+                 on_detail: Callable[[str], None] | None = None,
                  ) -> list[SearchHit]:
     selected = tuple(engines or DEFAULT_SEARCH_ENGINES)
-    if region == "cn-zh" and "bing" in selected:
-        selected = ("bing",) + tuple(
-            engine for engine in selected if engine != "bing")
-    for engine in selected:
-        for attempt in range(SEARCH_RETRIES + 1):
-            try:
-                if engine == "bing":
-                    hits = search_bing_text(
-                        query, max_results=max_results, timelimit=timelimit,
-                        region=region, proxy=proxy, timeout=timeout)
-                elif engine == "baidu":
-                    hits = search_baidu_text(
-                        query, max_results=max_results, proxy=proxy,
-                        timeout=timeout)
-                else:
-                    hits = search_ddgs_text(
-                        query, max_results=max_results, timelimit=timelimit,
-                        region=region, engines=[engine], proxy=proxy,
-                        timeout=timeout)
-                relevant_hits = filter_hits_for_query(hits, query)
-                if relevant_hits:
-                    return relevant_hits
-                if hits:
-                    logger.warning(
-                        "%s 搜索 %r 返回 %d 条，但与完整检索词相关性不足",
-                        engine, query, len(hits))
-                    break
-                error_detail = "未返回结果"
-            except Exception as exc:  # noqa: BLE001
-                error_detail = str(exc)
-            if attempt >= SEARCH_RETRIES:
-                logger.warning(
-                    "%s 搜索 %r 连续重试 %d 次后仍失败：%s",
-                    engine, query, SEARCH_RETRIES, error_detail)
-                break
-            retry_number = attempt + 1
-            delay = _RETRY_BASE_DELAY * (2 ** attempt)
-            logger.warning(
-                "%s 搜索 %r 失败：%s；%.1f 秒后进行第 %d/%d 次重试",
-                engine, query, error_detail, delay, retry_number,
-                SEARCH_RETRIES)
-            time.sleep(delay)
+    native = [engine for engine in _NATIVE_ENGINES if engine in selected]
+    backends = [engine for engine in selected if engine not in _NATIVE_ENGINES]
+
+    # Wave 1: run the selected native engines (Bing, Baidu) concurrently and
+    # merge their hits. Relying on a single engine serial-first meant a
+    # transient Bing outage silently reduced the search to one sparse Baidu
+    # fallback; running both in parallel keeps the richer Chinese results even
+    # when Bing is down, without paying for the loser's retries.
+    hits = _search_in_parallel(
+        query, native, max_results=max_results, timelimit=timelimit,
+        region=region, proxy=proxy, timeout=timeout, on_detail=on_detail)
+    if hits:
+        return hits
+
+    # Wave 2: DDGS backends, tried in parallel with the same grace logic.
+    hits = _search_in_parallel(
+        query, backends, max_results=max_results, timelimit=timelimit,
+        region=region, proxy=proxy, timeout=timeout, on_detail=on_detail)
+    if hits:
+        return hits
 
     # Bing is a pragmatic final fallback in networks where Google and
     # DuckDuckGo are blocked, even for clients using an older engine list.
     if "bing" not in selected:
-        for attempt in range(SEARCH_RETRIES + 1):
-            try:
-                hits = search_bing_text(
-                    query, max_results=max_results, timelimit=timelimit,
-                    region=region, proxy=proxy, timeout=timeout)
-                relevant_hits = filter_hits_for_query(hits, query)
-                if relevant_hits:
-                    return relevant_hits
-                if hits:
-                    logger.warning(
-                        "Bing 降级搜索 %r 返回 %d 条，但相关性不足",
-                        query, len(hits))
-                    break
-                error_detail = "未返回结果"
-            except Exception as exc:  # noqa: BLE001
-                error_detail = str(exc)
-            if attempt >= SEARCH_RETRIES:
-                logger.warning(
-                    "Bing 降级搜索 %r 连续重试 %d 次后仍失败：%s",
-                    query, SEARCH_RETRIES, error_detail)
-                break
-            time.sleep(_RETRY_BASE_DELAY * (2 ** attempt))
+        hits = _search_in_parallel(
+            query, ["bing"], max_results=max_results, timelimit=timelimit,
+            region=region, proxy=proxy, timeout=timeout, on_detail=on_detail)
+        if hits:
+            return hits
 
     # Bing's automated Chinese endpoint sometimes searches only the first
     # query fragment, while DDGS backends can be unavailable on mainland
     # networks. Baidu is therefore a useful final fallback for Chinese topics.
     if region == "cn-zh" and "baidu" not in selected:
         try:
-            hits = search_baidu_text(
+            baidu_hits = search_baidu_text(
                 query, max_results=max_results, proxy=proxy, timeout=timeout)
-            relevant_hits = filter_hits_for_query(hits, query)
+            relevant_hits = filter_hits_for_query(baidu_hits, query)
             if relevant_hits:
                 logger.info(
                     "Baidu 中文降级搜索 %r 返回 %d 条相关结果",
                     query, len(relevant_hits))
+                if on_detail:
+                    on_detail(f"baidu 中文降级保留 {len(relevant_hits)} 条相关结果")
                 return relevant_hits
-            if hits:
+            if baidu_hits:
                 logger.warning(
                     "Baidu 中文降级搜索 %r 返回 %d 条，但相关性不足",
-                    query, len(hits))
+                    query, len(baidu_hits))
         except Exception as exc:  # noqa: BLE001
             logger.warning("Baidu 中文降级搜索 %r 失败：%s", query, exc)
+            if on_detail:
+                on_detail(f"baidu 中文降级失败：{exc}")
 
     return [
         SearchHit(title=url, url=normalized)
