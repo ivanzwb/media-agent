@@ -61,6 +61,7 @@ export default function Settings() {
       const boolFields = [
         "schedule_enabled", "download_images", "download_videos",
         "relevance_filter", "seo_tags_enabled",
+        "wechat_open_comment", "wechat_fans_only_comment",
       ];
       for (const [k, val] of Object.entries(v)) {
         if (keyFields.includes(k)) { if (val) payload[k] = val; continue; }
@@ -100,6 +101,8 @@ export default function Settings() {
         promotion_footer: data.promotion_footer,
         seo_tags_enabled: data.seo_tags_enabled,
         wechat_appid: data.wechat_appid, wechat_author: data.wechat_author,
+        wechat_open_comment: data.wechat_open_comment,
+        wechat_fans_only_comment: data.wechat_fans_only_comment,
         rewrite_style: data.rewrite_style,
         download_images: data.download_images, download_videos: data.download_videos,
         relevance_filter: data.relevance_filter,
@@ -356,6 +359,16 @@ export default function Settings() {
                   <Input.Password placeholder={data.wechat_appsecret.set ? "留空则保持不变" : "输入 AppSecret"} />
                 </Form.Item>
                 <Form.Item name="wechat_author" label="默认作者"><Input /></Form.Item>
+                <Form.Item name="wechat_open_comment" label="开启留言"
+                  valuePropName="checked"
+                  tooltip="留言数、留言长度和作者回复率都计入推荐权重，关闭等于放弃这部分流量。需公众号已获得留言功能（MEDIA_AGENT_WECHAT_OPEN_COMMENT）">
+                  <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                </Form.Item>
+                <Form.Item name="wechat_fans_only_comment" label="仅粉丝可留言"
+                  valuePropName="checked"
+                  tooltip="开启后只有已关注的读者能留言，会明显减少留言量，一般不建议开（MEDIA_AGENT_WECHAT_FANS_ONLY_COMMENT）">
+                  <Switch checkedChildren="仅粉丝" unCheckedChildren="所有人" />
+                </Form.Item>
               </Card>
             ),
           },

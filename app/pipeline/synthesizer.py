@@ -8,7 +8,8 @@ from app.models import Article
 from app.pipeline.anti_slop import ANTI_SLOP_SYSTEM_INSTRUCTION, post_process
 from app.pipeline.localize import is_page_furniture
 from app.pipeline.rewriter import (
-    _extract_json, _extract_json_fallback, _normalise_tags)
+    DIGEST_INSTRUCTION, KEYWORD_INSTRUCTION, _extract_json,
+    _extract_json_fallback, _normalise_tags, clean_digest)
 
 _SOURCE_CHARS = 2500
 _TOTAL_SOURCE_CHARS = 18000
@@ -26,6 +27,7 @@ class SynthesisResult:
     body_md: str
     citations: list[dict] = field(default_factory=list)
     flagged_claims: list[str] = field(default_factory=list)
+    digest: str = ""
 
 
 def _article_images(article: Article) -> list[str]:
@@ -464,6 +466,8 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
         _visual_instruction(has_images),
         _promotion_instruction(promotion_footer),
         _seo_instruction(seo_tags_enabled),
+        KEYWORD_INSTRUCTION.strip(),
+        DIGEST_INSTRUCTION.strip(),
     ]))
     prompt = (
         f"围绕主题「{topic}」综合下面的多篇资料，写成一篇完整的新文章。"
@@ -472,6 +476,7 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
         f"{content_rules}\n\n"
         "只输出 JSON 对象，字段：\n"
         '- "title_candidates": 3 个不夸大的候选标题\n'
+        '- "digest": 50-60 字摘要\n'
         '- "body_md": Markdown 正文，关键事实后使用 [1]、[2] 等引用标记；'
         "正文中不要出现任何链接或网址；"
         "Mermaid 流程图必须用 ```mermaid 代码围栏包裹\n"
@@ -513,4 +518,5 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
     body = f"{body.rstrip()}\n\n---\n\n{_references(articles)}\n"
     citations = _coerce_citations(parsed.get("citations"), len(articles))
     flagged = fact_check_multi(body, articles, provider)
-    return SynthesisResult(titles, body, citations, flagged)
+    return SynthesisResult(titles, body, citations, flagged,
+                           clean_digest(str(parsed.get("digest") or "")))

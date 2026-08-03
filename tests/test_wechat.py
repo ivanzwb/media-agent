@@ -285,8 +285,97 @@ def test_publish_article_errors_without_cover(tmp_path):
             "cover_image": None}
     res = P.publish_article(_DummyClient(), cfg, meta, mode="draft")
     # With the PIL fallback, publish now succeeds even without a real
-    # cover — a placeholder 900x500 PNG is auto-generated.
+    # cover — a placeholder is auto-generated.
     assert res["ok"] is True
+
+
+# ── digest ─────────────────────────────────────────────────────────────────
+
+def _publish_with(tmp_path, meta_extra=None, **cfg_extra):
+    cfg = _cfg(tmp_path)
+    for key, value in cfg_extra.items():
+        setattr(cfg, key, value)
+    Image.new("RGB", (900, 383), "green").save(
+        cfg.images_dir / "cover.png", "PNG")
+    meta = {"title_candidates": ["标题"], "cover_image": "cover.png",
+            "body_md": "正文第一段，写得很长很长很长。\n\n第二段。\n"}
+    meta.update(meta_extra or {})
+    client = _DummyClient()
+    assert P.publish_article(client, cfg, meta)["ok"] is True
+    return client.drafts[0][0]
+
+
+def test_publish_prefers_the_written_digest(tmp_path):
+    article = _publish_with(tmp_path, {"digest": "这是人工写好的摘要。"})
+    assert article["digest"] == "这是人工写好的摘要。"
+
+
+def test_publish_falls_back_to_the_opening_when_no_digest(tmp_path):
+    article = _publish_with(tmp_path, {"digest": "   "})
+    assert article["digest"].startswith("正文第一段")
+
+
+def test_publish_trims_an_overlong_digest(tmp_path):
+    article = _publish_with(tmp_path, {"digest": "字" * 300})
+    assert len(article["digest"]) == 120
+
+
+# ── comments ───────────────────────────────────────────────────────────────
+
+def test_comments_are_open_unless_turned_off(tmp_path):
+    article = _publish_with(tmp_path)
+    assert article["need_open_comment"] == 1
+    assert article["only_fans_can_comment"] == 0
+
+
+def test_comments_follow_the_setting(tmp_path):
+    off = _publish_with(tmp_path, wechat_open_comment=False)
+    assert off["need_open_comment"] == 0
+    fans = _publish_with(tmp_path, wechat_open_comment=True,
+                         wechat_fans_only_comment=True)
+    assert fans["need_open_comment"] == 1
+    assert fans["only_fans_can_comment"] == 1
+
+
+# ── placeholder cover ──────────────────────────────────────────────────────
+
+def test_placeholder_cover_is_the_shape_wechat_asks_for():
+    path = P._placeholder_cover("一个不算短的中文标题用来测试换行")
+    assert path is not None
+    try:
+        with Image.open(path) as img:
+            assert img.size == (900, 383)
+    finally:
+        path.unlink()
+
+
+def test_placeholder_cover_keeps_the_title_inside_the_square_crop():
+    """The lead cover is cropped to a centre square below the fold, so a
+    title that spills past the safe area disappears there."""
+    path = P._placeholder_cover("标题" * 24)
+    assert path is not None
+    try:
+        with Image.open(path) as img:
+            left = (P.COVER_W - P.COVER_SAFE) // 2
+            square = img.crop((left, 0, left + P.COVER_SAFE, P.COVER_H))
+            outside = img.crop((0, 0, left, P.COVER_H))
+        # Text is drawn near-white; the gradient and accents stay dark.
+        def bright(region):
+            return sum(region.convert("L").histogram()[201:])
+        assert bright(square) > 0
+        assert bright(outside) == 0
+    finally:
+        path.unlink()
+
+
+def test_placeholder_cover_is_not_a_flat_colour():
+    """WeChat's filter rejects single-colour images."""
+    path = P._placeholder_cover("测试")
+    try:
+        with Image.open(path) as img:
+            assert len(img.convert("RGB").getcolors(maxcolors=100000)) > 8
+    finally:
+        path.unlink()
 
 
 def test_upload_video_missing(tmp_path):

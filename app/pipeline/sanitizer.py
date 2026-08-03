@@ -111,6 +111,9 @@ def sanitize_draft(draft, words: set[str]) -> list[dict]:
             new_titles.append(ct)
             all_hits.extend(th)
         draft.title_candidates = new_titles
+    if getattr(draft, "digest", ""):
+        draft.digest, digest_hits = sanitize(draft.digest, words)
+        all_hits.extend(digest_hits)
     # merge counts per word
     merged: dict[str, int] = {}
     for h in all_hits:

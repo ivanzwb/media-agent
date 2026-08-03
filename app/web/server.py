@@ -46,7 +46,7 @@ from app.pipeline.recommender import (
 from app.pipeline.score import compute_draft_score
 from app.pipeline.localize import (
     localize_one, localize_article, content_images, content_videos)
-from app.pipeline.rewriter import rewrite
+from app.pipeline.rewriter import clean_digest, rewrite
 from app.pipeline.search_create import (
     SearchCreateCancelled, SearchCreateOptions, run_search_create)
 from app.pipeline.series_create import (
@@ -1157,6 +1157,7 @@ def create_app(config: Config | None = None,
             "status": row["status"],
             "title_cn": body.get("title_cn") or (title_candidates[0] if title_candidates else ""),
             "title_candidates": title_candidates,
+            "digest": body.get("digest", "") or "",
             "body_md": body.get("body_md", ""),
             "cover_image": body.get("cover_image"),
             "source_url": body.get("source_url", ""),
@@ -1189,11 +1190,13 @@ def create_app(config: Config | None = None,
     @app.post("/drafts/{draft_id}")
     def draft_save(draft_id: int, title_candidates: str = Form(""),
                    body_md: str = Form(""), status: str = Form("drafted"),
-                   title_cn: str = Form(""), from_page: str = Form("")):
+                   title_cn: str = Form(""), digest: str = Form(""),
+                   from_page: str = Form("")):
         store = get_store()
         titles = [t.strip() for t in title_candidates.splitlines() if t.strip()]
         store.update_draft_body(draft_id, titles, body_md, status=status,
-                                title_cn=title_cn.strip() or None)
+                                title_cn=title_cn.strip() or None,
+                                digest=clean_digest(digest))
         redirect_url = f"/drafts/{draft_id}/edit"
         if from_page in ("archive", "drafts"):
             redirect_url += f"?from={from_page}"
@@ -1756,6 +1759,7 @@ def create_app(config: Config | None = None,
         "video_fit", "video_brand_name",
         "sensitive_level", "sensitive_words",
         "promotion_footer", "seo_tags_enabled",
+        "wechat_open_comment", "wechat_fans_only_comment",
         "schedule_cron", "schedule_enabled",
     ]
 
@@ -4730,6 +4734,12 @@ def create_app(config: Config | None = None,
             "relevance_filter": (store.get_setting("relevance_filter") or "1") not in ("0", "false", "no", ""),
             "wechat_appid": _get("wechat_appid") or (config.wechat_appid or ""),
             "wechat_author": _get("wechat_author") or (config.wechat_author or ""),
+            "wechat_open_comment": (
+                store.get_setting("wechat_open_comment") or "1"
+            ) not in ("0", "false", "no", ""),
+            "wechat_fans_only_comment": (
+                store.get_setting("wechat_fans_only_comment") or "0"
+            ) not in ("0", "false", "no", ""),
             "schedule_cron": store.get_setting("schedule_cron", ""),
             "schedule_enabled": store.get_setting("schedule_enabled", "0") == "1",
             "llm_api_key": _mask(store.get_setting("llm_api_key")),
@@ -4778,6 +4788,8 @@ def create_app(config: Config | None = None,
                        wechat_appid: str = Form(""),
                        wechat_appsecret: str = Form(""),
                        wechat_author: str = Form(""),
+                       wechat_open_comment: str = Form("0"),
+                       wechat_fans_only_comment: str = Form("0"),
                        download_images: str = Form("0"),
                        download_videos: str = Form("0"),
                        relevance_filter: str = Form("0"),
@@ -4916,6 +4928,12 @@ def create_app(config: Config | None = None,
         store.set_setting(
             "seo_tags_enabled",
             "1" if seo_tags_enabled in ("1", "on", "true") else "0")
+        store.set_setting(
+            "wechat_open_comment",
+            "1" if wechat_open_comment in ("1", "on", "true") else "0")
+        store.set_setting(
+            "wechat_fans_only_comment",
+            "1" if wechat_fans_only_comment in ("1", "on", "true") else "0")
 
         # Default rewrite style: validate against the registry; empty or the
         # builtin default clears the setting (falls back to deep-tech).

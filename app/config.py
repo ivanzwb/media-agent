@@ -68,6 +68,10 @@ class Config:
     wechat_appid: str | None = None      # WeChat Official Account AppID
     wechat_appsecret: str | None = None  # WeChat Official Account AppSecret
     wechat_author: str | None = None     # default author shown on published 图文
+    # Comments carry roughly a sixth of the recommendation weight — the count,
+    # the length and how often the author replies — so they open by default.
+    wechat_open_comment: bool = True     # allow comments on published 图文
+    wechat_fans_only_comment: bool = False  # restrict commenting to followers
     rewrite_style: str | None = None     # default rewrite style id (see app.pipeline.styles)
     download_images: bool = True          # download article images to local
     download_videos: bool = True          # download article videos to local
@@ -161,6 +165,12 @@ class Config:
             wechat_appid=os.environ.get("MEDIA_AGENT_WECHAT_APPID"),
             wechat_appsecret=os.environ.get("MEDIA_AGENT_WECHAT_APPSECRET"),
             wechat_author=os.environ.get("MEDIA_AGENT_WECHAT_AUTHOR"),
+            wechat_open_comment=os.environ.get(
+                "MEDIA_AGENT_WECHAT_OPEN_COMMENT", "1"
+            ) not in ("0", "false", "no", ""),
+            wechat_fans_only_comment=os.environ.get(
+                "MEDIA_AGENT_WECHAT_FANS_ONLY_COMMENT", "0"
+            ) not in ("0", "false", "no", ""),
             rewrite_style=os.environ.get("MEDIA_AGENT_REWRITE_STYLE"),
             download_images=os.environ.get("MEDIA_AGENT_DOWNLOAD_IMAGES", "1") not in ("0", "false", "no"),
             download_videos=os.environ.get("MEDIA_AGENT_DOWNLOAD_VIDEOS", "1") not in ("0", "false", "no"),
@@ -274,6 +284,14 @@ class Config:
         seo = store.get_setting("seo_tags_enabled")
         if seo is not None:
             self.seo_tags_enabled = seo.strip() not in (
+                "0", "false", "no", "")
+        comment = store.get_setting("wechat_open_comment")
+        if comment is not None:
+            self.wechat_open_comment = comment.strip() not in (
+                "0", "false", "no", "")
+        fans_only = store.get_setting("wechat_fans_only_comment")
+        if fans_only is not None:
+            self.wechat_fans_only_comment = fans_only.strip() not in (
                 "0", "false", "no", "")
 
     def ensure_dirs(self) -> None:

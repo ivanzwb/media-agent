@@ -388,6 +388,37 @@ def test_synthesize_body_carries_no_outbound_links():
     assert "![图](../../media/cover.jpg)" in result.body_md
 
 
+def test_synthesize_asks_for_a_digest_and_carries_it_out():
+    class CaptureProvider(MockProvider):
+        def __init__(self):
+            super().__init__([
+                '{"title_candidates":["标题"],"digest":"摘要：一句人话总结。",'
+                '"body_md":"## 正文\\n事实 [1]。"}',
+                '{"flagged_claims":[]}',
+            ])
+            self.calls = []
+
+        def chat(self, messages, **opts):
+            self.calls.append(messages)
+            return super().chat(messages, **opts)
+
+    provider = CaptureProvider()
+    result = synthesize("AI", [article(1), article(2)], provider)
+    prompt = provider.calls[0][-1].content
+    assert '"digest"' in prompt
+    assert "50-60 字" in prompt
+    assert "核心关键词必须出现在" in prompt
+    assert result.digest == "一句人话总结。"
+
+
+def test_synthesize_without_a_digest_leaves_it_empty():
+    provider = MockProvider([
+        '{"title_candidates":["标题"],"body_md":"## 正文\\n事实 [1]。"}',
+        '{"flagged_claims":[]}',
+    ])
+    assert synthesize("AI", [article(1), article(2)], provider).digest == ""
+
+
 def test_synthesize_requires_multiple_sources():
     with pytest.raises(ValueError, match="至少需要 2"):
         synthesize("AI", [article(1)], MockProvider())

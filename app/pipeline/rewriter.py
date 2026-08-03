@@ -21,6 +21,31 @@ REWRITE_SYSTEM = (
     + ANTI_SLOP_SYSTEM_INSTRUCTION
 )
 
+# The digest is the card readers see in 订阅号消息, in a chat forward and in
+# 搜一搜 results. It decides whether the article gets opened at all, so it is
+# written, not sliced off the top of the body.
+DIGEST_INSTRUCTION = (
+    "### 摘要要求（digest 字段）\n\n"
+    "- **50-60 字**，超过 120 字会被平台截断，写满 60 字左右最稳\n"
+    "- 这是读者在订阅号列表、转发卡片和搜一搜结果里唯一能看到的正文，"
+    "决定他点不点开\n"
+    "- 给出文章最具体的那个发现或结论，不要写「本文介绍了…」这类导语\n"
+    "- 不是正文首段的复制，也不是标题的同义改写\n"
+    "- 必须包含核心关键词\n"
+    "- 不用问号结尾，不用感叹号，不带 emoji\n\n"
+)
+
+# 搜一搜 matches on title, digest and the opening paragraph. Keywords parked
+# in tags at the bottom of the article are read by nobody and matched late.
+KEYWORD_INSTRUCTION = (
+    "### 关键词布局\n\n"
+    "- 先定 1 个核心关键词：读者真会去搜的那个词（产品名、技术名、"
+    "公司名或具体问题），不是「人工智能」这类大词\n"
+    "- 核心关键词必须出现在：**标题**（尽量放前 15 个字内）、"
+    "**摘要**、**正文第一段**\n"
+    "- 正文中自然出现 3-5 次即可，堆砌关键词会被判为低质\n\n"
+)
+
 REWRITE_INSTRUCTION = (
     "分两步完成：\n\n"
     "**第一步 — 完整理解**：通读全文，确保理解所有技术细节、数据、结论和引用。\n\n"
@@ -98,8 +123,11 @@ REWRITE_INSTRUCTION = (
     "- 每张图/每个视频要与附近文字内容相关\n"
     "- 如果某张图/视频跟内容不相关就删掉，不要硬塞\n"
     "- 如果一个 `![](url)` 已经在正文中合适的位置，就保留它\n\n"
+    + KEYWORD_INSTRUCTION +
+    DIGEST_INSTRUCTION +
     "输出严格的 JSON，字段：\n"
     '  "title_candidates": [3 个吸睛但不虚假的标题],\n'
+    '  "digest": "50-60 字摘要",\n'
     '  "body_md": "Markdown 正文（中文数字编号章节+短段落+'
     '图片用 ![](url) 保留或 [[IMG:0]] 短占位符、视频用 [[VID:0]] 插入）"\n'
     '⚠️ 关键：你的回复必须从 `{{` 开始、以 `}}` 结束，不要加任何前缀、'
@@ -572,7 +600,8 @@ def _extract_json_fallback(text: str) -> dict | None:
             titles.append(s)
     if not titles:
         return None
-    return {"title_candidates": titles, "body_md": body_md}
+    return {"title_candidates": titles, "body_md": body_md,
+            "digest": _extract_json_field(text, "digest") or ""}
 
 
 def _extract_json(text: str) -> dict | None:
@@ -643,6 +672,24 @@ def render_instruction(template: str, *, title: str, source: str,
             .replace("{content}", content)
             .replace("{seo_block}", seo_block)
             .replace("{promotion_block}", promotion_block))
+
+
+# WeChat cuts the digest at 120 characters. Models routinely hand back the
+# text wrapped in quotes, spread over lines, or prefixed with a "摘要：" label.
+_DIGEST_MAX = 120
+_DIGEST_LABEL_RE = re.compile(r"^\s*(?:摘要|digest|summary)\s*[:：]\s*", re.I)
+
+
+def clean_digest(text: str) -> str:
+    """Tidy a model-written digest into something publishable."""
+    digest = re.sub(r"\s+", " ", (text or "")).strip()
+    # Quotes and a "摘要：" label come in either order, sometimes both.
+    for _ in range(3):
+        peeled = _DIGEST_LABEL_RE.sub("", digest.strip("\"'“”‘’ ")).strip()
+        if peeled == digest:
+            break
+        digest = peeled
+    return digest[:_DIGEST_MAX]
 
 
 def _normalise_tags(md: str) -> str:
@@ -739,6 +786,15 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
         else:
             instruction_tmpl = f"{instruction_tmpl}\n\n{{seo_block}}"
 
+    # Custom styles carry their own output spec and predate the digest field.
+    # Without this, a user on a custom style silently keeps publishing with a
+    # sliced-up body as the digest.
+    if style is not None and '"digest"' not in instruction_tmpl:
+        instruction_tmpl = (
+            f"{instruction_tmpl}\n\n{KEYWORD_INSTRUCTION}{DIGEST_INSTRUCTION}"
+            '并在输出的 JSON 中增加 "digest" 字段，值为上面要求的 50-60 字摘要。\n'
+        )
+
     seo_block = (
         "4. **标签**：在此处单独输出一行文章标签。\n"
         "   - 格式固定为：`**标签**：#关键词1 #关键词2 #关键词3`\n"
@@ -791,16 +847,19 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
         Message(role="system", content=system_prompt),
         Message(role="user", content=rewrite_prompt),
     ])
+    digest = ""
     parsed = _extract_json(raw)
     if parsed and parsed.get("title_candidates") and parsed.get("body_md"):
         title_candidates = parsed["title_candidates"]
         body_md = parsed["body_md"]
+        digest = parsed.get("digest") or ""
     else:
         # JSON parse failed — try regex-based field extraction as fallback
         fallback = _extract_json_fallback(raw)
         if fallback:
             title_candidates = fallback["title_candidates"]
             body_md = fallback["body_md"]
+            digest = fallback.get("digest") or ""
         else:
             # Retry once with a stricter prompt that forbids meta-commentary
             retry_prompt = (
@@ -817,12 +876,14 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
             if parsed2 and parsed2.get("title_candidates") and parsed2.get("body_md"):
                 title_candidates = parsed2["title_candidates"]
                 body_md = parsed2["body_md"]
+                digest = parsed2.get("digest") or ""
                 raw = raw2  # use retried response for fact-check
             else:
                 fb2 = _extract_json_fallback(raw2)
                 if fb2:
                     title_candidates = fb2["title_candidates"]
                     body_md = fb2["body_md"]
+                    digest = fb2.get("digest") or ""
                     raw = raw2
                 else:
                     title_candidates = [article.title]
@@ -875,4 +936,5 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
         source_name=article.source_name,
         cover_image=None,
         flagged_claims=flagged,
+        digest=clean_digest(digest),
     )

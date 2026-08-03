@@ -425,6 +425,40 @@ def test_settings_roundtrip_seo_tags_enabled(tmp_path):
     assert client.get("/api/settings").json()["seo_tags_enabled"] is True
 
 
+def test_settings_roundtrip_comment_switches(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    settings = client.get("/api/settings").json()
+    assert settings["wechat_open_comment"] is True
+    assert settings["wechat_fans_only_comment"] is False
+
+    client.post("/settings", data={"wechat_open_comment": "0",
+                                   "wechat_fans_only_comment": "1"},
+                follow_redirects=False)
+    assert store.get_setting("wechat_open_comment") == "0"
+    settings = client.get("/api/settings").json()
+    assert settings["wechat_open_comment"] is False
+    assert settings["wechat_fans_only_comment"] is True
+
+
+def test_draft_digest_survives_a_round_trip(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    assert client.get(f"/api/draft/{draft.id}").json()["digest"] == ""
+
+    client.post(f"/drafts/{draft.id}", data={
+        "title_candidates": "标题", "body_md": "正文", "status": "drafted",
+        "digest": '  "摘要：这是一段人工写的摘要。"  '},
+        follow_redirects=False)
+    assert client.get(f"/api/draft/{draft.id}").json()["digest"] == (
+        "这是一段人工写的摘要。")
+
+    # Clearing the field removes it rather than leaving the old text behind.
+    client.post(f"/drafts/{draft.id}", data={
+        "title_candidates": "标题", "body_md": "正文", "status": "drafted",
+        "digest": ""}, follow_redirects=False)
+    assert client.get(f"/api/draft/{draft.id}").json()["digest"] == ""
+
+
 def test_drafts_pagination_api(tmp_path):
     client, store, _ = make_client(tmp_path)
     art = store.save_article(Article(

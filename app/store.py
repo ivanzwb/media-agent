@@ -261,6 +261,8 @@ class Store:
             meta["prerequisites"] = draft.prerequisites
         if draft.title_cn:
             meta["title_cn"] = draft.title_cn
+        if getattr(draft, "digest", ""):
+            meta["digest"] = draft.digest
         if draft.score is not None:
             meta["score"] = draft.score
 
@@ -751,7 +753,8 @@ class Store:
 
     def update_draft_body(self, draft_id: int, title_candidates: list[str],
                           body_md: str, status: str | None = None,
-                          title_cn: str | None = None) -> None:
+                          title_cn: str | None = None,
+                          digest: str | None = None) -> None:
         row = self.get_draft(draft_id)
         if not row or not row["draft_path"]:
             return
@@ -765,6 +768,11 @@ class Store:
                 meta["title_cn"] = title_cn
             else:
                 meta.pop("title_cn", None)
+        if digest is not None:
+            if digest:
+                meta["digest"] = digest
+            else:
+                meta.pop("digest", None)
         new_status = status or meta.get("status") or row["status"]
         meta["status"] = new_status
         post = frontmatter.Post(strip_image_prompts(body_md), **meta)

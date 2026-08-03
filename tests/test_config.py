@@ -109,6 +109,24 @@ def test_db_overrides_seo_tags_enabled(monkeypatch, tmp_path):
     assert cfg.seo_tags_enabled is True
 
 
+# ── comments ───────────────────────────────────────────────────────────────
+
+
+def test_comments_default_on_and_fans_only_default_off(monkeypatch, tmp_path):
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    cfg = Config.load()
+    assert cfg.wechat_open_comment is True
+    assert cfg.wechat_fans_only_comment is False
+
+
+def test_db_overrides_comment_settings(monkeypatch, tmp_path):
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    cfg = Config.load(store=_FakeStore({"wechat_open_comment": "0",
+                                        "wechat_fans_only_comment": "1"}))
+    assert cfg.wechat_open_comment is False
+    assert cfg.wechat_fans_only_comment is True
+
+
 # ── llm_timeout tests ──────────────────────────────────────────────────────
 
 

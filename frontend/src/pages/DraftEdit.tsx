@@ -78,7 +78,7 @@ interface SeriesNav {
 
 interface DraftData {
   ok: boolean; id: number; status: string; title_cn: string;
-  title_candidates: string[]; body_md: string; cover_image: string | null;
+  title_candidates: string[]; digest: string; body_md: string; cover_image: string | null;
   source_url: string; source_name: string; flagged_claims: string[];
   origin?: string;
   sources?: Array<{
@@ -128,6 +128,7 @@ export default function DraftEdit() {
   const [body, setBody] = useState("");
   const [titleCn, setTitleCn] = useState("");
   const [titleCands, setTitleCands] = useState("");
+  const [digest, setDigest] = useState("");
   const [status, setStatus] = useState("drafted");
   const [theme, setTheme] = useState("default");
   const [loaded, setLoaded] = useState(false);
@@ -158,6 +159,7 @@ export default function DraftEdit() {
       setBody(data.body_md);
       setTitleCn(data.title_cn);
       setTitleCands(data.title_candidates.join("\n"));
+      setDigest(data.digest || "");
       setStatus(data.status);
       setLoaded(true);
     }
@@ -168,7 +170,7 @@ export default function DraftEdit() {
   async function save() {
     await postForm(`/drafts/${draftId}`, {
       title_candidates: titleCands, body_md: body, status,
-      title_cn: titleCn, from_page: "drafts",
+      title_cn: titleCn, digest, from_page: "drafts",
     });
     message.success("已保存");
     qc.invalidateQueries({ queryKey: ["draft", draftId] });
@@ -189,6 +191,7 @@ export default function DraftEdit() {
           key: "article", label: "文章内容", children: (
             <ArticleTab data={data} body={body} setBody={setBody} titleCn={titleCn}
               setTitleCn={setTitleCn} titleCands={titleCands} setTitleCands={setTitleCands}
+              digest={digest} setDigest={setDigest}
               status={status} setStatus={setStatus} theme={theme} setTheme={setTheme}
               onSave={save} editorHeight={editorHeight} />
           ),
@@ -202,7 +205,7 @@ export default function DraftEdit() {
 }
 
 function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setTitleCands,
-  status, setStatus, theme, setTheme, onSave, editorHeight }: any) {
+  digest, setDigest, status, setStatus, theme, setTheme, onSave, editorHeight }: any) {
   const qc = useQueryClient();
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
@@ -1026,6 +1029,10 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
 
             <Input placeholder="文章中文标题" value={titleCn} onChange={(e) => setTitleCn(e.target.value)} style={{ marginBottom: 8, flexShrink: 0 }} />
             <Input.TextArea placeholder="候选标题（每行一个）" value={titleCands} onChange={(e) => setTitleCands(e.target.value)} rows={2} style={{ marginBottom: 8, flexShrink: 0 }} />
+            <Input.TextArea placeholder="摘要（订阅号列表、转发卡片和搜一搜里显示的就是这段；留空则自动截取正文开头）"
+              value={digest} onChange={(e) => setDigest(e.target.value)} rows={2}
+              maxLength={120} showCount={{ formatter: ({ count }) => `${count} / 建议 50-60` }}
+              style={{ marginBottom: 16, flexShrink: 0 }} />
 
             <div ref={editorRef} className="ma-editor-wrap" data-color-mode="light" onKeyDownCapture={onEditorKeyDown}>
               <MDEditor value={body} onChange={handleChange} height={editorHeight}

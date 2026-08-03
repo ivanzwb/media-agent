@@ -7,6 +7,7 @@ permanent material (thumb), create a draft, optionally freepublish.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import tempfile
 import time
@@ -142,7 +143,6 @@ def _resolve_to_file(url: str, config) -> tuple[Path | None, bool]:
             ext = Path(urlparse(url).path).suffix or ".jpg"
             fd, tmp = tempfile.mkstemp(suffix=ext)
             Path(tmp).write_bytes(resp.content)
-            import os
             os.close(fd)
             return Path(tmp), True
         except Exception as exc:  # noqa: BLE001
@@ -211,6 +211,97 @@ def _upload_body_image(client: WeChatClient, path: Path) -> str | None:
     return None
 
 
+# WeChat shows the lead article's cover at 2.35:1 and crops that same picture
+# to a square for every article under it, keeping the middle. So the canvas is
+# 900x383, and anything that has to survive the crop is laid out inside the
+# central 383x383 square.
+COVER_W, COVER_H = 900, 383
+COVER_SAFE = COVER_H
+_COVER_FONTS = (
+    "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/simhei.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+)
+
+
+def _wrap_to_width(draw, text: str, font, limit: int) -> list[str]:
+    """Break text into lines no wider than `limit` pixels."""
+    lines: list[str] = []
+    cur = ""
+    for ch in text:
+        test = cur + ch
+        if cur and draw.textbbox((0, 0), test, font=font)[2] > limit:
+            lines.append(cur)
+            cur = ch
+        else:
+            cur = test
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def _placeholder_cover(title: str) -> Path | None:
+    """Draw a cover for a draft that has no picture of its own.
+
+    A flat colour gets rejected by WeChat's content filter, so this paints a
+    gradient with a few accents. Returns None if PIL is unavailable.
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        w, h = COVER_W, COVER_H
+        safe_left = (w - COVER_SAFE) // 2
+        img = Image.new("RGB", (w, h))
+        draw = ImageDraw.Draw(img)
+        # Gradient background (deep blue → darker teal), one row at a time.
+        for y in range(h):
+            draw.line(
+                [(0, y), (w, y)],
+                fill=(int(10 + (y / h) * 20),
+                      int(20 + (y / h) * 60),
+                      int(50 + (y / h) * 40)))
+        # Accents: a full-width bar plus glows sitting outside the safe area,
+        # where the square crop will drop them without losing anything.
+        draw.rectangle([0, 0, w, 3], fill=(0, 180, 160))
+        for cx, cy, rad in ((w - 140, 90, 80), (120, h - 80, 60)):
+            draw.ellipse([cx - rad, cy - rad, cx + rad, cy + rad],
+                         fill=(28, 74, 96))
+
+        text = (title or "Media Agent").strip()
+        font = None
+        for name in _COVER_FONTS:
+            try:
+                font = ImageFont.truetype(name, 40)
+                break
+            except (OSError, IOError):
+                continue
+        if font is None:
+            draw.text((w / 2, h / 2), text[:24], fill=(240, 240, 240),
+                      anchor="mm")
+        else:
+            # Wrap inside the safe square, then centre the block in it, so the
+            # title reads whole in both the wide view and the square crop.
+            lines = _wrap_to_width(draw, text, font, COVER_SAFE - 56)[:4]
+            step = 54
+            y_pos = (h - len(lines) * step) / 2
+            for line in lines:
+                bbox = draw.textbbox((0, 0), line, font=font)
+                x_pos = safe_left + (COVER_SAFE - (bbox[2] - bbox[0])) / 2
+                draw.text((x_pos + 2, y_pos + 2), line, fill=(0, 0, 0),
+                          font=font)
+                draw.text((x_pos, y_pos), line, fill=(240, 240, 240),
+                          font=font)
+                y_pos += step
+
+        fd, tmp = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        img.save(tmp, "PNG")
+        return Path(tmp)
+    except Exception:
+        logger.warning("placeholder cover failed", exc_info=True)
+        return None
+
+
 def publish_article(client: WeChatClient, config, meta: dict,
                     mode: str = "draft", theme: str = "default") -> dict:
     """Publish a draft's 图文 to WeChat.
@@ -272,85 +363,12 @@ def publish_article(client: WeChatClient, config, meta: dict,
                     temps.append(p)
                 break
 
-    # 3. Last resort: generate a visual-rich placeholder cover (900x500,
-    #    gradient background + title + decorative shapes) so the WeChat
-    #    push doesn't fail when no real cover / body image is available.
-    #    A plain solid-color image gets rejected by WeChat's content filter.
+    # 3. Last resort: draw a cover, so the push doesn't fail when the draft
+    #    has neither a cover of its own nor a usable body image.
     if cover_path is None:
-        try:
-            from PIL import Image, ImageDraw, ImageFont
-            w, h = 900, 500
-            # Gradient background (deep blue → darker teal)
-            img = Image.new("RGB", (w, h))
-            for y in range(h):
-                r = int(10 + (y / h) * 20)
-                g = int(20 + (y / h) * 60)
-                b = int(50 + (y / h) * 40)
-                for x in range(w):
-                    img.putpixel((x, y), (r, g, b))
-            draw = ImageDraw.Draw(img)
-            # Decorative accent bar at top
-            for x in range(w):
-                for dy in range(4):
-                    img.putpixel((x, dy), (0, 180, 160))
-            # Subtle glow circles
-            for cx, cy, rad, alpha in [(700, 120, 80, 30), (150, 380, 60, 20)]:
-                for dx in range(-rad, rad + 1):
-                    for dy in range(-rad, rad + 1):
-                        if dx * dx + dy * dy <= rad * rad:
-                            px, py = cx + dx, cy + dy
-                            if 0 <= px < w and 0 <= py < h:
-                                orig = img.getpixel((px, py))
-                                blend = tuple(
-                                    min(255, c + alpha) for c in orig)
-                                img.putpixel((px, py), blend)
-            # Title text
-            txt = title or "Media Agent"
-            font = None
-            for fname in ("C:/Windows/Fonts/msyh.ttc",
-                          "C:/Windows/Fonts/simhei.ttf",
-                          "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-                          "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"):
-                try:
-                    font = ImageFont.truetype(fname, 38)
-                    break
-                except (OSError, IOError):
-                    continue
-            if font:
-                lines: list[str] = []
-                cur = ""
-                for ch in txt:
-                    test = cur + ch
-                    bbox = draw.textbbox((0, 0), test, font=font)
-                    if bbox[2] > w - 60:
-                        lines.append(cur)
-                        cur = ch
-                    else:
-                        cur = test
-                if cur:
-                    lines.append(cur)
-                y_pos = 180
-                for line in lines[:3]:
-                    bbox = draw.textbbox((0, 0), line, font=font)
-                    tw = bbox[2] - bbox[0]
-                    # Shadow
-                    draw.text(((w - tw) / 2 + 2, y_pos + 2), line,
-                              fill=(0, 0, 0, 120), font=font)
-                    draw.text(((w - tw) / 2, y_pos), line,
-                              fill=(240, 240, 240), font=font)
-                    y_pos += 52
-            else:
-                draw.text((w / 2, 230), txt[:40], fill=(240, 240, 240),
-                          anchor="mm")
-            import tempfile as tmp_module
-            fd, tmp = tmp_module.mkstemp(suffix=".png")
-            img.save(tmp, "PNG")
-            import os
-            os.close(fd)
-            cover_path = Path(tmp)
+        cover_path = _placeholder_cover(title)
+        if cover_path is not None:
             temps.append(cover_path)
-        except Exception:
-            pass  # if PIL isn't available, give up
 
     if cover_path is not None:
         try:
@@ -396,12 +414,17 @@ def publish_article(client: WeChatClient, config, meta: dict,
     article = {
         "title": title,
         "author": (config.wechat_author or "").strip(),
-        "digest": _plain_text(body_md)[:120],
+        # A written digest when the draft has one. Truncating the body puts
+        # half a sentence on the share card, and the half it cuts is the hook.
+        "digest": (meta.get("digest") or "").strip()[:120]
+                  or _plain_text(body_md)[:120],
         "content": html,
         "thumb_media_id": thumb_media_id,
         "content_source_url": meta.get("source_url") or "",
-        "need_open_comment": 0,
-        "only_fans_can_comment": 0,
+        "need_open_comment": 1 if getattr(
+            config, "wechat_open_comment", True) else 0,
+        "only_fans_can_comment": 1 if getattr(
+            config, "wechat_fans_only_comment", False) else 0,
     }
     draft_media_id = client.add_draft([article])
     result = {"ok": True, "draft_media_id": draft_media_id, "title": title,

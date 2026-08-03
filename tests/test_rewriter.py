@@ -10,6 +10,7 @@ from app.pipeline.rewriter import (
     _build_manifest, _apply_placeholders, _interleave_missing_images,
     _prune_body_images,
     _extract_json_field, _extract_json_fallback, _normalize_video_markdown,
+    clean_digest,
 )
 
 
@@ -63,6 +64,77 @@ def test_rewrite_captures_flagged_claims():
     draft = rewrite(sample_article(), provider)
     assert len(draft.flagged_claims) == 1
     assert "99%" in draft.flagged_claims[0]
+
+
+# ── digest ───────────────────────────────────────────────────────────────
+
+def test_rewrite_keeps_the_digest_the_model_wrote():
+    rewrite_json = json.dumps({
+        "title_candidates": ["标题"],
+        "digest": "新模型在基准测试上拿到 90 分，比上一代高出一截。",
+        "body_md": "## 一、开头\n正文内容\n",
+    })
+    provider = MockProvider(
+        responses=[rewrite_json, json.dumps({"flagged_claims": []})])
+    draft = rewrite(sample_article(), provider)
+    assert draft.digest.startswith("新模型在基准测试上拿到 90 分")
+
+
+def test_rewrite_leaves_the_digest_empty_when_the_model_skips_it():
+    rewrite_json = json.dumps({
+        "title_candidates": ["标题"], "body_md": "正文",
+    })
+    provider = MockProvider(
+        responses=[rewrite_json, json.dumps({"flagged_claims": []})])
+    assert rewrite(sample_article(), provider).digest == ""
+
+
+def test_rewrite_asks_for_a_digest_and_a_keyword():
+    provider = RecordingProvider([
+        json.dumps({"title_candidates": ["t"], "body_md": "正文"}),
+        json.dumps({"flagged_claims": []}),
+    ])
+    rewrite(sample_article(), provider)
+    prompt = provider.calls[0][1].content
+    assert '"digest"' in prompt
+    assert "50-60 字" in prompt
+    assert "核心关键词必须出现在" in prompt
+
+
+def test_a_custom_style_is_asked_for_a_digest_too():
+    from app.pipeline.styles import RewriteStyle
+
+    style = RewriteStyle(
+        id="custom", name="自定义", description="", prompt="改写文章",
+        instruction="根据原文改写：{content}",
+    )
+    provider = RecordingProvider([
+        json.dumps({"title_candidates": ["t"], "digest": "摘要", "body_md": "正文"}),
+        json.dumps({"flagged_claims": []}),
+    ])
+    draft = rewrite(sample_article(), provider, style=style)
+    assert '"digest"' in provider.calls[0][1].content
+    assert draft.digest == "摘要"
+
+
+def test_digest_survives_a_body_full_of_raw_newlines():
+    """The regex fallback path has to recover the digest too."""
+    raw = (
+        '{"title_candidates": ["标题"], "digest": "一句摘要",'
+        ' "body_md": "第一行\n第二行"}'
+    )
+    recovered = _extract_json_fallback(raw)
+    assert recovered["digest"] == "一句摘要"
+
+
+def test_clean_digest_unwraps_what_models_wrap_it_in():
+    assert clean_digest('  "摘要：一句话总结"  ') == "一句话总结"
+    assert clean_digest("第一行\n第二行") == "第一行 第二行"
+    assert clean_digest("") == ""
+
+
+def test_clean_digest_cuts_at_the_platform_limit():
+    assert len(clean_digest("字" * 200)) == 120
 
 
 # ── promotion_footer ─────────────────────────────────────────────────────

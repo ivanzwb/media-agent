@@ -68,6 +68,7 @@ class Draft:
     source_name: str
     cover_image: str | None = None
     title_cn: str | None = None
+    digest: str = ""  # 50-60 char summary shown on the WeChat card
     flagged_claims: list[str] = field(default_factory=list)
     status: str = DraftStatus.DRAFTED
     draft_path: str | None = None
