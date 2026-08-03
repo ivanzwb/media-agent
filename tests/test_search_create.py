@@ -498,15 +498,39 @@ def test_depth_positioning_reaches_the_writer():
     prompt = provider.calls[0][-1].content
     assert "### 内容深度" in prompt
     assert "面向从业者" in prompt
-    assert "不少于 3500 字" in prompt
     # The complaint this answers: a page of terminology nobody can use.
     assert "只报名字不解释，等于没写" in prompt
+
+
+def test_length_is_a_range_rather_than_a_floor():
+    """A floor of 3500 aimed the deepest tier past the point where the
+    completion rate — and with it the recommendation — falls away."""
+    for depth, expected in (("beginner", "1200-1800 字"),
+                            ("intermediate", "1500-2200 字"),
+                            ("advanced", "2000-2800 字")):
+        provider = CapturingProvider()
+        synthesize("AI", [article(1), article(2)], provider, depth=depth)
+        prompt = provider.calls[0][-1].content
+        assert expected in prompt
+        assert "不少于" not in prompt
+        assert "上限到了就删" in prompt
 
 
 def test_without_a_depth_nothing_is_claimed_about_it():
     provider = CapturingProvider()
     synthesize("AI", [article(1), article(2)], provider)
     assert "### 内容深度" not in provider.calls[0][-1].content
+
+
+def test_the_opening_rules_reach_the_synthesis_prompt():
+    """The hook used to exist only on the rewrite path."""
+    provider = CapturingProvider()
+    synthesize("AI", [article(1), article(2)], provider)
+    prompt = provider.calls[0][-1].content
+    assert "前 100 字定生死" in prompt
+    for formula in ("**痛点**", "**利益**", "**反常识**", "**短故事**"):
+        assert formula in prompt
+    assert "不要从定义或历史写起" in prompt
 
 
 def test_deep_writing_reads_further_into_each_source():
@@ -752,6 +776,49 @@ def _wire_search_e2e(monkeypatch, rows):
         "app.pipeline.search_create.scrape_search_hits",
         lambda *args, **kwargs: rows)
     monkeypatch.setattr("app.store._web_image_for_title", lambda *args: None)
+
+
+def test_search_create_writes_to_the_depth_it_was_given(tmp_path, monkeypatch):
+    """Search creation used to call synthesize with no depth at all, which
+    left the single-draft path with no length control whatsoever."""
+    class RecordingProvider(MockProvider):
+        def __init__(self):
+            super().__init__([
+                '{"queries":["AI research"]}',
+                "[0,1]",
+                '{"scores":[{"index":0,"score":90},{"index":1,"score":80}]}',
+                '{"title_candidates":["标题"],"body_md":"## 正文\\n事实 [1]。"}',
+                '{"flagged_claims":[]}',
+            ])
+            self.prompts: list[str] = []
+
+        def chat(self, messages, **opts):
+            self.prompts.append(messages[-1].content)
+            return super().chat(messages, **opts)
+
+    config = Config(data_dir=tmp_path)
+    config.ensure_dirs()
+    conn = connect(config.db_path)
+    init_db(conn)
+    store = Store(conn, config)
+    rows = [article(1, days_old=365), article(2, days_old=365)]
+    _wire_search_e2e(monkeypatch, rows)
+
+    provider = RecordingProvider()
+    run_search_create(
+        store, provider,
+        SearchCreateOptions(topic="AI", depth="advanced", time_range_days=30,
+                            ref_count=5))
+
+    write = next(p for p in provider.prompts if "### 内容深度" in p)
+    assert "面向从业者" in write
+    assert "2000-2800 字" in write
+
+
+def test_search_create_rejects_an_unknown_depth():
+    options = SearchCreateOptions(topic="AI", depth="expert", ref_count=5)
+    with pytest.raises(ValueError, match="深度"):
+        options.validate()
 
 
 def _img_search_script():

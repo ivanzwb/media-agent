@@ -41,6 +41,7 @@ interface SearchCreateStatus {
 interface SearchCreateForm {
   topic: string;
   lang: "zh" | "en" | "bilingual";
+  depth: "beginner" | "intermediate" | "advanced";
   time_range_days: 7 | 30 | 90 | 0;
   ref_count: 5 | 10 | 20;
   style: string;
@@ -133,6 +134,7 @@ export default function SearchCreate() {
     }
     if (saved.topic && !form.isFieldTouched("topic")) form.setFieldValue("topic", saved.topic);
     if (saved.lang && !form.isFieldTouched("lang")) form.setFieldValue("lang", saved.lang);
+    if (saved.depth && !form.isFieldTouched("depth")) form.setFieldValue("depth", saved.depth);
     if (saved.time_range_days !== undefined && !form.isFieldTouched("time_range_days")) {
       form.setFieldValue("time_range_days", saved.time_range_days);
     }
@@ -152,6 +154,7 @@ export default function SearchCreate() {
       await api.post("/api/search-create", {
         topic: values.topic.trim(),
         lang: values.lang,
+        depth: values.depth,
         time_range_days: values.time_range_days,
         ref_count: values.ref_count,
         style_id: values.style || null,
@@ -208,7 +211,7 @@ export default function SearchCreate() {
       <Card title="创作选项" style={{ borderColor: "#d9f7be" }}>
         <Form<SearchCreateForm> form={form} layout="vertical" onFinish={start}
           initialValues={{
-            lang: "zh", time_range_days: 30, ref_count: 10, style: "",
+            lang: "zh", depth: "intermediate", time_range_days: 30, ref_count: 10, style: "",
             engines: ["bing", "baidu", "duckduckgo", "google", "brave"],
           }}
           disabled={active || (!isPro && !!license)}>
@@ -226,6 +229,14 @@ export default function SearchCreate() {
                 { value: "zh", label: "中文" },
                 { value: "en", label: "English" },
                 { value: "bilingual", label: "中英双语" },
+              ]} />
+            </Form.Item>
+            <Form.Item name="depth" label="深度定位" style={{ minWidth: 220 }}
+              extra="决定写给谁看，以及正文的字数区间。">
+              <Select options={[
+                { value: "beginner", label: "入门（零基础，1200-1800 字）" },
+                { value: "intermediate", label: "进阶（有基础，1500-2200 字）" },
+                { value: "advanced", label: "深入（从业者，2000-2800 字）" },
               ]} />
             </Form.Item>
             <Form.Item name="time_range_days" label="资料时间范围" style={{ minWidth: 180 }}>

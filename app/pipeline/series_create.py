@@ -29,14 +29,13 @@ from app.pipeline.search_create import (
     _emit, _topic_search_terms, _url_key, collect_references, search_queries)
 from app.pipeline.localize import localize_reference_images
 from app.pipeline.synthesizer import (
-    SeriesPlacement, expand_image_refs, referenced_images, synthesize)
+    DEPTHS, SeriesPlacement, expand_image_refs, referenced_images, synthesize)
 from app.sources.web_search import DEFAULT_SEARCH_ENGINES, SearchHit
 
 logger = logging.getLogger(__name__)
 
 MIN_PARTS = 3
 MAX_PARTS = 10
-DEPTHS = ("beginner", "intermediate", "advanced")
 
 # Depth has to reach the search terms too: an outline that asks for
 # introductions collects introductions, and no writing prompt can make a
@@ -88,7 +87,8 @@ class SeriesCreateOptions:
         writing these chapters need.
         """
         return SearchCreateOptions(
-            topic=self.topic, lang=self.lang, time_range_days=None,
+            topic=self.topic, lang=self.lang, depth=self.depth,
+            time_range_days=None,
             ref_count=self.ref_count, style_id=self.style_id,
             engines=self.engines, workers=self.workers, proxy=self.proxy)
 

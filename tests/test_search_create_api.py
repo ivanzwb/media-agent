@@ -37,6 +37,7 @@ def valid_payload() -> dict:
     return {
         "topic": "AI agents",
         "lang": "bilingual",
+        "depth": "beginner",
         "time_range_days": 30,
         "ref_count": 5,
         "style_id": "deep-tech",
@@ -61,6 +62,10 @@ def test_search_create_validates_request(tmp_path):
         "/api/search-create",
         json={**valid_payload(), "engines": ["yandex"]})
     assert bad_engine.status_code == 400
+    bad_depth = client.post(
+        "/api/search-create",
+        json={**valid_payload(), "depth": "expert"})
+    assert bad_depth.status_code == 400
 
 
 def test_search_create_start_and_status(tmp_path, monkeypatch):
@@ -87,6 +92,8 @@ def test_search_create_start_and_status(tmp_path, monkeypatch):
     assert state["request"]["engines"] == ["duckduckgo", "google"]
     assert captured["options"].style_id == "deep-tech"
     assert captured["options"].time_range_days == 30
+    assert captured["options"].depth == "beginner"
+    assert state["request"]["depth"] == "beginner"
     assert captured["kwargs"]["seo_tags_enabled"] is True
     assert captured["kwargs"]["promotion_footer"] == ""
     assert "最佳" in captured["kwargs"]["sensitive_words"]

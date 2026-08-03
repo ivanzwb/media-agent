@@ -8,8 +8,8 @@ from app.models import Article
 from app.pipeline.anti_slop import ANTI_SLOP_SYSTEM_INSTRUCTION, post_process
 from app.pipeline.localize import is_page_furniture
 from app.pipeline.rewriter import (
-    DIGEST_INSTRUCTION, KEYWORD_INSTRUCTION, _extract_json,
-    _extract_json_fallback, _normalise_tags, clean_digest)
+    DIGEST_INSTRUCTION, KEYWORD_INSTRUCTION, OPENING_INSTRUCTION,
+    _extract_json, _extract_json_fallback, _normalise_tags, clean_digest)
 
 _SOURCE_CHARS = 2500
 _TOTAL_SOURCE_CHARS = 18000
@@ -301,22 +301,28 @@ def fact_check_multi(body_md: str, articles: list[Article],
     return [str(claim).strip() for claim in claims if str(claim).strip()]
 
 
+DEPTHS = ("beginner", "intermediate", "advanced")
+
+# Length is a range, not a floor. Third-party reviews put the completion rate
+# of articles past 3000 characters below 30% — the line under which the feed
+# stops recommending — so a floor of 3500 was aiming past the cliff. Depth has
+# to come out of information density instead.
 _DEPTH_GUIDANCE = {
     "beginner": (
         "面向零基础读者。每个概念都要有一句大白话解释和一个贴近日常经验的类比；"
         "推导和实现细节可以略过，但“它是什么、为什么需要它、没有它会怎样”"
-        "必须讲清楚。正文不少于 1800 字（英文不少于 1000 词）。"
+        "必须讲清楚。正文 1200-1800 字（英文 700-1100 词）。"
     ),
     "intermediate": (
         "面向有基础的读者。默认读者认得这个领域最基本的名词，重点讲原理，"
         "以及几种做法之间的差别与取舍：谁在什么条件下更合适、代价是什么。"
-        "正文不少于 2500 字（英文不少于 1400 词）。"
+        "正文 1500-2200 字（英文 900-1300 词）。"
     ),
     "advanced": (
         "面向从业者。要写到能动手的层面：机制怎么运转、关键参数和常见取值、"
         "典型的失败模式、与相近方案的具体差异、目前公认的局限和尚未解决的问题。"
         "需要时可以出现公式、伪代码、配置项和源码级细节。"
-        "正文不少于 3500 字（英文不少于 2000 词）。"
+        "正文 2000-2800 字（英文 1200-1700 词）。"
     ),
 }
 
@@ -342,7 +348,10 @@ def _depth_instruction(depth: str) -> str:
         "- 资料里的数字、参数、前提条件、对比结果和具体例子要用上，"
         "并标注来源编号；能落到具体处，就不要停在概括。\n"
         "- 宁可少讲两个点，也要把讲到的点讲透。不要靠罗列名词凑覆盖面，"
-        "那样读者读完只记住一串词。"
+        "那样读者读完只记住一串词。\n"
+        "- 字数是区间不是目标：上限到了就删，不要靠复述、过渡句和小结把"
+        "篇幅撑大。深度体现在信息密度，不在长度——写长了读者读不完，"
+        "读不完的稿子平台不会再推。"
     )
 
 
@@ -459,6 +468,7 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
         f"### 写作风格\n{guidance}" if guidance else "",
         examples,
         _depth_instruction(depth),
+        OPENING_INSTRUCTION.strip(),
         _brief_instruction(placement.scope),
         _series_context_instruction(placement.behind),
         _series_opening_instruction(placement.outline),

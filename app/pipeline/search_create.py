@@ -16,7 +16,7 @@ from app.pipeline.rewriter import _extract_json
 from app.pipeline.sanitizer import sanitize_draft
 from app.pipeline.localize import localize_reference_images
 from app.pipeline.synthesizer import (
-    expand_image_refs, referenced_images, synthesize)
+    DEPTHS, expand_image_refs, referenced_images, synthesize)
 from app.sources.dedup import dedup, dedup_near_content
 from app.sources.scraper import scrape_single
 from app.sources.web_search import (
@@ -35,6 +35,7 @@ class SearchCreateCancelled(RuntimeError):
 class SearchCreateOptions:
     topic: str
     lang: str = "zh"
+    depth: str = "intermediate"
     time_range_days: int | None = 30
     ref_count: int = 10
     style_id: str | None = None
@@ -53,6 +54,8 @@ class SearchCreateOptions:
             raise ValueError("搜索创作主题不能超过 200 个字符")
         if self.lang not in ("zh", "en", "bilingual"):
             raise ValueError("搜索语言必须为 zh、en 或 bilingual")
+        if self.depth not in DEPTHS:
+            raise ValueError("深度必须为 beginner、intermediate 或 advanced")
         if self.time_range_days not in (None, 0, 7, 30, 90):
             raise ValueError("时间范围必须为 7、30、90 天或不限")
         if self.ref_count not in (5, 10, 20):
@@ -438,7 +441,8 @@ def run_search_create(store, provider: LLMProvider,
         options.topic, saved_articles, provider,
         style=style, lang=options.lang,
         promotion_footer=promotion_footer,
-        seo_tags_enabled=seo_tags_enabled)
+        seo_tags_enabled=seo_tags_enabled,
+        depth=options.depth)
 
     # 模型可能用 [[IMG:N]] 引用了参考资料的配图：把被引用的图片下载到本地
     # （data/media/），再把占位符展开为 ![](/media/...) 路径。

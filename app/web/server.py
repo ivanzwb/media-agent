@@ -2725,6 +2725,7 @@ def create_app(config: Config | None = None,
                 raise ValueError("请求体必须为 JSON 对象")
             topic = str(payload.get("topic") or "").strip()
             lang = str(payload.get("lang") or "zh")
+            depth = str(payload.get("depth") or "intermediate")
             time_range_days = int(payload.get("time_range_days", 30))
             ref_count = int(payload.get("ref_count", 10))
             style_id = str(payload.get("style_id") or "").strip() or None
@@ -2736,6 +2737,7 @@ def create_app(config: Config | None = None,
             options = SearchCreateOptions(
                 topic=topic,
                 lang=lang,
+                depth=depth,
                 time_range_days=time_range_days,
                 ref_count=ref_count,
                 style_id=style_id,
@@ -2751,6 +2753,7 @@ def create_app(config: Config | None = None,
             request_snapshot = {
                 "topic": options.topic,
                 "lang": options.lang,
+                "depth": options.depth,
                 "time_range_days": options.time_range_days or 0,
                 "ref_count": options.ref_count,
                 "style_id": options.style_id,

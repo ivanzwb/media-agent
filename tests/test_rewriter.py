@@ -66,6 +66,21 @@ def test_rewrite_captures_flagged_claims():
     assert "99%" in draft.flagged_claims[0]
 
 
+# ── opening ──────────────────────────────────────────────────────────────
+
+def test_rewrite_asks_for_one_of_the_four_openings():
+    provider = RecordingProvider([
+        json.dumps({"title_candidates": ["t"], "body_md": "正文"}),
+        json.dumps({"flagged_claims": []}),
+    ])
+    rewrite(sample_article(), provider)
+    prompt = provider.calls[0][1].content
+    assert "前 100 字定生死" in prompt
+    for formula in ("**痛点**", "**利益**", "**反常识**", "**短故事**"):
+        assert formula in prompt
+    assert "不要用「想象一下：」" in prompt
+
+
 # ── digest ───────────────────────────────────────────────────────────────
 
 def test_rewrite_keeps_the_digest_the_model_wrote():

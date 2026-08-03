@@ -21,6 +21,24 @@ REWRITE_SYSTEM = (
     + ANTI_SLOP_SYSTEM_INSTRUCTION
 )
 
+# A reader decides inside the first screen. Background, definitions and
+# "随着…的发展" spend that screen on nothing, and the completion rate — now the
+# ranking signal that matters most — is lost before the article gets going.
+OPENING_INSTRUCTION = (
+    "### 开头（前 100 字定生死）\n\n"
+    "读者只给前 100 字的耐心。铺垫、背景交代、从定义写起，都会把这 100 字"
+    "花掉，人就划走了。\n"
+    "从下面四种开头里挑一种最贴合本文的写，只用一种，不要拼在一起：\n"
+    "- **痛点**：直接说出读者正卡在哪，越具体越好\n"
+    "- **利益**：直接告诉读者读完能拿到什么\n"
+    "- **反常识**：先摆出与常识相反的事实或数据，再解释\n"
+    "- **短故事**：从一个具体的人、一个具体的时刻切进去\n"
+    "另外：\n"
+    "- 第一句不要交代背景，不要从定义或历史写起\n"
+    "- 不要用「想象一下：」「随着…的快速发展」这类俗套句式\n"
+    "- 钩子必须由本文事实撑住，不能为了抓人夸大\n\n"
+)
+
 # The digest is the card readers see in 订阅号消息, in a chat forward and in
 # 搜一搜 results. It decides whether the article gets opened at all, so it is
 # written, not sliced off the top of the body.
@@ -63,12 +81,7 @@ REWRITE_INSTRUCTION = (
     "- 章节数量根据原文内容灵活调整，可以 4-6 章，但必须有 `写在最后` 作为结尾章节\n"
     "- 章节标题用中文数字编号（一、二、三…），不要用 emoji 做标题\n"
     "- 标题要有点击欲但不浮夸，用问句最佳\n\n"
-    "### 开头要求\n\n"
-    "- **必须有钩子**：前 1-2 句话抓住读者\n"
-    "- 可用问句开头（如「你有没有想过一个问题？」「你知道 X 有多重要吗？」）\n"
-    "- 或惊人场景/数据开头\n"
-    "- 不要用「想象一下：」这种俗套句式\n"
-    "- 第一段场景感要强，让读者有代入感\n\n"
+    + OPENING_INSTRUCTION +
     "### 正文风格\n\n"
     "- **讲故事**，不是列知识点。每章从故事/场景/问题切入，再展开说明\n"
     "- **用比喻、类比**来解释复杂概念——这是好文章的亮点\n"

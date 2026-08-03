@@ -442,7 +442,7 @@ def test_the_depth_positioning_and_the_brief_reach_the_writing(
     write = next(item for item in provider.prompts
                  if "「强化学习：第一章」" in item)
     assert "面向从业者" in write
-    assert "不少于 3500 字" in write
+    assert "2000-2800 字" in write
     # The outline's promise for this chapter, not just its title.
     assert "### 本篇要交付什么" in write
     assert "打底" in write
