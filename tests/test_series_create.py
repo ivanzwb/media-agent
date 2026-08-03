@@ -373,6 +373,168 @@ def test_preflight_hits_seed_research_instead_of_searching_twice(
     assert search_calls[1:] == [["q1"], ["q2"], ["q3"]]
 
 
+def test_the_outline_decides_how_many_chapters_the_subject_needs(
+        tmp_path, monkeypatch):
+    """No count is asked for, so the model answers with one."""
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+    provider = ScriptedProvider(
+        '{"chapters":['
+        '{"title":"第一章","search_queries":["q1"]},'
+        '{"title":"第二章","search_queries":["q2"]},'
+        '{"title":"第三章","search_queries":["q3"]},'
+        '{"title":"第四章","search_queries":["q4"]}]}')
+
+    series_id, chapters, _ = plan_series(
+        store, provider, options(parts=None), status="planned")
+
+    assert len(chapters) == 4
+    assert store.get_series(series_id)["parts"] == 4
+    prompt = next(item for item in provider.prompts if "系列文章提纲" in item)
+    assert "必须恰好" not in prompt
+    assert "3-10" in prompt
+
+
+def test_the_outline_opens_with_a_view_of_the_whole_series():
+    provider = ScriptedProvider()
+    generate_series_outline("强化学习", "", provider, depth="intermediate")
+    prompt = provider.prompts[-1]
+    assert "第一章是整个系列的开篇总览" in prompt
+
+
+def test_the_opening_chapter_is_handed_the_whole_plan(tmp_path, monkeypatch):
+    """It is the one chapter that has to speak for the series."""
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+    provider = ScriptedProvider()
+
+    run_series_create(store, provider, options(parts=3))
+
+    opener = next(item for item in provider.prompts
+                  if "「强化学习：第一章」" in item)
+    assert "系列开篇" in opener
+    # The later chapters and the field's shape both travel with it.
+    assert "第 2 章《第二章》：展开" in opener
+    assert "马尔可夫决策过程" in opener
+
+    later = next(item for item in provider.prompts
+                 if "「强化学习：第二章」" in item)
+    assert "系列开篇" not in later
+    assert "系列上下文" in later
+
+
+def test_the_depth_positioning_and_the_brief_reach_the_writing(
+        tmp_path, monkeypatch):
+    """Cutting the outline by depth is not the same as writing to it."""
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+    provider = ScriptedProvider()
+
+    run_series_create(
+        store, provider, options(parts=3, depth="advanced"))
+
+    write = next(item for item in provider.prompts
+                 if "「强化学习：第一章」" in item)
+    assert "面向从业者" in write
+    assert "不少于 3500 字" in write
+    # The outline's promise for this chapter, not just its title.
+    assert "### 本篇要交付什么" in write
+    assert "打底" in write
+
+    outline = next(item for item in provider.prompts if "系列文章提纲" in item)
+    assert "论文" in outline  # deep chapters need sources with substance
+
+
+def test_each_chapter_hands_the_reader_to_the_next(tmp_path, monkeypatch):
+    """Chapters arrive days apart, so each one has to point at the next."""
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+    provider = ScriptedProvider()
+
+    run_series_create(store, provider, options(parts=3))
+
+    def prompt_for(title: str) -> str:
+        return next(item for item in provider.prompts
+                    if f"「强化学习：{title}」" in item)
+
+    middle = prompt_for("第二章")
+    assert "### 交给下一篇" in middle
+    # The hook has to be aimed at what the next chapter actually covers.
+    assert "第 3 章《第三章》：收束" in middle
+    assert "系列上下文" in middle
+
+    last = prompt_for("第三章")
+    assert "### 交给下一篇" not in last
+    assert "### 收束整个系列" in last
+
+
+def test_a_chapter_rerun_alone_still_points_at_its_neighbours(
+        tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(20)
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+    provider = ScriptedProvider()
+    series_id, _, _ = plan_series(
+        store, provider, options(parts=3), status="planned")
+    middle = store.list_chapters(series_id)[1]
+    provider.prompts.clear()
+
+    retry_chapter(store, provider, series_id, middle["id"])
+
+    written = next(item for item in provider.prompts
+                   if "「强化学习：第二章」" in item)
+    assert "第 3 章《第三章》：收束" in written
+
+
+def test_a_reopened_first_chapter_still_speaks_for_the_series(
+        tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(20)
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+    provider = ScriptedProvider()
+    series_id, _, _ = plan_series(
+        store, provider, options(parts=3), status="planned")
+    first = store.list_chapters(series_id)[0]
+    provider.prompts.clear()
+
+    retry_chapter(store, provider, series_id, first["id"])
+
+    opener = next(item for item in provider.prompts
+                  if "「强化学习：第一章」" in item)
+    assert "系列开篇" in opener
+
+
+def test_a_fixed_chapter_count_is_still_honoured():
+    provider = ScriptedProvider()
+    generate_series_outline("强化学习", "", provider, parts=3,
+                            depth="intermediate")
+    prompt = provider.prompts[-1]
+    assert "3 篇的系列文章提纲" in prompt
+    assert "必须恰好 3 项" in prompt
+
+
+def test_an_auto_outline_is_capped_at_the_maximum():
+    """The range is a prompt instruction, so it is enforced on the way back."""
+    provider = ScriptedProvider(json.dumps({"chapters": [
+        {"title": f"第 {index} 章", "search_queries": ["q"]}
+        for index in range(1, 15)]}))
+
+    chapters = generate_series_outline(
+        "强化学习", "", provider, parts=None, depth="intermediate")
+
+    assert len(chapters) == 10
+
+
 def test_options_reject_out_of_range_part_counts():
     with pytest.raises(ValueError, match="章节数必须在"):
         options(parts=2).validate()
@@ -605,8 +767,11 @@ def test_retry_passes_the_earlier_chapters_as_context(tmp_path, monkeypatch):
     retry_chapter(store, provider, series_id, failed["id"])
 
     write = next(item for item in provider.prompts if "title_candidates" in item)
-    assert "第 1 章《第一章》：这一章的开头段落。" in write
-    assert "第 3 章" not in write  # only what the reader has read by then
+    context = write.split("### 交给下一篇")[0]
+    assert "第 1 章《第一章》：这一章的开头段落。" in context
+    # A later chapter may be named as a hook, but never handed over as
+    # something the reader has already read.
+    assert "第 3 章" not in context
 
 
 def test_retry_that_fails_again_keeps_the_series_partial(

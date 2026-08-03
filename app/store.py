@@ -517,23 +517,34 @@ class Store:
             "ORDER BY source_name").fetchall()
         return [r["source_name"] for r in rows]
 
-    def list_articles(self, limit: int = 100, topic: str | None = None,
-                      source: str | None = None):
+    @staticmethod
+    def _article_filter(topic: str | None,
+                        source: str | None) -> tuple[str, list]:
         clauses = []
-        params = []
+        params: list = []
         if topic:
             clauses.append("topic=?")
             params.append(topic)
         if source:
             clauses.append("source_name=?")
             params.append(source)
-        where = ""
-        if clauses:
-            where = "WHERE " + " AND ".join(clauses)
+        return ("WHERE " + " AND ".join(clauses)) if clauses else "", params
+
+    def list_articles(self, limit: int = 100, topic: str | None = None,
+                      source: str | None = None, offset: int = 0):
+        where, params = self._article_filter(topic, source)
         return self.conn.execute(
             f"SELECT * FROM articles {where} "
-            "ORDER BY COALESCE(published_at, fetched_at) DESC LIMIT ?",
-            (*params, limit)).fetchall()
+            "ORDER BY COALESCE(published_at, fetched_at) DESC "
+            "LIMIT ? OFFSET ?",
+            (*params, limit, offset)).fetchall()
+
+    def count_articles(self, topic: str | None = None,
+                       source: str | None = None) -> int:
+        where, params = self._article_filter(topic, source)
+        row = self.conn.execute(
+            f"SELECT COUNT(*) AS n FROM articles {where}", params).fetchone()
+        return int(row["n"]) if row else 0
 
     def get_article(self, article_id: int):
         return self.conn.execute(
@@ -586,10 +597,23 @@ class Store:
         )
         self.conn.commit()
 
-    def drafts_by_article(self) -> dict[int, int]:
-        """Map article_id -> a draft id."""
-        rows = self.conn.execute(
-            "SELECT id, article_id FROM drafts ORDER BY id").fetchall()
+    def drafts_by_article(self, article_ids=None) -> dict[int, int]:
+        """Map article_id -> a draft id.
+
+        Scoped to the articles being shown when ids are given: the archive
+        page needs this for one screenful, not for every draft ever written.
+        """
+        if article_ids is not None:
+            ids = [int(value) for value in article_ids]
+            if not ids:
+                return {}
+            marks = ",".join("?" * len(ids))
+            rows = self.conn.execute(
+                f"SELECT id, article_id FROM drafts WHERE article_id IN ({marks}) "
+                "ORDER BY id", ids).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT id, article_id FROM drafts ORDER BY id").fetchall()
         out: dict[int, int] = {}
         for r in rows:
             aid = r["article_id"]

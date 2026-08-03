@@ -11,6 +11,10 @@ from app.pipeline.rewriter import (
 
 _SOURCE_CHARS = 2500
 _TOTAL_SOURCE_CHARS = 18000
+# 机制、参数、失败案例这些能写出深度的内容，通常在一篇技术长文的中后段。
+# 按常规预算截断，深入档的稿子等于只看着别人的开头在写。
+_DEEP_SOURCE_CHARS = 4000
+_DEEP_TOTAL_SOURCE_CHARS = 24000
 _MAX_REF_IMAGES = 12  # 参考资料配图清单上限，与 _MAX_IMG 对齐
 
 
@@ -23,15 +27,17 @@ class SynthesisResult:
 
 
 def _source_block(articles: list[Article],
-                  include_images: bool = False) -> str:
+                  include_images: bool = False, *, deep: bool = False) -> str:
+    per_source = _DEEP_SOURCE_CHARS if deep else _SOURCE_CHARS
+    budget = _DEEP_TOTAL_SOURCE_CHARS if deep else _TOTAL_SOURCE_CHARS
     blocks: list[str] = []
     used = 0
     for index, article in enumerate(articles, 1):
-        remaining = _TOTAL_SOURCE_CHARS - used
+        remaining = budget - used
         if remaining <= 0:
             break
         content = (article.content_md or article.raw_summary or "")[
-            :min(_SOURCE_CHARS, remaining)]
+            :min(per_source, remaining)]
         used += len(content)
         block = (
             f"[{index}] 标题：{article.title}\n"
@@ -246,14 +252,125 @@ def fact_check_multi(body_md: str, articles: list[Article],
     return [str(claim).strip() for claim in claims if str(claim).strip()]
 
 
-def _series_context_instruction(context_note: str) -> str:
-    value = (context_note or "").strip()
+_DEPTH_GUIDANCE = {
+    "beginner": (
+        "面向零基础读者。每个概念都要有一句大白话解释和一个贴近日常经验的类比；"
+        "推导和实现细节可以略过，但“它是什么、为什么需要它、没有它会怎样”"
+        "必须讲清楚。正文不少于 1800 字（英文不少于 1000 词）。"
+    ),
+    "intermediate": (
+        "面向有基础的读者。默认读者认得这个领域最基本的名词，重点讲原理，"
+        "以及几种做法之间的差别与取舍：谁在什么条件下更合适、代价是什么。"
+        "正文不少于 2500 字（英文不少于 1400 词）。"
+    ),
+    "advanced": (
+        "面向从业者。要写到能动手的层面：机制怎么运转、关键参数和常见取值、"
+        "典型的失败模式、与相近方案的具体差异、目前公认的局限和尚未解决的问题。"
+        "需要时可以出现公式、伪代码、配置项和源码级细节。"
+        "正文不少于 3500 字（英文不少于 2000 词）。"
+    ),
+}
+
+
+def _depth_instruction(depth: str) -> str:
+    """How deep to go, and what counts as deep.
+
+    Without this the model writes the same middling overview whatever the
+    series was positioned as — a page of correct-sounding terminology that
+    leaves a reader knowing no more than the table of contents told them.
+    """
+    level = _DEPTH_GUIDANCE.get(depth)
+    if not level:
+        return ""
+    return (
+        "### 内容深度\n"
+        f"{level}\n"
+        "以下几条不分档位，都必须做到：\n"
+        "- 术语、模型名、方法名第一次出现时，先用一句话说清它是什么、"
+        "解决什么问题，再往下用。只报名字不解释，等于没写。\n"
+        "- 讲到一个方法就要讲到机制：它靠什么做到的、比原来的做法好在哪、"
+        "代价和适用边界是什么。不要停在“效果显著”“性能强大”这类结论上。\n"
+        "- 资料里的数字、参数、前提条件、对比结果和具体例子要用上，"
+        "并标注来源编号；能落到具体处，就不要停在概括。\n"
+        "- 宁可少讲两个点，也要把讲到的点讲透。不要靠罗列名词凑覆盖面，"
+        "那样读者读完只记住一串词。"
+    )
+
+
+def _brief_instruction(scope: str) -> str:
+    value = (scope or "").strip()
+    if not value:
+        return ""
+    return (
+        "### 本篇要交付什么\n"
+        "这是提纲对本篇的要求，正文必须把它兑现，"
+        "不要写成同一主题下的又一篇泛泛综述：\n"
+        f"{value}"
+    )
+
+
+@dataclass
+class SeriesPlacement:
+    """Where an article sits in a series, so the seams can be written.
+
+    Chapters reach a reader one at a time, days apart. What makes them read as
+    a series rather than as loose articles on one subject is each chapter
+    picking up where the last one stopped and saying what the next one answers.
+    """
+    scope: str = ""    # what the outline promised this chapter would deliver
+    behind: str = ""   # chapters already written, by title and opening line
+    ahead: str = ""    # the next chapter, by title and scope
+    outline: str = ""  # the whole plan, for the opening chapter to introduce
+    closing: bool = False  # nothing follows: land the series instead
+
+
+def _series_context_instruction(behind: str) -> str:
+    value = (behind or "").strip()
     if not value:
         return ""
     return (
         "### 系列上下文\n"
         "本文是一个系列中的一篇。以下是已写完的前置章节，用于承接行文、"
-        "避免重复展开讲过的内容。它们不是参考资料，不得作为事实来源引用：\n"
+        "避免重复展开讲过的内容。开头要顺着上一篇的结尾往下写，"
+        "不要从零重新介绍这个主题。它们不是参考资料，"
+        "不得作为事实来源引用：\n"
+        f"{value}"
+    )
+
+
+def _series_handoff_instruction(placement: SeriesPlacement) -> str:
+    ahead = placement.ahead.strip()
+    if ahead:
+        return (
+            "### 交给下一篇\n"
+            "正文收尾处（若有推广与标签，放在它们之前）留一小段把读者带到"
+            "下一篇：点出本篇讲完之后新冒出来的那个问题，"
+            "说明它由下一篇回答，并写出下一篇的标题。这个钩子必须落在下一篇"
+            "真实要讲的内容上，不要写“敬请期待”“欲知后事如何”这类空话，"
+            "也不要许诺下一篇并不打算讲的东西。下一篇是：\n"
+            f"{ahead}"
+        )
+    if placement.closing:
+        return (
+            "### 收束整个系列\n"
+            "本文是这个系列的最后一篇。正文收尾处（若有推广与标签，放在它们"
+            "之前）要收住整个系列：回到开篇提出的问题，"
+            "交代读者读完这一路应该带走什么判断，不要再预告新的内容。"
+        )
+    return ""
+
+
+def _series_opening_instruction(outline: str) -> str:
+    value = (outline or "").strip()
+    if not value:
+        return ""
+    return (
+        "### 系列开篇\n"
+        "本文是这个系列的第一篇，读者从这里进入整个主题。除了写好本篇自己的"
+        "内容，还要用一节交代全局：这个主题由哪几块组成、它们之间是什么关系、"
+        "后面每一篇分别解决什么问题、建议按什么顺序读。各章的细节留给它们自己"
+        "展开，这里只提纲挈领。下面是系列的章节安排与知识脉络，它们不是参考"
+        "资料，不得作为事实来源引用，也不要照抄章节描述的措辞：\n"
         f"{value}"
     )
 
@@ -262,11 +379,14 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
                *, style=None, lang: str = "zh",
                promotion_footer: str = "",
                seo_tags_enabled: bool = True,
-               context_note: str = "",
+               depth: str = "",
+               series: SeriesPlacement | None = None,
                include_images: bool = True) -> SynthesisResult:
     if len(articles) < 2:
         raise ValueError("多源综合至少需要 2 篇有效参考资料")
 
+    placement = series or SeriesPlacement()
+    is_deep = depth == "advanced"
     style_prompt = (
         style.prompt if style is not None
         else "你是资深中文科技与商业内容编辑，擅长从多篇资料中提炼有依据的深度文章。"
@@ -289,7 +409,11 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
     content_rules = "\n\n".join(filter(None, [
         f"### 写作风格\n{guidance}" if guidance else "",
         examples,
-        _series_context_instruction(context_note),
+        _depth_instruction(depth),
+        _brief_instruction(placement.scope),
+        _series_context_instruction(placement.behind),
+        _series_opening_instruction(placement.outline),
+        _series_handoff_instruction(placement),
         _visual_instruction(has_images),
         _promotion_instruction(promotion_footer),
         _seo_instruction(seo_tags_enabled),
@@ -307,7 +431,8 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
         '- "citations": [{"claim":"正文中的关键事实",'
         '"source_indexes":[1,2],"quote":"可选的原文短句"}]\n'
         "不要输出代码围栏或额外说明。\n\n"
-        f"参考资料：\n{_source_block(articles, include_images=has_images)}"
+        "参考资料：\n"
+        f"{_source_block(articles, include_images=has_images, deep=is_deep)}"
     )
 
     parsed = None

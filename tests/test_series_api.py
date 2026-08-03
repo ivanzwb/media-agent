@@ -281,6 +281,30 @@ def test_plan_leaves_the_series_waiting_for_approval(tmp_path, monkeypatch):
     assert [item["status"] for item in chapters] == ["pending", "pending"]
 
 
+def test_a_request_without_a_chapter_count_leaves_it_to_the_outline(
+        tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_plan(store, provider, options, **kwargs):
+        captured["options"] = options
+        series_id = store.create_series(
+            title=options.topic, topic=options.topic, lang=options.lang,
+            depth=options.depth, parts=6, style_id=None, status="planned")
+        return series_id, [], {}
+
+    monkeypatch.setattr("app.web.server.plan_series", fake_plan)
+    client = make_client(tmp_path, pro=True)
+    payload = {key: value for key, value in valid_payload().items()
+               if key != "parts"}
+
+    assert client.post("/api/series/plan", json=payload).status_code == 200
+    state = wait_terminal(client)
+
+    assert captured["options"].parts is None
+    assert state["request"]["parts"] is None
+    assert state["series"]["parts"] == 6  # whatever the outline came back with
+
+
 def test_plan_requires_pro(tmp_path):
     client = make_client(tmp_path, pro=False)
     assert client.post(

@@ -526,10 +526,20 @@ def create_app(config: Config | None = None,
         return _serve_spa()
 
     @app.get("/api/archive")
-    def api_archive(topic: str | None = None, source: str | None = None):
+    def api_archive(topic: str | None = None, source: str | None = None,
+                    limit: int = 60, offset: int = 0):
+        """One screenful of the archive, newest first.
+
+        The page asks for the next slice as the reader gets to it, so a big
+        archive costs the same to open as a small one.
+        """
         from collections import OrderedDict
         store = get_store()
-        articles = store.list_articles(limit=200, topic=topic, source=source)
+        limit = max(1, min(int(limit), 200))
+        offset = max(0, int(offset))
+        total = store.count_articles(topic=topic, source=source)
+        articles = store.list_articles(
+            limit=limit, offset=offset, topic=topic, source=source)
         video_flags = store.article_video_flags(articles)
         by_date: dict[str, list] = OrderedDict()
         for a in articles:
@@ -545,10 +555,15 @@ def create_app(config: Config | None = None,
                 "published_at": a["published_at"], "fetched_at": a["fetched_at"],
                 "has_video": video_flags.get(a["id"], False),
             } for a in day]})
+        drafts = store.drafts_by_article([a["id"] for a in articles])
         return {
             "groups": groups,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "has_more": offset + len(articles) < total,
             "topics": store.list_topics(),
-            "draft_map": {str(k): v for k, v in store.drafts_by_article().items()},
+            "draft_map": {str(k): v for k, v in drafts.items()},
         }
 
     @app.get("/api/archive/{article_id}/view")
@@ -2976,11 +2991,12 @@ def create_app(config: Config | None = None,
         if not isinstance(raw_engines, list):
             raise ValueError("搜索引擎必须为数组")
         style_id = str(payload.get("style_id") or "").strip() or None
+        # Absent, null or zero all mean "let the outline decide".
         options = SeriesCreateOptions(
             topic=str(payload.get("topic") or ""),
             lang=str(payload.get("lang") or "zh"),
             depth=str(payload.get("depth") or "intermediate"),
-            parts=payload.get("parts", 5),
+            parts=payload.get("parts") or None,
             style_id=style_id,
             engines=[str(engine) for engine in raw_engines],
             ref_count=int(payload.get("ref_count", 5)),
@@ -3021,7 +3037,8 @@ def create_app(config: Config | None = None,
                     status_code=409)
             series_state.update(
                 running=True, status="running", stage="probe",
-                detail="正在生成提纲", current=0, total=options.parts, stats={},
+                detail="正在生成提纲", current=0, total=options.parts or 0,
+                stats={},
                 logs=[], error=None, series_id=None, op_id=None,
                 started_at=datetime.now(timezone.utc).isoformat(),
                 finished_at=None, cancel_requested=False,
@@ -3061,7 +3078,8 @@ def create_app(config: Config | None = None,
                     status_code=409)
             series_state.update(
                 running=True, status="running", stage="probe",
-                detail="任务已启动", current=0, total=options.parts, stats={},
+                detail="任务已启动", current=0, total=options.parts or 0,
+                stats={},
                 logs=[], error=None, series_id=None, op_id=None,
                 started_at=datetime.now(timezone.utc).isoformat(),
                 finished_at=None, cancel_requested=False,

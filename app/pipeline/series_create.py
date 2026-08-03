@@ -29,7 +29,7 @@ from app.pipeline.search_create import (
     _emit, _topic_search_terms, _url_key, collect_references, search_queries)
 from app.pipeline.localize import localize_reference_images
 from app.pipeline.synthesizer import (
-    expand_image_refs, referenced_images, synthesize)
+    SeriesPlacement, expand_image_refs, referenced_images, synthesize)
 from app.sources.web_search import DEFAULT_SEARCH_ENGINES, SearchHit
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,16 @@ logger = logging.getLogger(__name__)
 MIN_PARTS = 3
 MAX_PARTS = 10
 DEPTHS = ("beginner", "intermediate", "advanced")
+
+# Depth has to reach the search terms too: an outline that asks for
+# introductions collects introductions, and no writing prompt can make a
+# chapter deeper than the material it was given.
+_DEPTH_QUERY_HINTS = {
+    "beginner": "检索词偏向入门、科普、图解一类的资料。",
+    "intermediate": "检索词偏向原理讲解、方案对比一类的资料。",
+    "advanced": "检索词要能搜到原理、实现、论文、文档、源码一类的资料，"
+                "而不是入门介绍。",
+}
 
 _DEPTH_LABELS = {
     "beginner": "入门：面向零基础读者，重解释、类比和直觉",
@@ -62,7 +72,8 @@ class SeriesCreateOptions:
     topic: str
     lang: str = "zh"
     depth: str = "intermediate"
-    parts: int = 5
+    # None asks the outline to decide how many chapters the subject needs.
+    parts: int | None = None
     style_id: str | None = None
     engines: tuple[str, ...] | list[str] = DEFAULT_SEARCH_ENGINES
     ref_count: int = 5
@@ -91,12 +102,13 @@ class SeriesCreateOptions:
             raise ValueError("语言必须为 zh、en 或 bilingual")
         if self.depth not in DEPTHS:
             raise ValueError("深度必须为 beginner、intermediate 或 advanced")
-        try:
-            self.parts = int(self.parts)
-        except (TypeError, ValueError):
-            raise ValueError("章节数必须为整数") from None
-        if not MIN_PARTS <= self.parts <= MAX_PARTS:
-            raise ValueError(f"章节数必须在 {MIN_PARTS}-{MAX_PARTS} 之间")
+        if self.parts is not None:
+            try:
+                self.parts = int(self.parts)
+            except (TypeError, ValueError):
+                raise ValueError("章节数必须为整数") from None
+            if not MIN_PARTS <= self.parts <= MAX_PARTS:
+                raise ValueError(f"章节数必须在 {MIN_PARTS}-{MAX_PARTS} 之间")
         # Engine, ref_count and worker rules are identical to single-draft
         # creation; validating a derived instance keeps them in one place.
         checked = self.chapter_options()
@@ -298,8 +310,16 @@ def _normalise_chapters(value, topic: str, parts: int,
 
 
 def generate_series_outline(topic: str, grounding: str, provider: LLMProvider,
-                            *, parts: int, depth: str, lang: str = "zh",
+                            *, parts: int | None = None, depth: str,
+                            lang: str = "zh",
                             knowledge_map: str = "") -> list[dict]:
+    """Split the subject into chapters.
+
+    How many chapters is part of the answer, not part of the question: a
+    number picked before anyone has looked at the field makes the model pad a
+    narrow subject or compress a broad one. Passing `parts` forces a count for
+    the cases where the user wants one.
+    """
     language = {"zh": "中文", "en": "English",
                 "bilingual": "中英双语"}.get(lang, "中文")
     grounding_block = (
@@ -312,11 +332,27 @@ def generate_series_outline(topic: str, grounding: str, provider: LLMProvider,
         f"章节划分应覆盖其中的主要分支：\n{knowledge_map}\n\n"
         if knowledge_map.strip() else ""
     )
+    if parts:
+        opening = f"为知识主题「{topic}」设计一个 {parts} 篇的系列文章提纲。\n"
+        count_rule = f"chapters 必须恰好 {parts} 项。"
+    else:
+        opening = (
+            f"为知识主题「{topic}」设计一个系列文章提纲。\n"
+            "篇数由主题本身决定：先看讲清楚这个领域需要哪几块，再定几章，"
+            f"取值 {MIN_PARTS}-{MAX_PARTS}（含开篇总览）。主题窄、主线少就少写几章；"
+            "分支多、每块都撑得起一篇才多写。深度定位也决定粒度："
+            "入门可以把细节并进一章，深入才值得为一个分支单开一章。\n")
+        count_rule = (
+            f"chapters 为 {MIN_PARTS}-{MAX_PARTS} 项，"
+            "宁可少而扎实，也不要为凑数拆出内容重复或撑不满一篇的章节。")
     prompt = (
-        f"为知识主题「{topic}」设计一个 {parts} 篇的系列文章提纲。\n"
+        f"{opening}"
         f"深度定位：{_DEPTH_LABELS[depth]}。输出语言：{language}。\n"
         "章节之间要有清晰的递进关系，共同覆盖该领域的主要脉络，"
-        "彼此不重复。\n\n"
+        "彼此不重复。\n"
+        "第一章是整个系列的开篇总览：交代这个主题的全貌、几个部分之间的关系，"
+        "以及后面每一章各自解决什么问题，本身不深入某一个分支；"
+        "它的检索词用该领域综述、入门一类的说法。\n\n"
         f"{map_block}{grounding_block}"
         "只输出 JSON 对象：\n"
         '{"chapters":[{"title":"章节标题",'
@@ -324,11 +360,13 @@ def generate_series_outline(topic: str, grounding: str, provider: LLMProvider,
         '"search_queries":["2-4 个用于检索该章资料的检索词，短而具体，'
         '使用该领域实际通用的说法"],'
         '"prerequisites":["需要先读的本系列其他章节标题"]}]}\n'
-        f"chapters 必须恰好 {parts} 项。不要输出代码围栏或额外说明。"
+        f"{_DEPTH_QUERY_HINTS[depth]}\n"
+        f"{count_rule}不要输出代码围栏或额外说明。"
     )
     raw = provider.chat([Message(role="user", content=prompt)])
     chapters = _normalise_chapters(
-        (_extract_json(raw) or {}).get("chapters"), topic, parts, lang)
+        (_extract_json(raw) or {}).get("chapters"), topic,
+        parts or MAX_PARTS, lang)
     if not chapters:
         logger.warning("系列提纲解析失败，响应：%r", str(raw)[:300])
         raise ValueError("系列提纲生成失败，请调整主题后重试")
@@ -496,6 +534,36 @@ def _series_nav_note(topic: str, index: int, titles: list[str],
     return "".join(f"> {line}\n" for line in lines) + "\n"
 
 
+def _chapter_line(item: dict, lang: str) -> str:
+    label = f"{_part_label(item['order'], lang)}《{item['title']}》"
+    scope = (item.get("scope") or "").strip()
+    return f"{label}：{scope}" if scope else label
+
+
+def _series_roadmap(plan: list[dict], knowledge_map: str, lang: str) -> str:
+    """The whole plan, written out for the opening chapter to introduce.
+
+    The opener is the one chapter that has to speak for the series, and by the
+    time it is written the outline is settled — so it describes chapters that
+    will exist, in the order the reader will meet them.
+    """
+    text = "\n".join(_chapter_line(item, lang) for item in plan)
+    diagram = (knowledge_map or "").strip()
+    if diagram:
+        text += (
+            "\n\n该主题的知识脉络（Mermaid，A --> B 表示 B 是 A 的下一层）。"
+            "若有助于读者建立全局印象，可以在开篇原样放进一个 mermaid 代码块，"
+            f"不要改写其中的节点文字：\n{diagram}")
+    return text
+
+
+def _next_chapter_note(plan: list[dict], index: int, lang: str) -> str:
+    """The chapter this one hands the reader to, if there is one."""
+    following = next(
+        (item for item in plan if item["order"] == index + 1), None)
+    return _chapter_line(following, lang) if following else ""
+
+
 def _chapter_context(written: list[dict], lang: str) -> str:
     return "\n".join(
         f"{_part_label(item['order'], lang)}《{item['title']}》：{item['summary']}"
@@ -552,8 +620,13 @@ class _ChapterContext:
     promotion_footer: str = ""
     seo_tags_enabled: bool = True
     sensitive_words: set[str] = field(default_factory=set)
-    chapter_titles: list[str] = field(default_factory=list)
+    # Every chapter of the series, in order: order, title and scope.
+    plan: list[dict] = field(default_factory=list)
+    knowledge_map: str = ""
     config: Config | None = None
+
+    def titles(self) -> list[str]:
+        return [item["title"] for item in self.plan]
 
 
 def _write_chapter(context: _ChapterContext, chapter: dict, chapter_id: int, *,
@@ -599,9 +672,22 @@ def _write_chapter(context: _ChapterContext, chapter: dict, chapter_id: int, *,
         style=context.style, lang=options.lang,
         promotion_footer=context.promotion_footer,
         seo_tags_enabled=context.seo_tags_enabled,
-        # Only what the reader has read by this point in the series.
-        context_note=_chapter_context(
-            [item for item in written if item["order"] < index], options.lang))
+        # The depth the series was positioned at decides how the chapter is
+        # written, not just how the outline was cut.
+        depth=options.depth,
+        series=SeriesPlacement(
+            scope=chapter["scope"],
+            # Only what the reader has read by this point in the series.
+            behind=_chapter_context(
+                [item for item in written if item["order"] < index],
+                options.lang),
+            ahead=_next_chapter_note(context.plan, index, options.lang),
+            # The opening chapter carries the series: it is where a reader
+            # finds out what the whole thing covers and in what order.
+            outline=(_series_roadmap(
+                context.plan, context.knowledge_map, options.lang)
+                if index == 1 and total > 1 else ""),
+            closing=total > 1 and index == total))
 
     # 模型可能用 [[IMG:N]] 引用了参考资料的配图：把被引用的图片下载到本地
     # （data/media/），再把占位符展开为 ![](/media/...) 路径。
@@ -622,7 +708,7 @@ def _write_chapter(context: _ChapterContext, chapter: dict, chapter_id: int, *,
 
     primary = saved_articles[0]
     body_md = _series_nav_note(
-        options.topic, index, context.chapter_titles,
+        options.topic, index, context.titles(),
         chapter["prerequisites"], options.lang) + result.body_md
     draft = Draft(
         article_id=primary.id or 0,
@@ -777,7 +863,10 @@ def run_series_chapters(store, provider: LLMProvider, series_id: int, *,
         search_options=search_options, series_id=series_id, style=style,
         promotion_footer=promotion_footer, seo_tags_enabled=seo_tags_enabled,
         sensitive_words=sensitive_words or set(),
-        chapter_titles=[row["title"] for row in rows],
+        plan=[{"order": row["chapter_order"], "title": row["title"],
+               "scope": row["scope"] or ""} for row in rows],
+        knowledge_map=(series["knowledge_map"]
+                       if "knowledge_map" in series.keys() else "") or "",
         config=config)
 
     for row in targets:

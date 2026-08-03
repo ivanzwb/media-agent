@@ -50,11 +50,16 @@ interface SeriesForm {
   topic: string;
   lang: "zh" | "en" | "bilingual";
   depth: "beginner" | "intermediate" | "advanced";
-  parts: number;
+  parts: number;  // 0：由提纲按主题与深度决定
   ref_count: 5 | 10 | 20;
   style: string;
   engines: Array<"bing" | "baidu" | "duckduckgo" | "google" | "brave">;
 }
+
+// Mirrors MIN_PARTS / MAX_PARTS in app/pipeline/series_create.py, used only to
+// quote a range before the outline exists.
+const AUTO_MIN_PARTS = 3;
+const AUTO_MAX_PARTS = 10;
 
 const STAGE_LABEL: Record<string, string> = {
   probe: "检索该主题的公开资料",
@@ -159,7 +164,7 @@ export default function SeriesCreate() {
         topic: values.topic.trim(),
         lang: values.lang,
         depth: values.depth,
-        parts: values.parts,
+        parts: values.parts || null,
         ref_count: values.ref_count,
         style_id: values.style || null,
         engines: values.engines,
@@ -182,7 +187,7 @@ export default function SeriesCreate() {
         topic: values.topic.trim(),
         lang: values.lang,
         depth: values.depth,
-        parts: values.parts,
+        parts: values.parts || null,
         ref_count: values.ref_count,
         style_id: values.style || null,
         engines: values.engines,
@@ -201,18 +206,27 @@ export default function SeriesCreate() {
   function confirmAndStart(values: SeriesForm) {
     if (!isPro) { openLicenseGuide(); return; }
     // A series is minutes of work and a real amount of model spend, so the
-    // scale is shown before the run rather than discovered during it.
-    const calls = 1 + values.parts * 4;
-    const fetches = values.parts * values.ref_count * 2;
+    // scale is shown before the run rather than discovered during it. When the
+    // outline picks the chapter count, only a range can be promised.
+    const low = values.parts || AUTO_MIN_PARTS;
+    const high = values.parts || AUTO_MAX_PARTS;
+    const span = (per: number) => (
+      low === high ? `${low * per}` : `${low * per}–${high * per}`);
     modal.confirm({
-      title: `确认开始 ${values.parts} 章的系列创作？`,
+      title: values.parts
+        ? `确认开始 ${values.parts} 章的系列创作？` : "确认开始系列创作？",
       icon: null,
       okText: "开始创作",
       cancelText: "再改改",
       content: (
         <Space direction="vertical" size={4} style={{ marginTop: 8 }}>
-          <Text>预计大模型调用约 {calls} 次，网页抓取约 {fetches} 个页面。</Text>
-          <Text>预计耗时 {values.parts * 3}–{values.parts * 6} 分钟，期间无法同时进行搜索创作。</Text>
+          {!values.parts && (
+            <Text>章节数由提纲按主题与深度决定，
+              预计 {AUTO_MIN_PARTS}–{AUTO_MAX_PARTS} 章。</Text>
+          )}
+          <Text>预计大模型调用约 {span(4)} 次，
+            网页抓取约 {span(values.ref_count * 2)} 个页面。</Text>
+          <Text>预计耗时 {low * 3}–{high * 6} 分钟，期间无法同时进行搜索创作。</Text>
           <Text type="secondary">中途可以取消，已写完的章节会保留为草稿。</Text>
         </Space>
       ),
@@ -349,7 +363,7 @@ export default function SeriesCreate() {
       <Card title="系列选项" style={{ borderColor: "#d6e4ff" }}>
         <Form<SeriesForm> form={form} layout="vertical" onFinish={plan}
           initialValues={{
-            lang: "zh", depth: "intermediate", parts: 5, ref_count: 5, style: "",
+            lang: "zh", depth: "intermediate", parts: 0, ref_count: 5, style: "",
             engines: ["bing", "baidu", "duckduckgo", "google", "brave"],
           }}
           disabled={active || (!isPro && !!license)}>
@@ -362,10 +376,14 @@ export default function SeriesCreate() {
               placeholder="例如：从零理解强化学习" />
           </Form.Item>
           <Space wrap size="large" align="start">
-            <Form.Item name="parts" label="章节数" style={{ minWidth: 160 }}>
-              <Select options={[3, 4, 5, 6, 7, 8, 9, 10].map((value) => ({
-                value, label: `${value} 章`,
-              }))} />
+            <Form.Item name="parts" label="章节数" style={{ minWidth: 220 }}
+              extra="自动时按主题的覆盖面和深度定位决定，3–10 章。">
+              <Select options={[
+                { value: 0, label: "自动（按主题决定）" },
+                ...[3, 4, 5, 6, 7, 8, 9, 10].map((value) => ({
+                  value, label: `固定 ${value} 章`,
+                })),
+              ]} />
             </Form.Item>
             <Form.Item name="depth" label="深度定位" style={{ minWidth: 220 }}>
               <Select options={[

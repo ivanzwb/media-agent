@@ -448,6 +448,51 @@ def test_synthesize_uses_content_style_settings_and_examples():
     assert "**标签**：#AI #智能体" in result.body_md
 
 
+class CapturingProvider(MockProvider):
+    def __init__(self):
+        super().__init__([
+            '{"title_candidates":["标题"],"body_md":"## 正文\\n事实 [1]。"}',
+            '{"flagged_claims":[]}',
+        ])
+        self.calls = []
+
+    def chat(self, messages, **opts):
+        self.calls.append(messages)
+        return super().chat(messages, **opts)
+
+
+def test_depth_positioning_reaches_the_writer():
+    provider = CapturingProvider()
+    synthesize("AI", [article(1), article(2)], provider, depth="advanced")
+    prompt = provider.calls[0][-1].content
+    assert "### 内容深度" in prompt
+    assert "面向从业者" in prompt
+    assert "不少于 3500 字" in prompt
+    # The complaint this answers: a page of terminology nobody can use.
+    assert "只报名字不解释，等于没写" in prompt
+
+
+def test_without_a_depth_nothing_is_claimed_about_it():
+    provider = CapturingProvider()
+    synthesize("AI", [article(1), article(2)], provider)
+    assert "### 内容深度" not in provider.calls[0][-1].content
+
+
+def test_deep_writing_reads_further_into_each_source():
+    """The mechanisms worth writing about sit past a source's opening."""
+    rows = [article(1), article(2)]
+    for row in rows:
+        row.content_md = "开头。" + "细节 " * 900 + "末尾的机制说明。"
+
+    shallow = CapturingProvider()
+    synthesize("AI", rows, shallow)
+    deep = CapturingProvider()
+    synthesize("AI", rows, deep, depth="advanced")
+
+    assert "末尾的机制说明" not in shallow.calls[0][-1].content
+    assert "末尾的机制说明" in deep.calls[0][-1].content
+
+
 def test_image_manifest_lists_http_images_across_articles_in_order():
     rows = [article(1), article(2)]
     rows[0].images = ["https://img.cdn/a.png", "/media/keep.png"]

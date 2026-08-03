@@ -1,8 +1,10 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery, useQuery, useQueryClient,
+} from "@tanstack/react-query";
 import {
   App as AntApp, Button, Collapse, Select, Space, Table, Tag, Typography, Badge,
 } from "antd";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, getJson, postForm } from "../api/client";
 import ArticleViewModal from "../components/ArticleViewModal";
@@ -15,7 +17,14 @@ interface Article {
   has_video: boolean;
 }
 interface Group { date: string; articles: Article[]; }
-interface ArchiveData { groups: Group[]; topics: string[]; draft_map: Record<string, number>; }
+interface ArchiveData {
+  groups: Group[]; topics: string[]; draft_map: Record<string, number>;
+  total: number; offset: number; limit: number; has_more: boolean;
+}
+
+// One screenful. The rest arrives when the reader asks for it, so opening the
+// page costs the same whether the archive holds fifty articles or five thousand.
+const PAGE_SIZE = 60;
 interface RewriteEntry {
   article_id: number; title: string; running: boolean; done: boolean;
   error: string | null; draft_id: number | null; logs: string[];
@@ -31,10 +40,42 @@ export default function Archive() {
   const [polling, setPolling] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
 
-  const { data } = useQuery({
+  const {
+    data: pages, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading,
+  } = useInfiniteQuery({
     queryKey: ["archive", topic],
-    queryFn: () => getJson<ArchiveData>("/api/archive", topic ? { topic } : undefined),
+    queryFn: ({ pageParam }) => getJson<ArchiveData>("/api/archive", {
+      ...(topic ? { topic } : {}), limit: PAGE_SIZE, offset: pageParam,
+    }),
+    initialPageParam: 0,
+    getNextPageParam: (last: ArchiveData) =>
+      (last.has_more ? last.offset + last.limit : undefined),
   });
+
+  // Later pages can land on a date an earlier page already opened, so days are
+  // merged rather than repeated.
+  const data = useMemo(() => {
+    const loaded = pages?.pages || [];
+    const byDate = new Map<string, Article[]>();
+    const draft_map: Record<string, number> = {};
+    for (const page of loaded) {
+      for (const group of page.groups) {
+        byDate.set(group.date, [
+          ...(byDate.get(group.date) || []), ...group.articles]);
+      }
+      Object.assign(draft_map, page.draft_map);
+    }
+    const groups = [...byDate.entries()]
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+      .map(([date, articles]) => ({ date, articles }));
+    return {
+      groups,
+      draft_map,
+      topics: loaded[0]?.topics || [],
+      total: loaded[0]?.total || 0,
+      shown: groups.reduce((sum, group) => sum + group.articles.length, 0),
+    };
+  }, [pages]);
   const { data: styleData } = useQuery({
     queryKey: ["rewrite-styles"],
     queryFn: () => getJson<{ styles: { id: string; name: string; is_builtin: boolean }[] }>("/api/rewrite-styles"),
@@ -54,7 +95,7 @@ export default function Archive() {
     }
   }, [entries]);
 
-  const draftMap = data?.draft_map || {};
+  const draftMap = data.draft_map;
 
   async function rewrite(article: Article, isRewrite: boolean) {
     if (isRewrite && !confirm("重写会覆盖该文章已有的主稿草稿，确定吗？")) return;
@@ -160,7 +201,7 @@ export default function Archive() {
       <Space wrap>
         <Text strong>主题</Text>
         <Tag.CheckableTag checked={!topic} onChange={() => setParams({})}>全部</Tag.CheckableTag>
-        {(data?.topics || []).map((t) => (
+        {data.topics.map((t) => (
           <Tag.CheckableTag key={t} checked={topic === t} onChange={() => setParams({ topic: t })}>{t}</Tag.CheckableTag>
         ))}
       </Space>
@@ -180,21 +221,34 @@ export default function Archive() {
         </Button>
       </Space>
 
-      {data?.groups?.length ? (
-        <Collapse defaultActiveKey={data.groups[0]?.date} items={data.groups.map((g) => ({
-          key: g.date,
-          label: <Space><b>{g.date}</b><Badge count={g.articles.length} color="#07C160" /></Space>,
-          children: <Table rowKey="id" size="small" pagination={false}
-            dataSource={g.articles} columns={columns}
-            rowSelection={{
-              selectedRowKeys: selectedIds.filter((id) => g.articles.some((a) => a.id === id)),
-              onChange: (keys) => {
-                const groupIds = new Set(g.articles.map((a) => a.id));
-                setSelectedIds((prev) => [...prev.filter((id) => !groupIds.has(id)), ...(keys as number[])]);
-              },
-            }} />,
-        }))} />
-      ) : <Text type="secondary">暂无文章。</Text>}
+      {data.groups.length ? (
+        <>
+          {/* 未展开的日期不渲染表格，几千条归档也只画当前这一天。 */}
+          <Collapse destroyInactivePanel defaultActiveKey={data.groups[0]?.date}
+            items={data.groups.map((g) => ({
+              key: g.date,
+              label: <Space><b>{g.date}</b><Badge count={g.articles.length} color="#07C160" /></Space>,
+              children: <Table rowKey="id" size="small" pagination={false}
+                dataSource={g.articles} columns={columns}
+                rowSelection={{
+                  selectedRowKeys: selectedIds.filter((id) => g.articles.some((a) => a.id === id)),
+                  onChange: (keys) => {
+                    const groupIds = new Set(g.articles.map((a) => a.id));
+                    setSelectedIds((prev) => [...prev.filter((id) => !groupIds.has(id)), ...(keys as number[])]);
+                  },
+                }} />,
+            }))} />
+          <Space>
+            <Text type="secondary">已加载 {data.shown} / {data.total} 篇</Text>
+            {hasNextPage && (
+              <Button size="small" loading={isFetchingNextPage}
+                onClick={() => fetchNextPage()}>加载更多</Button>
+            )}
+          </Space>
+        </>
+      ) : (
+        <Text type="secondary">{isLoading ? "正在加载…" : "暂无文章。"}</Text>
+      )}
 
       {entries.length > 0 && (
         <div className="ma-run-panel" style={{ maxHeight: 340, overflowY: "auto" }}>

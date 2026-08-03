@@ -76,6 +76,50 @@ def test_archive_lists_and_filters(tmp_path):
     assert "GPT-5 breakthrough" in titles2
 
 
+def test_archive_hands_out_one_page_at_a_time(tmp_path):
+    """A big archive must cost the same to open as a small one."""
+    client, store, _ = make_client(tmp_path)
+    for index in range(5):
+        store.save_article(Article(
+            title=f"Article {index}", content_md="# Body\nfacts",
+            url=f"https://x.com/{index}", source_name="Source",
+            source_type="rss",
+            published_at=datetime(2026, 1, index + 1, tzinfo=timezone.utc),
+            images=[], raw_summary=None,
+            fetched_at=datetime(2026, 1, index + 1, tzinfo=timezone.utc),
+            topic="AI"))
+
+    first = client.get("/api/archive?limit=2").json()
+    titles = [a["title"] for g in first["groups"] for a in g["articles"]]
+    assert titles == ["Article 4", "Article 3"]  # newest first
+    assert first["total"] == 5 and first["has_more"] is True
+
+    second = client.get("/api/archive?limit=2&offset=2").json()
+    assert [a["title"] for g in second["groups"] for a in g["articles"]] == [
+        "Article 2", "Article 1"]
+
+    last = client.get("/api/archive?limit=2&offset=4").json()
+    assert last["has_more"] is False
+
+
+def test_archive_only_looks_up_drafts_for_the_page_it_returns(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    art, _draft = seed(store)
+    newer = store.save_article(Article(
+        title="Newer", content_md="# Body\nfacts", url="https://x.com/newer",
+        source_name="Source", source_type="rss",
+        published_at=datetime(2026, 6, 1, tzinfo=timezone.utc), images=[],
+        raw_summary=None,
+        fetched_at=datetime(2026, 6, 1, tzinfo=timezone.utc), topic="AI"))
+
+    page = client.get("/api/archive?limit=1").json()
+    assert [a["id"] for g in page["groups"] for a in g["articles"]] == [newer.id]
+    # The seeded article has a draft, but it is not on this page.
+    assert page["draft_map"] == {}
+    assert str(art.id) in client.get("/api/archive?limit=1&offset=1").json()[
+        "draft_map"]
+
+
 def test_archive_marks_articles_with_video(tmp_path):
     client, store, _ = make_client(tmp_path)
     article = store.save_article(Article(

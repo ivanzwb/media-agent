@@ -105,6 +105,18 @@ CREATE INDEX IF NOT EXISTS idx_series_chapters_series
     ON series_chapters(series_id, chapter_order);
 """
 
+# 归档页按「发布时间，缺失则回退抓取时间」倒序翻页，索引必须建在同一个表达式
+# 上，否则每翻一页都要把整张表排一遍。建在迁移之后：它们引用的列在很老的库
+# 里可能是后补上的。
+_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_articles_recency "
+    "ON articles(COALESCE(published_at, fetched_at) DESC)",
+    # 首列带上主题，主题筛选下的翻页同样不必重排，DISTINCT topic 也走它。
+    "CREATE INDEX IF NOT EXISTS idx_articles_topic_recency "
+    "ON articles(topic, COALESCE(published_at, fetched_at) DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_drafts_article ON drafts(article_id)",
+)
+
 
 def connect(db_path: Path | str) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
@@ -213,6 +225,11 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
             ("huggingface_mirror", "https://hf-mirror.com"))
+    for statement in _INDEXES:
+        try:
+            conn.execute(statement)
+        except sqlite3.OperationalError:
+            pass  # table predates the columns the index reads
     conn.commit()
 
 
