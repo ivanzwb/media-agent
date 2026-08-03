@@ -149,6 +149,43 @@ def test_series_cancel_without_a_running_job(tmp_path):
     assert response.status_code == 409
 
 
+def test_cancel_after_restart_clears_stale_series(tmp_path):
+    """A series run interrupted by a server restart leaves the series row
+    stuck at 'running'. The status endpoint rebuilds from it, so cancel must
+    mark the series cancelled instead of refusing with 409."""
+    client = make_client(tmp_path, pro=True)
+    config = Config(data_dir=tmp_path)
+    conn = connect(config.db_path)
+    init_db(conn)
+    store = Store(conn, config)
+    series_id = store.create_series(
+        title="强化学习", topic="强化学习", lang="zh", depth="beginner",
+        parts=2, style_id=None, status="planned")
+    store.mark_series_running(series_id)
+    conn.close()
+
+    # A fresh app over the same data directory stands in for a restart.
+    restarted = make_client(tmp_path, pro=True)
+    state = restarted.get("/api/series/status").json()
+    assert state["status"] == "running"
+
+    response = restarted.post("/api/series/cancel")
+    assert response.status_code == 200
+    assert response.json()["cancel_requested"] is True
+
+    conn = connect(config.db_path)
+    try:
+        row = Store(conn, config).get_series(series_id)
+    finally:
+        conn.close()
+    assert row is not None
+    assert row["status"] == "cancelled"
+
+    state = restarted.get("/api/series/status").json()
+    assert state["status"] == "cancelled"
+    assert state["running"] is False
+
+
 def test_status_rebuilds_chapter_progress_from_the_database(tmp_path):
     """A series outlives the process that started it."""
     make_client(tmp_path, pro=True)

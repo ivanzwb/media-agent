@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 
 from app.config import Config
-from app.db import connect, init_db
+from app.db import connect, get_op, init_db, start_op
 from app.models import Article, Draft
 from app.pipeline.search_create import SearchCreateCancelled
 from app.store import Store
@@ -115,6 +115,40 @@ def test_search_create_single_flight_and_cancel(tmp_path, monkeypatch):
     state = wait_terminal(client)
     assert state["status"] == "cancelled"
     assert state["error"] is None
+
+
+def test_cancel_after_restart_clears_stale_db_op(tmp_path):
+    """A search-create run interrupted by a server restart leaves a stale
+    'running' op in the DB. The status endpoint rebuilds from it, so cancel
+    must clear it instead of refusing with 409."""
+    client = make_client(tmp_path, pro=True)
+    config = Config(data_dir=tmp_path)
+    conn = connect(config.db_path)
+    init_db(conn)
+    op_id = start_op(conn, "search_create", 0)
+    conn.close()
+
+    # A fresh app over the same data directory stands in for a restart.
+    restarted = make_client(tmp_path, pro=True)
+    state = restarted.get("/api/search-create/status").json()
+    assert state["running"] is True
+    assert state["status"] == "running"
+
+    response = restarted.post("/api/search-create/cancel")
+    assert response.status_code == 200
+    assert response.json()["cancel_requested"] is True
+
+    conn = connect(config.db_path)
+    try:
+        op = get_op(conn, op_id)
+    finally:
+        conn.close()
+    assert op is not None
+    assert op["status"] == "cancelled"
+
+    state = restarted.get("/api/search-create/status").json()
+    assert state["running"] is False
+    assert state["status"] == "cancelled"
 
 
 def test_draft_api_returns_search_source_metadata(tmp_path, monkeypatch):

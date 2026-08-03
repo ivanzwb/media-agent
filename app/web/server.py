@@ -2914,6 +2914,17 @@ def create_app(config: Config | None = None,
             return denied
         with search_create_lock:
             if not search_create_state["running"]:
+                # A run interrupted by a server restart leaves a stale
+                # 'running' op in the DB; the status endpoint rebuilds from
+                # it, so cancel must clear it instead of refusing with 409.
+                conn = _db_conn()
+                try:
+                    latest = get_latest_op(conn, "search_create")
+                    if latest is not None and latest["status"] == "running":
+                        cancel_op(conn, latest["id"])
+                        return {"ok": True, "cancel_requested": True}
+                finally:
+                    conn.close()
                 return JSONResponse(
                     {"ok": False, "error": "没有运行中的搜索创作任务"},
                     status_code=409)
@@ -3245,6 +3256,15 @@ def create_app(config: Config | None = None,
             return denied
         with search_create_lock:
             if not series_state["running"]:
+                # A run interrupted by a server restart leaves the series row
+                # stuck at 'running'; the status endpoint rebuilds from it,
+                # so cancel must mark it cancelled instead of 409.
+                store = get_store()
+                row = (store.get_series(series_state["series_id"])
+                       if series_state["series_id"] else store.latest_series())
+                if row is not None and row["status"] == "running":
+                    store.finish_series(row["id"], "cancelled")
+                    return {"ok": True, "cancel_requested": True}
                 return JSONResponse(
                     {"ok": False, "error": "没有运行中的系列创作任务"},
                     status_code=409)
