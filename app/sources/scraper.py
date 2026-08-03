@@ -336,9 +336,16 @@ def render_with_playwright(url: str, timeout: float,
 
     Returns the rendered HTML, or None on failure / missing Playwright.
 
-    Uses ``wait_until="load"`` (not ``"networkidle"``) because modern sites
-    with analytics/tracking scripts rarely reach network-idle within a
-    reasonable timeout.
+    Waits for ``"domcontentloaded"`` (not ``"load"`` or ``"networkidle"``):
+    the extractor only needs the DOM with the article text. ``"load"`` waits
+    for every subresource — images, fonts, WebGL viewers, tracking scripts —
+    and heavy pages (e.g. 3D anatomy viewers) can stall it past the timeout.
+    Client-side rendering is covered by the ``wait_for`` delay below.
+
+    Some pages (HubSpot templates with a parser-blocking script) never reach
+    ``domcontentloaded`` even though the full body is already present; those
+    are retried with ``wait_until="commit"``, which resolves as soon as the
+    response headers arrive.
 
     Anti-detection:
       * ``viewport`` set to a realistic desktop size.
@@ -358,7 +365,7 @@ def render_with_playwright(url: str, timeout: float,
 
     VIEWPORT = {"width": 1280, "height": 720}
 
-    def _do_launch(p, **kwargs):
+    def _do_launch(p, wait_until="domcontentloaded", **kwargs):
         browser = p.chromium.launch(
             headless=True,
             args=[
@@ -378,7 +385,7 @@ def render_with_playwright(url: str, timeout: float,
             locale="en-US",
         )
         page = context.new_page()
-        response = page.goto(url, wait_until="load",
+        response = page.goto(url, wait_until=wait_until,
                              timeout=int(timeout * 1000))
         # Reject HTTP error pages (4xx, 5xx) — Playwright renders them as
         # fully-styled HTML which would pass through as fake "article" content.
@@ -398,17 +405,30 @@ def render_with_playwright(url: str, timeout: float,
         with sync_playwright() as p:
             return _do_launch(p)
     except Exception as exc:
+        # Some pages (HubSpot templates with a parser-blocking script, heavy
+        # tracking widgets) never reach "domcontentloaded" even though the
+        # full body is already present — the parser is held open indefinitely.
+        # Retrying with "commit" (resolves on response headers) rescues them;
+        # the wait_for below still allows client-side rendering to finish.
         logger.warning(
-            "Playwright default launch failed for %s: %s. "
-            "Trying channel='chrome' …", url, exc)
+            "Playwright domcontentloaded failed for %s: %s. "
+            "Retrying with wait_until='commit' …", url, exc)
         try:
             with sync_playwright() as p:
-                return _do_launch(p, channel="chrome")
+                return _do_launch(p, wait_until="commit")
         except Exception as exc2:
             logger.warning(
-                "Playwright channel='chrome' also failed for %s: %s",
-                url, exc2)
-            return None
+                "Playwright commit also failed for %s: %s. "
+                "Trying channel='chrome' …", url, exc2)
+            try:
+                with sync_playwright() as p:
+                    return _do_launch(p, wait_until="commit",
+                                      channel="chrome")
+            except Exception as exc3:
+                logger.warning(
+                    "Playwright channel='chrome' also failed for %s: %s",
+                    url, exc3)
+                return None
 
 
 def _client_get(url: str, timeout: float, headers: dict[str, str],
