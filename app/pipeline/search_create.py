@@ -442,17 +442,19 @@ def run_search_create(store, provider: LLMProvider,
 
     # 模型可能用 [[IMG:N]] 引用了参考资料的配图：把被引用的图片下载到本地
     # （data/media/），再把占位符展开为 ![](/media/...) 路径。
-    if config is not None:
-        refs = referenced_images(result.body_md, saved_articles)
-        if refs:
-            _emit(progress, "synthesize",
-                  f"正在本地化正文引用的 {len(refs)} 张参考配图…", stats=stats)
-            local_map = localize_reference_images(
-                refs, config,
-                progress=lambda m: _emit(
-                    progress, "synthesize", f"参考配图 {m}", stats=stats))
-            result.body_md = expand_image_refs(
-                result.body_md, saved_articles, local_map)
+    refs = referenced_images(result.body_md, saved_articles)
+    local_map: dict[str, str] = {}
+    if refs and config is not None:
+        _emit(progress, "synthesize",
+              f"正在本地化正文引用的 {len(refs)} 张参考配图…", stats=stats)
+        local_map = localize_reference_images(
+            refs, config,
+            progress=lambda m: _emit(
+                progress, "synthesize", f"参考配图 {m}", stats=stats))
+    # Runs even when nothing was downloaded: whatever cannot be resolved has
+    # to be cleared out rather than shipped as a literal [[IMG:N]].
+    result.body_md = expand_image_refs(
+        result.body_md, saved_articles, local_map)
 
     _check_cancel(should_stop)
     _emit(progress, "fact_check", "多源事实校验完成，正在保存草稿…",

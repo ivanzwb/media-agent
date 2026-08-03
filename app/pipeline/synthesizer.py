@@ -16,6 +16,7 @@ _TOTAL_SOURCE_CHARS = 18000
 _DEEP_SOURCE_CHARS = 4000
 _DEEP_TOTAL_SOURCE_CHARS = 24000
 _MAX_REF_IMAGES = 12  # 参考资料配图清单上限，与 _MAX_IMG 对齐
+_MEDIA_TOKEN_RE = re.compile(r"\[\[(?:IMG|VID|VIDEO):\d+\]\]")
 
 
 @dataclass
@@ -26,18 +27,35 @@ class SynthesisResult:
     flagged_claims: list[str] = field(default_factory=list)
 
 
+def _article_images(article: Article) -> list[str]:
+    return [u for u in (article.images or [])
+            if u.startswith(("http://", "https://"))][:_MAX_REF_IMAGES]
+
+
+def _plain_source_text(content: str) -> str:
+    """Drop the extractor's media tokens from source text.
+
+    Archived bodies carry [[IMG:N]] markers numbered per article. Left in the
+    prompt the model copies them into its own draft, where the same number
+    means a different picture — or none at all.
+    """
+    return _MEDIA_TOKEN_RE.sub("", content)
+
+
 def _source_block(articles: list[Article],
                   include_images: bool = False, *, deep: bool = False) -> str:
     per_source = _DEEP_SOURCE_CHARS if deep else _SOURCE_CHARS
     budget = _DEEP_TOTAL_SOURCE_CHARS if deep else _TOTAL_SOURCE_CHARS
     blocks: list[str] = []
     used = 0
+    shown = 0  # how many images the manifest holds before this source
     for index, article in enumerate(articles, 1):
         remaining = budget - used
         if remaining <= 0:
             break
-        content = (article.content_md or article.raw_summary or "")[
-            :min(per_source, remaining)]
+        content = _plain_source_text(
+            article.content_md or article.raw_summary or "")
+        content = content[:min(per_source, remaining)]
         used += len(content)
         block = (
             f"[{index}] 标题：{article.title}\n"
@@ -45,12 +63,16 @@ def _source_block(articles: list[Article],
             f"URL：{article.url}\n"
             f"正文：\n{content}"
         )
-        if include_images:
-            imgs = [u for u in (article.images or [])
-                    if u.startswith(("http://", "https://"))][:_MAX_REF_IMAGES]
-            if imgs:
-                block += "\n配图：\n" + "\n".join(
-                    f"- 图{i}（{u}）" for i, u in enumerate(imgs, 1))
+        imgs = _article_images(article)
+        if include_images and imgs:
+            # Hand the model the exact token to copy. Numbering the images per
+            # source (图1、图2…) and then resolving them against one global
+            # list meant the two numberings drifted apart as soon as a second
+            # source had images.
+            block += "\n配图（引用时照抄方括号里的标记）：\n" + "\n".join(
+                f"- [[IMG:{shown + offset}]]（{u}）"
+                for offset, u in enumerate(imgs))
+        shown += len(imgs)
         blocks.append(block)
     return "\n\n---\n\n".join(blocks)
 
@@ -59,13 +81,15 @@ _IMG_REF_RE = re.compile(r"\[\[IMG:(\d+)\]\]")
 
 
 def _image_manifest(articles: list[Article]) -> list[str]:
-    """Ordered list of http(s) image URLs across articles — the same order the
-    model sees in the source block's 配图 lists (图1..图N per article)."""
+    """Ordered list of http(s) image URLs across articles.
+
+    This is what [[IMG:N]] means, so the 配图 lists in the source block are
+    numbered straight off this list — including its per-source cap, which the
+    prompt used to apply and this list did not.
+    """
     manifest: list[str] = []
     for article in articles:
-        for u in (article.images or []):
-            if u.startswith(("http://", "https://")):
-                manifest.append(u)
+        manifest.extend(_article_images(article))
     return manifest
 
 
@@ -85,25 +109,39 @@ def referenced_images(body_md: str, articles: list[Article]) -> list[str]:
     return refs
 
 
-def expand_image_refs(body_md: str, articles: list[Article],
-                      local_map: dict[str, str]) -> str:
-    """Replace [[IMG:N]] with ![](<local web path>) using an old→new URL map.
-    Placeholders with no local copy (or out of range) are left as-is."""
-    manifest = _image_manifest(articles)
+def resolve_image_refs(body_md: str, manifest: list[str],
+                       local_map: dict[str, str]
+                       ) -> tuple[str, list[str], list[str]]:
+    """Turn [[IMG:N]] into images, reporting what resolved and what did not.
+
+    A placeholder we cannot resolve — the model made up the number, or the
+    download failed — is dropped. Left in place it reaches the editor as a
+    literal "[[IMG:0]]", which is worse than the missing picture.
+    """
+    resolved: list[str] = []
+    dropped: list[str] = []
 
     def _repl(m: re.Match) -> str:
-        try:
-            n = int(m.group(1))
-        except ValueError:
-            return m.group(0)
-        if not (0 <= n < len(manifest)):
-            return m.group(0)
-        new = local_map.get(manifest[n])
+        n = int(m.group(1))
+        url = manifest[n] if 0 <= n < len(manifest) else ""
+        new = local_map.get(url, "") if url else ""
+        if not new and url.startswith("/media/"):
+            new = url  # already local, nothing to download
         if not new:
-            return m.group(0)
+            dropped.append(m.group(0))
+            return ""
+        resolved.append(f"{m.group(0)} → {new}")
         return f"![]({new})"
 
-    return _IMG_REF_RE.sub(_repl, body_md)
+    body = re.sub(r"\n{3,}", "\n\n", _IMG_REF_RE.sub(_repl, body_md))
+    return body, resolved, dropped
+
+
+def expand_image_refs(body_md: str, articles: list[Article],
+                      local_map: dict[str, str]) -> str:
+    """Replace [[IMG:N]] with ![](<local web path>) using an old→new URL map."""
+    return resolve_image_refs(
+        body_md, _image_manifest(articles), local_map)[0]
 
 
 def _visual_instruction(has_images: bool) -> str:
@@ -115,8 +153,9 @@ def _visual_instruction(has_images: bool) -> str:
     ]
     if has_images:
         parts.append(
-            "- 引用资料配图：在正文需要配图的位置单独成行写 [[IMG:N]]，"
-            "N 从 0 开始，对应参考资料中「配图」列表的顺序（图1→[[IMG:0]]）。"
+            "- 引用资料配图：在正文需要配图的位置单独成行，照抄参考资料「配图」"
+            "清单里给出的 [[IMG:N]] 标记，编号必须与清单一致，不要自己编。"
+            "清单里没有的编号一律不要写。"
             "只引用与上下文相关的图，不要为凑数而引用。"
         )
     parts.append("没有合适的图或图无助于表达时，不要强行插入。")

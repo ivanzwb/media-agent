@@ -510,13 +510,21 @@ def test_referenced_images_returns_used_in_range_deduped():
         "https://img.cdn/a.png", "https://img.cdn/c.png"]
 
 
-def test_expand_image_refs_replaces_mapped_and_keeps_others():
+def test_expand_image_refs_drops_what_it_cannot_resolve():
+    """占位符留在正文里就会变成读者看到的「[[IMG:1]]」，宁可没有图。"""
     rows = [article(1), article(2)]
     rows[0].images = ["https://img.cdn/a.png", "https://img.cdn/b.png"]
-    body = "[[IMG:0]] 与 [[IMG:1]]，越界 [[IMG:9]]。"
+    body = "[[IMG:0]] 与下载失败的 [[IMG:1]]，越界 [[IMG:9]]。"
     local_map = {"https://img.cdn/a.png": "/media/hash/dl-1.png"}
     assert expand_image_refs(body, rows, local_map) == (
-        "![](/media/hash/dl-1.png) 与 [[IMG:1]]，越界 [[IMG:9]]。")
+        "![](/media/hash/dl-1.png) 与下载失败的 ，越界 。")
+
+
+def test_expand_image_refs_does_not_leave_a_hole_in_the_layout():
+    rows = [article(1)]
+    rows[0].images = ["https://img.cdn/a.png"]
+    body = "上一段。\n\n[[IMG:7]]\n\n下一段。"
+    assert expand_image_refs(body, rows, {}) == "上一段。\n\n下一段。"
 
 
 def test_visual_instruction_always_asks_for_mermaid_fence():
@@ -550,8 +558,74 @@ def test_synthesize_prompt_teaches_mermaid_and_img_refs():
     prompt = provider.calls[0][-1].content
     assert "```mermaid" in prompt
     assert "[[IMG:N]]" in prompt
-    assert "配图：" in prompt
-    assert "- 图1（https://img.cdn/a.png）" in prompt
+    assert "配图（" in prompt
+    assert "- [[IMG:0]]（https://img.cdn/a.png）" in prompt
+
+
+def test_the_prompt_numbers_images_the_way_they_resolve():
+    """提示词里的编号和 [[IMG:N]] 的解析必须是同一套，否则会配错图。"""
+    class CaptureProvider(MockProvider):
+        def __init__(self):
+            super().__init__([
+                '{"title_candidates":["标题"],"body_md":"## 正文\\n事实 [1]。"}',
+                '{"flagged_claims":[]}',
+            ])
+            self.calls = []
+
+        def chat(self, messages, **opts):
+            self.calls.append(messages)
+            return super().chat(messages, **opts)
+
+    rows = [article(1), article(2)]
+    rows[0].images = ["https://img.cdn/a.png", "https://img.cdn/b.png"]
+    rows[1].images = ["https://img.cdn/c.png", "https://img.cdn/d.png"]
+    provider = CaptureProvider()
+    synthesize("AI", rows, provider)
+    prompt = provider.calls[0][-1].content
+
+    # The second source used to restart at 图1 while the manifest kept
+    # counting, so its images resolved to the first source's pictures.
+    manifest = _image_manifest(rows)
+    for n, url in enumerate(manifest):
+        assert f"- [[IMG:{n}]]（{url}）" in prompt
+    assert manifest[2] == "https://img.cdn/c.png"
+    assert expand_image_refs(
+        "[[IMG:2]]", rows, {"https://img.cdn/c.png": "/media/h/c.png"}
+    ) == "![](/media/h/c.png)"
+
+
+def test_the_sources_own_image_markers_never_reach_the_model():
+    """归档正文自带 [[IMG:N]]（抓取时插入），模型照抄就会写出配不上的记号。"""
+    class CaptureProvider(MockProvider):
+        def __init__(self):
+            super().__init__([
+                '{"title_candidates":["标题"],"body_md":"## 正文\\n事实 [1]。"}',
+                '{"flagged_claims":[]}',
+            ])
+            self.calls = []
+
+        def chat(self, messages, **opts):
+            self.calls.append(messages)
+            return super().chat(messages, **opts)
+
+    rows = [article(1), article(2)]
+    rows[0].content_md = "开头。\n\n[[IMG:0]]\n\n正文继续。[[VIDEO:1]]"
+    provider = CaptureProvider()
+    synthesize("AI", rows, provider)
+    prompt = provider.calls[0][-1].content
+    assert "[[IMG:0]]" not in prompt
+    assert "[[VIDEO:1]]" not in prompt
+    assert "正文继续。" in prompt
+
+
+def test_a_source_with_many_images_does_not_shift_the_later_ones():
+    """提示词按每源 12 张截断，清单必须照做，否则后面的编号全错位。"""
+    rows = [article(1), article(2)]
+    rows[0].images = [f"https://img.cdn/a{i}.png" for i in range(20)]
+    rows[1].images = ["https://img.cdn/b.png"]
+    manifest = _image_manifest(rows)
+    assert len(manifest) == 13
+    assert manifest[12] == "https://img.cdn/b.png"
 
 
 def test_synthesize_prompt_without_images_omits_img_refs():
@@ -670,14 +744,14 @@ def test_run_search_create_localizes_referenced_images(tmp_path, monkeypatch):
     body = store.read_draft_body(result["draft_id"])["body_md"]
     assert "[[IMG:0]]" not in body
     assert "[[IMG:2]]" not in body
-    assert "[[IMG:9]]" in body        # out-of-range placeholder is kept
+    assert "[[IMG:9]]" not in body    # made-up number, dropped rather than shown
     assert body.count("![](/media/") == 2
     # the two referenced images really landed under data/media/<hash>/
     files = [p for p in config.media_dir.glob("*/*") if p.is_file()]
     assert len(files) == 2
 
 
-def test_run_search_create_without_config_keeps_img_placeholders(
+def test_run_search_create_without_config_still_clears_img_placeholders(
         tmp_path, monkeypatch):
     config = Config(data_dir=tmp_path)
     config.ensure_dirs()
@@ -695,6 +769,5 @@ def test_run_search_create_without_config_keeps_img_placeholders(
 
     assert result["draft_id"]
     body = store.read_draft_body(result["draft_id"])["body_md"]
-    assert "[[IMG:0]]" in body
-    assert "[[IMG:2]]" in body
+    assert "[[IMG:" not in body
     assert "![](/media/" not in body

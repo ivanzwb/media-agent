@@ -691,20 +691,22 @@ def _write_chapter(context: _ChapterContext, chapter: dict, chapter_id: int, *,
 
     # 模型可能用 [[IMG:N]] 引用了参考资料的配图：把被引用的图片下载到本地
     # （data/media/），再把占位符展开为 ![](/media/...) 路径。
-    if context.config is not None:
-        refs = referenced_images(result.body_md, saved_articles)
-        if refs:
-            _emit(progress, "write",
-                  f"第 {index}/{total} 章《{title}》：正在本地化 "
-                  f"{len(refs)} 张参考配图…", current=index, total=total,
-                  stats=stats)
-            local_map = localize_reference_images(
-                refs, context.config,
-                progress=lambda m: _emit(
-                    progress, "write", f"参考配图 {m}",
-                    current=index, total=total, stats=stats))
-            result.body_md = expand_image_refs(
-                result.body_md, saved_articles, local_map)
+    refs = referenced_images(result.body_md, saved_articles)
+    local_map: dict[str, str] = {}
+    if refs and context.config is not None:
+        _emit(progress, "write",
+              f"第 {index}/{total} 章《{title}》：正在本地化 "
+              f"{len(refs)} 张参考配图…", current=index, total=total,
+              stats=stats)
+        local_map = localize_reference_images(
+            refs, context.config,
+            progress=lambda m: _emit(
+                progress, "write", f"参考配图 {m}",
+                current=index, total=total, stats=stats))
+    # Runs even when nothing was downloaded: whatever cannot be resolved has
+    # to be cleared out rather than shipped as a literal [[IMG:N]].
+    result.body_md = expand_image_refs(
+        result.body_md, saved_articles, local_map)
 
     primary = saved_articles[0]
     body_md = _series_nav_note(
