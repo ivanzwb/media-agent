@@ -10,7 +10,7 @@ import {
   ColumnWidthOutlined, BgColorsOutlined,
 } from "@ant-design/icons";
 import MDEditor, { commands, type ICommand } from "@uiw/react-md-editor";
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, getJson, postForm } from "../api/client";
 import { useLocalState } from "../api/hooks";
@@ -198,23 +198,6 @@ export default function DraftEdit() {
   // previous draft's one-shot hydration block the next draft from loading.
   useEffect(() => { setLoaded(false); }, [draftId]);
 
-  // Dynamic editor height: fill remaining viewport
-  const [editorHeight, setEditorHeight] = useState(600);
-  const draftRef = useRef<HTMLDivElement>(null);
-  const calcHeight = useCallback(() => {
-    if (!draftRef.current) return;
-    // Account for header (~46px), .ma-content padding (48px), title row (~40px),
-    // tabs bar (~40px), toolbar/inputs (~120px), warnings (~60px), and gaps (~30px)
-    setEditorHeight(Math.max(300, draftRef.current.clientHeight - 310));
-  }, []);
-  useEffect(() => {
-    calcHeight();
-    window.addEventListener("resize", calcHeight);
-    const observer = new ResizeObserver(calcHeight);
-    if (draftRef.current) observer.observe(draftRef.current);
-    return () => { window.removeEventListener("resize", calcHeight); observer.disconnect(); };
-  }, [data, calcHeight]);
-
   useEffect(() => {
     if (data && !loaded) {
       setBody(data.body_md);
@@ -238,7 +221,7 @@ export default function DraftEdit() {
   }
 
   return (
-    <div ref={draftRef} className="ma-draft-edit">
+    <div className="ma-draft-edit">
       <Space style={{ justifyContent: "space-between", width: "100%", flexShrink: 0 }}>
         <Space>
           <Title level={2} style={{ margin: 0 }}>编辑草稿 #{draftId}</Title>
@@ -254,7 +237,7 @@ export default function DraftEdit() {
               setTitleCn={setTitleCn} titleCands={titleCands} setTitleCands={setTitleCands}
               digest={digest} setDigest={setDigest}
               status={status} setStatus={setStatus} theme={theme} setTheme={setTheme}
-              onSave={save} editorHeight={editorHeight} />
+              onSave={save} />
           ),
         },
         {
@@ -266,11 +249,25 @@ export default function DraftEdit() {
 }
 
 function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setTitleCands,
-  digest, setDigest, status, setStatus, theme, setTheme, onSave, editorHeight }: any) {
+  digest, setDigest, status, setStatus, theme, setTheme, onSave }: any) {
   const qc = useQueryClient();
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
   const editorRef = useRef<HTMLDivElement>(null);
+  // MDEditor only takes a pixel height, so measure the slot flexbox gives it.
+  // Estimating it from the viewport got the editor wrong by hundreds of pixels
+  // whenever a warning banner, an extra title candidate or the digest counter
+  // changed the height of everything stacked above it.
+  const [editorHeight, setEditorHeight] = useState(400);
+  useEffect(() => {
+    const wrap = editorRef.current;
+    if (!wrap) return;
+    const measure = () => setEditorHeight(Math.max(300, wrap.clientHeight));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(wrap);
+    return () => observer.disconnect();
+  }, []);
   const colorRef = useRef("#e67514");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
@@ -918,7 +915,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
             </Button>
           </Col>
         ) : (
-          <Col flex="0 0 25%" style={{ maxWidth: "25%" }}>
+          <Col flex="0 0 25%" className="ma-draft-left-col" style={{ maxWidth: "25%" }}>
             <div style={{ textAlign: "right", marginBottom: 4 }}>
               <Button size="small" type="text" onClick={() => setCoverCollapsed(true)} title="收起封面栏">« 收起</Button>
             </div>

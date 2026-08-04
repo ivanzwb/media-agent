@@ -31,10 +31,16 @@ body:has(.ma-draft-edit) .ma-content {
 .ma-draft-edit > .ant-tabs > .ant-tabs-content-holder { flex: 1; min-height: 0; }
 .ma-draft-edit > .ant-tabs > .ant-tabs-content-holder > .ant-tabs-content { height: 100%; }
 .ma-draft-edit > .ant-tabs > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane { height: 100%; }
-.ma-draft-article-tab { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+/* `clip` rather than `hidden`: a hidden box is still a scroll container, so
+   focusing the editor after it leaves fullscreen let the browser scroll the
+   whole tab out of place with no scrollbar to put it back. */
+.ma-draft-article-tab { display: flex; flex-direction: column; height: 100%; overflow: clip; }
+.ma-draft-left-col { overflow-y: auto; }
 .ma-draft-right-col { display: flex; flex-direction: column; }
 .ma-draft-right-col .ant-card { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.ma-draft-right-col .ant-card > .ant-card-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* In a short window the fields above the editor can eat the whole column, so
+   let it scroll instead of pushing the editor out of reach. */
+.ma-draft-right-col .ant-card > .ant-card-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
 .ma-draft-right-col .ma-editor-wrap { flex: 1; min-height: 0; }
 /* Title candidates: everything past the feed's cutoff is shown greyed out
    so it is obvious which words the reader will never see. */
