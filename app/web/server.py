@@ -1417,9 +1417,12 @@ def create_app(config: Config | None = None,
                 {"ok": False,
                  "error": f"无法创建 Agent 工作目录（{config.data_dir}）：{exc}"},
                 status_code=500)
+        # llm_model names a model of the OpenAI-compatible API, which the CLI
+        # agent has never heard of: opencode answers "Unexpected server error"
+        # and the edit dies before it reaches a model. Let the tool pick, the
+        # way get_rewrite_provider() does for every other agent path.
         provider = cli_provider.CLIProvider(
-            active_tool, timeout=rc.cli_timeout, model=rc.llm_model or "",
-            cwd=workspace,
+            active_tool, timeout=rc.cli_timeout, cwd=workspace,
         )
         with _agent_tasks_lock:
             if (_agent_tasks.get(draft_id, {}).get("status") == "running"):

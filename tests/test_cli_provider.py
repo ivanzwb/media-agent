@@ -159,6 +159,45 @@ def _scripted_popen(results, on_call=None):
     return FakePopen, calls
 
 
+def test_an_api_model_name_falls_back_to_the_tool_default():
+    """opencode addresses models as provider/model.
+
+    A bare name comes from the OpenAI-compatible settings, and opencode
+    answers an unqualified `Unexpected server error` rather than saying the
+    model is unknown.
+    """
+    p = CLIProvider("opencode", model="agnes-2.0-flash")
+    fake, calls = _scripted_popen([(0, "done", "")])
+
+    with patch.object(subprocess, "Popen", fake):
+        assert p._run("edit the draft", timeout=30) == "done"
+
+    argv = calls[0]
+    assert "agnes-2.0-flash" not in argv
+    assert argv[argv.index("--model") + 1] == "opencode/big-pickle"
+
+
+def test_a_qualified_model_is_passed_through():
+    p = CLIProvider("opencode", model="opencode/deepseek-v4-flash-free")
+    fake, calls = _scripted_popen([(0, "done", "")])
+
+    with patch.object(subprocess, "Popen", fake):
+        p._run("edit the draft", timeout=30)
+
+    argv = calls[0]
+    assert argv[argv.index("--model") + 1] == "opencode/deepseek-v4-flash-free"
+
+
+def test_a_failure_names_the_model_it_used():
+    """`Unexpected server error` alone leaves nowhere to look."""
+    p = CLIProvider("opencode")
+    fake, _calls = _scripted_popen([(1, "", "boom")] * 3)
+
+    with patch.object(subprocess, "Popen", fake):
+        with pytest.raises(RuntimeError, match=r"model: opencode/big-pickle"):
+            p._run("edit the draft", timeout=30)
+
+
 def test_a_transient_server_error_is_retried():
     """The CLI can die before it ever reaches the model — try again."""
     p = CLIProvider("opencode")

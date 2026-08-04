@@ -102,6 +102,11 @@ _DEFAULT_MODELS: dict[str, str] = {
     "opencode": "opencode/big-pickle",
 }
 
+# Tools that address a model as "provider/model". A bare name reaching one of
+# them came from an API provider's settings, where model ids look nothing
+# alike, and the tool would only fail on it with an opaque server error.
+_QUALIFIED_MODEL_TOOLS = frozenset({"opencode"})
+
 
 # ── transient failure retry ─────────────────────────────────────────────────
 #
@@ -390,6 +395,17 @@ class CLIProvider:
                     raise
                 attempt += 1
 
+    def _usable_model(self, model: str) -> str:
+        """Fall back to the tool default for a model it cannot address."""
+        if (not model or self._td.id not in _QUALIFIED_MODEL_TOOLS
+                or "/" in model):
+            return model
+        fallback = _DEFAULT_MODELS.get(self._td.id, "")
+        logger.warning(
+            "%s cannot use model %r (it expects provider/model); using %s",
+            self._td.label, model, fallback or "the tool's own default")
+        return fallback
+
     def _failure_detail(self, stdout: str | None, stderr: str | None) -> str:
         """Best available explanation for a non-zero exit."""
         stdout_text = (stdout or "").strip()
@@ -418,8 +434,9 @@ class CLIProvider:
         # configured at construction time (e.g. from MEDIA_AGENT_LLM_MODEL),
         # then to the built-in per-tool fallback (e.g. opencode needs a
         # working model because its default is broken on many systems).
-        effective_model = (model or self._default_model
-                           or _DEFAULT_MODELS.get(self._td.id, ""))
+        effective_model = self._usable_model(
+            model or self._default_model
+            or _DEFAULT_MODELS.get(self._td.id, ""))
 
         try:
             # Build the argument list, replacing {prompt} placeholders
@@ -468,6 +485,10 @@ class CLIProvider:
             detail = self._failure_detail(stdout, stderr)
             message = (f"{self._td.label} exited with code {returncode}"
                        + (f": {detail}" if detail else ""))
+            # A model the tool cannot resolve fails exactly like a server-side
+            # fault, so the tool's own message alone leaves nowhere to look.
+            if effective_model:
+                message += f" (model: {effective_model})"
             if _is_transient(detail):
                 raise _TransientCLIError(message) from None
             raise RuntimeError(message) from None

@@ -329,6 +329,7 @@ def _fake_cli(monkeypatch, callback):
     class FakeCLI:
         def __init__(self, tool_id="opencode", timeout=500, model="", cwd=None):
             self.tool_id = tool_id
+            self.model = model
             self._cwd = str(cwd) if cwd else None
             self.cancelled = False
             instances.append(self)
@@ -397,6 +398,25 @@ def test_agent_stdout_apply_preserves_title_and_uses_editor_snapshot(
     assert saved["title_cn"] == "固定标题"
     assert saved["title_candidates"] == ["候选原题"]
     assert saved["body_md"] == "## 新正文\n来自 stdout"
+
+
+def test_the_api_model_name_is_kept_away_from_the_cli_agent(
+        tmp_path, monkeypatch):
+    """llm_model belongs to the OpenAI-compatible API, not to the CLI tool.
+
+    Handing it over got `opencode run --model agnes-2.0-flash`, which fails
+    to resolve and reports the useless "Unexpected server error".
+    """
+    _fake, instances = _fake_cli(
+        monkeypatch, lambda *_args: _edited_document())
+    client, store, draft = _agent_client(tmp_path / "data")
+    store.set_setting("llm_model", "agnes-2.0-flash")
+
+    client.post(f"/api/draft/{draft.id}/agent-edit", data={"prompt": "润色"})
+    assert _wait_agent(client, draft.id)["status"] == "completed"
+
+    assert instances
+    assert instances[0].model == ""
 
 
 def test_agent_file_output_isolated_under_packaged_data_dir(
