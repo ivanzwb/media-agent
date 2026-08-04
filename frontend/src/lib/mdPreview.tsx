@@ -485,6 +485,20 @@ const _VIDEO_STYLE: CSSProperties = {
   maxWidth: "100%", borderRadius: 8, display: "block", margin: "12px 0",
 };
 
+// Extract the plain text of a <code> element's children. Under plain
+// react-markdown the children are strings, but MDEditor.Markdown pipes the
+// tree through rehype-prism, which replaces the code text with
+// <span class="token"> elements. String()-ing those yields "[object Object]",
+// so recurse into element children instead of joining blindly.
+function _codeText(node: any): string {
+  if (node == null || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(_codeText).join("");
+  if (typeof node === "object" && node.props?.children != null)
+    return _codeText(node.props.children);
+  return "";
+}
+
 // Extra react-markdown component overrides used by the live preview.
 export const previewComponents = {
   // A fenced ```mermaid block renders as a live diagram instead of raw
@@ -497,9 +511,7 @@ export const previewComponents = {
     const codeEl = Array.isArray(children) ? children[0] : children;
     const cls = codeEl?.props?.className;
     if (typeof cls === "string" && /language-mermaid/i.test(cls)) {
-      const text = Array.isArray(codeEl.props.children)
-        ? codeEl.props.children.join("")
-        : String(codeEl.props.children ?? "");
+      const text = _codeText(codeEl.props.children);
       return <MermaidBlock code={text} />;
     }
     return <pre>{children}</pre>;
