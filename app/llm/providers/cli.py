@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -99,6 +101,62 @@ _MODEL_FLAGS: dict[str, str] = {
 _DEFAULT_MODELS: dict[str, str] = {
     "opencode": "opencode/big-pickle",
 }
+
+
+# ── transient failure retry ─────────────────────────────────────────────────
+#
+# A CLI agent fronts a remote model service, so a run can die before it ever
+# reaches the model — the local server returns "Unexpected server error" when
+# it cannot fetch its model catalog, upstream answers 5xx, the connection is
+# reset, and so on.  Those failures clear on their own, so retry them the way
+# OpenAIProvider does instead of losing the whole run.
+_MAX_ATTEMPTS = 3
+_RETRY_BASE_DELAY = 2.0     # seconds — exponential backoff base
+
+_TRANSIENT_MARKERS = (
+    "unexpected server error",
+    "internal server error",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "temporarily unavailable",
+    "overloaded",
+    "rate limit",
+    "too many requests",
+    "unable to connect",
+    "cannot connect",
+    "connection reset",
+    "connection closed",
+    "connection refused",
+    "socket connection was closed",
+    "fetch failed",
+    "network error",
+    "stream error",
+    "econnreset",
+    "econnrefused",
+    "etimedout",
+    "enotfound",
+    "eai_again",
+)
+
+# HTTP status codes worth another attempt, matched as standalone numbers so
+# they do not fire on token counts or ids that merely contain the digits.
+_TRANSIENT_STATUS_RE = re.compile(r"(?<!\d)(429|5[0-9]{2})(?!\d)")
+
+
+class _TransientCLIError(RuntimeError):
+    """A CLI failure that is worth retrying.
+
+    Subclasses ``RuntimeError`` so callers that already handle CLI failures
+    keep working when the retries are exhausted.
+    """
+
+
+def _is_transient(message: str) -> bool:
+    text = (message or "").lower()
+    if any(marker in text for marker in _TRANSIENT_MARKERS):
+        return True
+    return bool(_TRANSIENT_STATUS_RE.search(text))
 
 
 # ── detection ───────────────────────────────────────────────────────────────
@@ -243,6 +301,7 @@ class CLIProvider:
         self._default_model = model
         self._cwd = str(cwd) if cwd else None
         self._proc: subprocess.Popen | None = None  # running subprocess handle
+        self._cancelled = False
 
     # -- public API -----------------------------------------------------------
 
@@ -265,6 +324,9 @@ class CLIProvider:
 
     def cancel(self) -> bool:
         """Kill the running subprocess. Returns True if a process was killed."""
+        # Set first: a cancel that lands between two attempts finds no live
+        # process, and must still stop the retry loop from starting another.
+        self._cancelled = True
         proc = self._proc
         if proc is None or proc.poll() is not None:
             return False
@@ -303,9 +365,51 @@ class CLIProvider:
 
     def _run(self, prompt: str, timeout: int, model: str = "",
              allow_empty_output: bool = False) -> str:
-        """Execute the CLI tool and return its stdout.
+        """Execute the CLI tool and return its stdout, retrying hiccups.
+
+        Only failures that look like a transient upstream problem are retried.
+        A timeout has already consumed the caller's whole budget and a cancel
+        must stay cancelled, so neither gets another attempt.
 
         On failure raises ``RuntimeError``.
+        """
+        attempt = 1
+        while True:
+            try:
+                return self._run_once(prompt, timeout=timeout, model=model,
+                                      allow_empty_output=allow_empty_output)
+            except _TransientCLIError as exc:
+                if attempt >= _MAX_ATTEMPTS or self._cancelled:
+                    raise
+                delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                logger.warning(
+                    "%s attempt %d/%d failed (%s), retrying in %.1fs…",
+                    self._td.label, attempt, _MAX_ATTEMPTS, exc, delay)
+                time.sleep(delay)
+                if self._cancelled:
+                    raise
+                attempt += 1
+
+    def _failure_detail(self, stdout: str | None, stderr: str | None) -> str:
+        """Best available explanation for a non-zero exit."""
+        stdout_text = (stdout or "").strip()
+        # Some tools (e.g. opencode --format json) write the real error
+        # message to stdout as a JSON error event, not to stderr.
+        if stdout_text.startswith("{"):
+            try:
+                parsed = self._parse_json_events(stdout_text)
+            except RuntimeError as json_err:
+                return str(json_err)   # JSON error events carry the message
+            if parsed and parsed != stdout_text:
+                return parsed
+        return (stderr or "").strip()[:500]
+
+    def _run_once(self, prompt: str, timeout: int, model: str = "",
+                  allow_empty_output: bool = False) -> str:
+        """Execute the CLI tool once and return its stdout.
+
+        Raises ``_TransientCLIError`` when the failure is worth another
+        attempt, plain ``RuntimeError`` otherwise.
         """
         # Bun segfaults on null bytes in the prompt.  Strip them.
         prompt = prompt.replace("\x00", "")
@@ -361,26 +465,12 @@ class CLIProvider:
             ) from None
 
         if returncode is not None and returncode != 0:
-            stderr_text = (stderr or "").strip()[:500]
-            stdout_text = (stdout or "").strip()
-            # Some tools (e.g. opencode --format json) write the real error
-            # message to stdout as a JSON error event, not to stderr.
-            if stdout_text.startswith("{"):
-                try:
-                    parsed = self._parse_json_events(stdout_text)
-                except RuntimeError as json_err:
-                    # JSON error events found — use that message
-                    raise RuntimeError(
-                        f"{self._td.label} exited with code {returncode}: {json_err}"
-                    ) from None
-                if parsed and parsed != stdout_text:
-                    raise RuntimeError(
-                        f"{self._td.label} exited with code {returncode}: {parsed}"
-                    )
-            raise RuntimeError(
-                f"{self._td.label} exited with code {returncode}"
-                + (f": {stderr_text}" if stderr_text else "")
-            )
+            detail = self._failure_detail(stdout, stderr)
+            message = (f"{self._td.label} exited with code {returncode}"
+                       + (f": {detail}" if detail else ""))
+            if _is_transient(detail):
+                raise _TransientCLIError(message) from None
+            raise RuntimeError(message) from None
 
         output = (stdout or "").strip()
         if not output:

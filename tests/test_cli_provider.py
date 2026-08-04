@@ -125,6 +125,125 @@ def test_run_can_allow_empty_stdout_for_file_writing_agents():
             p._run("normal completion", timeout=30)
 
 
+def _scripted_popen(results, on_call=None):
+    """Popen stub replaying one (returncode, stdout, stderr) entry per call.
+
+    A ``BaseException`` in the returncode slot is raised from communicate()
+    instead, which is how a timeout is simulated.
+    """
+    calls = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs):
+            self.returncode = 0
+            calls.append(args)
+            if on_call is not None:
+                on_call(len(calls))
+
+        def communicate(self, timeout=None):
+            outcome = results[len(calls) - 1]
+            if isinstance(outcome, BaseException):
+                raise outcome
+            self.returncode, stdout, stderr = outcome
+            return (stdout, stderr)
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            ...
+
+        def wait(self, timeout=None):
+            return 0
+
+    return FakePopen, calls
+
+
+def test_a_transient_server_error_is_retried():
+    """The CLI can die before it ever reaches the model — try again."""
+    p = CLIProvider("opencode")
+    fake, calls = _scripted_popen([
+        (1, "", "Unexpected server error. Check server logs for details."),
+        (0, "done", ""),
+    ])
+
+    with patch.object(subprocess, "Popen", fake), \
+            patch("app.llm.providers.cli.time.sleep"):
+        assert p._run("edit the draft", timeout=30) == "done"
+
+    assert len(calls) == 2
+
+
+def test_a_transient_error_reported_as_a_json_event_is_retried():
+    """opencode --format json writes its real error to stdout, not stderr."""
+    p = CLIProvider("opencode")
+    error_event = (
+        '{"type":"error","error":{"data":{"message":'
+        '"Unexpected server error. Check server logs for details."}}}'
+    )
+    fake, calls = _scripted_popen([(1, error_event, ""), (0, "done", "")])
+
+    with patch.object(subprocess, "Popen", fake), \
+            patch("app.llm.providers.cli.time.sleep"):
+        assert p._run("edit the draft", timeout=30) == "done"
+
+    assert len(calls) == 2
+
+
+def test_retries_are_capped_and_the_last_error_surfaces():
+    p = CLIProvider("opencode")
+    fake, calls = _scripted_popen([(1, "", "503 service unavailable")] * 5)
+
+    with patch.object(subprocess, "Popen", fake), \
+            patch("app.llm.providers.cli.time.sleep"):
+        with pytest.raises(RuntimeError, match="service unavailable"):
+            p._run("edit the draft", timeout=30)
+
+    assert len(calls) == 3
+
+
+def test_a_rejected_prompt_is_not_retried():
+    """Nothing about the request changes on a second attempt."""
+    p = CLIProvider("opencode")
+    fake, calls = _scripted_popen([(1, "", "unknown model: nope")] * 3)
+
+    with patch.object(subprocess, "Popen", fake), \
+            patch("app.llm.providers.cli.time.sleep"):
+        with pytest.raises(RuntimeError, match="unknown model"):
+            p._run("edit the draft", timeout=30)
+
+    assert len(calls) == 1
+
+
+def test_a_timeout_is_not_retried():
+    """The caller's whole time budget is already spent."""
+    p = CLIProvider("opencode")
+    fake, calls = _scripted_popen(
+        [subprocess.TimeoutExpired(cmd="opencode", timeout=30)] * 3)
+
+    with patch.object(subprocess, "Popen", fake), \
+            patch("app.llm.providers.cli.time.sleep"):
+        with pytest.raises(RuntimeError, match="timed out"):
+            p._run("edit the draft", timeout=30)
+
+    assert len(calls) == 1
+
+
+def test_a_cancelled_run_is_not_retried():
+    p = CLIProvider("opencode")
+    fake, calls = _scripted_popen(
+        [(1, "", "Unexpected server error")] * 3,
+        on_call=lambda n: p.cancel(),
+    )
+
+    with patch.object(subprocess, "Popen", fake), \
+            patch("app.llm.providers.cli.time.sleep"):
+        with pytest.raises(RuntimeError, match="Unexpected server error"):
+            p._run("edit the draft", timeout=30)
+
+    assert len(calls) == 1
+
+
 def test_get_rewrite_provider_falls_back_to_mock():
     """When no CLI tool is configured, get_rewrite_provider falls back."""
     from app.llm.base import get_rewrite_provider

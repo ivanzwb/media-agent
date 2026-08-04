@@ -1524,10 +1524,12 @@ function AgentModal({ open, draftId, body, titleCn, titleCands, onClose, onAppli
           `/api/draft/${draftId}/agent-status`);
         if (cancelled) return;
         runIdRef.current = s.run_id || "";
+        // Restore the instruction whatever the outcome was: a failed run has
+        // to be editable and retryable, not just readable.
+        if (s.prompt) setPrompt(s.prompt);
         if (s.status === "running") {
           setAgentStatus("running");
           setElapsed(s.elapsed_s || 0);
-          setPrompt(s.prompt || "");
           startPolling();
         } else if (s.status === "completed" && s.body_md) {
           setAgentStatus("completed");
@@ -1675,16 +1677,29 @@ function AgentModal({ open, draftId, body, titleCn, titleCands, onClose, onAppli
       okText={isRunning ? "处理中…" : isCompleted ? "应用修改" : "执行"}
       okButtonProps={{
         loading: busy,
-        disabled: isRunning,
+        // Without an instruction run() has nothing to send, and silently
+        // doing nothing reads as "it failed again".
+        disabled: isRunning || (!isCompleted && !prompt.trim()),
         type: isCompleted ? "primary" : undefined,
       }}
       onOk={isCompleted ? applyResult : run}
       cancelText={isRunning ? "取消执行" : "关闭"}
       cancelButtonProps={isRunning ? { danger: true } : undefined}
     >
-      {!isRunning && !isCompleted && !isError && (
+      {isError && (
+        <div style={{ padding: "8px 0 16px" }}>
+          <div style={{ fontSize: 16, color: "#ff4d4f", marginBottom: 8 }}>❌ 执行失败</div>
+          <Paragraph type="danger" style={{ margin: 0 }}>{errorMsg}</Paragraph>
+        </div>
+      )}
+
+      {!isRunning && !isCompleted && (
         <>
-          <Paragraph type="secondary">描述你想让 Agent 做的修改（需在设置里配置 CLI Agent）。</Paragraph>
+          <Paragraph type="secondary">
+            {isError
+              ? "修改指令后可以再次执行，或关闭窗口。"
+              : "描述你想让 Agent 做的修改（需在设置里配置 CLI Agent）。"}
+          </Paragraph>
           <Input.TextArea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)}
             placeholder="如：把第三段改得更口语化，并补充一个类比" />
         </>
@@ -1705,15 +1720,6 @@ function AgentModal({ open, draftId, body, titleCn, titleCands, onClose, onAppli
         </div>
       )}
 
-      {isError && (
-        <div style={{ padding: "16px 0" }}>
-          <div style={{ fontSize: 16, color: "#ff4d4f", marginBottom: 8 }}>❌ 执行失败</div>
-          <Paragraph type="danger" style={{ margin: 0 }}>{errorMsg}</Paragraph>
-          <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
-            您可以修改指令后重试，或关闭窗口。
-          </Paragraph>
-        </div>
-      )}
     </Modal>
   );
 }
