@@ -533,6 +533,43 @@ def test_the_opening_rules_reach_the_synthesis_prompt():
     assert "不要从定义或历史写起" in prompt
 
 
+def test_the_title_rules_reach_the_synthesis_prompt():
+    """综合创作以前只要 3 个候选，没有长度约束也没有排序。"""
+    provider = CapturingProvider()
+    synthesize("AI", [article(1), article(2)], provider)
+    prompt = provider.calls[0][-1].content
+    assert "5 个候选" in prompt
+    assert "15-28 字" in prompt
+    assert "核心关键词放在前 15 字以内" in prompt
+    assert '"title_scores"' in prompt
+    assert "3 个不夸大的候选标题" not in prompt
+
+
+def test_synthesize_ranks_the_candidates_by_score():
+    provider = MockProvider([
+        '{"title_candidates":["排在后面的那个候选","模型更看好的候选标题"],'
+        '"title_scores":[{"title":"模型更看好的候选标题","score":92,'
+        '"reason":"核心词开篇"},'
+        '{"title":"排在后面的那个候选","score":61,"reason":"偏平"}],'
+        '"body_md":"## 正文\\n事实 [1]。"}',
+        '{"flagged_claims":[]}',
+    ])
+    result = synthesize("AI", [article(1), article(2)], provider)
+    assert result.title_candidates[0] == "模型更看好的候选标题"
+    assert result.title_scores[0]["reason"] == "核心词开篇"
+
+
+def test_synthesize_demotes_a_title_the_feed_would_cut():
+    long_title = "这个标题长到手机上根本显示不完读者只能看见前面一半"  # 24
+    provider = MockProvider([
+        '{"title_candidates":["' + long_title * 2 + '","看得完的标题"],'
+        '"body_md":"## 正文\\n事实 [1]。"}',
+        '{"flagged_claims":[]}',
+    ])
+    result = synthesize("AI", [article(1), article(2)], provider)
+    assert result.title_candidates[0] == "看得完的标题"
+
+
 def test_deep_writing_reads_further_into_each_source():
     """The mechanisms worth writing about sit past a source's opening."""
     rows = [article(1), article(2)]

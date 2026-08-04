@@ -440,6 +440,57 @@ def test_settings_roundtrip_comment_switches(tmp_path):
     assert settings["wechat_fans_only_comment"] is True
 
 
+def test_draft_api_serves_the_title_scores(tmp_path):
+    client, store, _ = make_client(tmp_path)
+    art = store.save_article(Article(
+        title="GPT-5", content_md="# Body\nfacts", url="https://x.com/b",
+        source_name="OpenAI", source_type="rss",
+        published_at=datetime(2026, 1, 1, tzinfo=timezone.utc), images=[],
+        raw_summary=None, fetched_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        topic="AI"))
+    draft = store.save_draft(Draft(
+        article_id=art.id, title_candidates=["甲标题", "乙标题"],
+        body_md="正文", topic="AI", source_url=art.url,
+        source_name=art.source_name,
+        title_scores=[{"title": "甲标题", "score": 88, "reason": "核心词开篇"}]))
+    scores = client.get(f"/api/draft/{draft.id}").json()["title_scores"]
+    assert scores == [{"title": "甲标题", "score": 88, "reason": "核心词开篇"}]
+
+    # Editing the candidates drops the score that no longer points anywhere.
+    client.post(f"/drafts/{draft.id}", data={
+        "title_candidates": "乙标题", "body_md": "正文", "status": "drafted"},
+        follow_redirects=False)
+    assert client.get(f"/api/draft/{draft.id}").json()["title_scores"] == []
+
+
+def test_draft_api_carries_the_diversion_check(tmp_path):
+    """发布前要看得见：微信号、二维码、外链三类都在草稿接口里报出来。"""
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    assert client.get(f"/api/draft/{draft.id}").json()["diversion"] == []
+
+    client.post(f"/drafts/{draft.id}", data={
+        "title_candidates": "标题", "status": "drafted",
+        "body_md": ("正文\n加微信 helloworld9\n"
+                    "![](media/qrcode.png)\n"
+                    "详情见 https://example.com/x\n")},
+        follow_redirects=False)
+    findings = client.get(f"/api/draft/{draft.id}").json()["diversion"]
+    assert [f["kind"] for f in findings] == [
+        "wechat_id", "qr_image", "external_link"]
+    assert findings[0]["line"] == 2
+
+
+def test_the_configured_promotion_footer_is_checked_too(tmp_path):
+    """推广文案是自由文本，词表管不住，体检要单独查一遍。"""
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    client.post("/settings", data={"promotion_footer": "合作请加微信 helloworld9"},
+                follow_redirects=False)
+    findings = client.get(f"/api/draft/{draft.id}").json()["diversion"]
+    assert [f["where"] for f in findings] == ["推广文案"]
+
+
 def test_draft_digest_survives_a_round_trip(tmp_path):
     client, store, _ = make_client(tmp_path)
     _, draft = seed(store)

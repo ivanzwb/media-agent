@@ -106,11 +106,18 @@ def sanitize_draft(draft, words: set[str]) -> list[dict]:
     all_hits.extend(hits)
     if draft.title_candidates:
         new_titles = []
+        renamed: dict[str, str] = {}
         for t in draft.title_candidates:
             ct, th = sanitize(t, words)
             new_titles.append(ct)
+            renamed[t] = ct
             all_hits.extend(th)
         draft.title_candidates = new_titles
+        # Scores point at candidates by text; masking a word in one would
+        # otherwise orphan its score.
+        for entry in getattr(draft, "title_scores", None) or []:
+            if isinstance(entry, dict) and entry.get("title") in renamed:
+                entry["title"] = renamed[entry["title"]]
     if getattr(draft, "digest", ""):
         draft.digest, digest_hits = sanitize(draft.digest, words)
         all_hits.extend(digest_hits)

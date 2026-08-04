@@ -21,6 +21,29 @@ REWRITE_SYSTEM = (
     + ANTI_SLOP_SYSTEM_INSTRUCTION
 )
 
+# A feed gives a reader the title, the cover and the digest, and nothing else.
+# Phones cut the title around 30 characters, so a keyword sitting past that
+# was never shown at all.
+TITLE_CUTOFF = 30
+_MAX_TITLES = 5
+
+TITLE_INSTRUCTION = (
+    "### 标题（出 5 个候选）\n\n"
+    "读者在推荐流里只看得到标题、封面和摘要，标题决定他点不点开。\n"
+    "- **15-28 字**。超过 30 字手机上会被截断，截掉的部分等于没写；"
+    "短于 15 字通常撑不起信息量\n"
+    "- **核心关键词放在前 15 字以内**，放到后半句等于没露出\n"
+    "- 用「你」「我们」这类人称代词，把读者放进句子里\n"
+    "- 说清读者能得到什么（看懂什么、避开什么、省下什么），不要只报主题\n"
+    "- 5 个候选要用不同路子（提问、数字、对比、结论、场景），"
+    "不要互为同义改写\n"
+    "- 不得超出正文能兑现的范围，不用「震惊」「必看」这类标题党词\n\n"
+    "再给每个候选打分排序，最好的放第一个。四个维度各自考虑：\n"
+    "点击欲（有没有理由点开）、准确（有没有超出正文）、"
+    "关键词（核心词是否在前 15 字内）、长度（是否落在 15-28 字）。\n\n"
+)
+
+
 # A reader decides inside the first screen. Background, definitions and
 # "随着…的发展" spend that screen on nothing, and the completion rate — now the
 # ranking signal that matters most — is lost before the article gets going.
@@ -137,9 +160,12 @@ REWRITE_INSTRUCTION = (
     "- 如果某张图/视频跟内容不相关就删掉，不要硬塞\n"
     "- 如果一个 `![](url)` 已经在正文中合适的位置，就保留它\n\n"
     + KEYWORD_INSTRUCTION +
+    TITLE_INSTRUCTION +
     DIGEST_INSTRUCTION +
     "输出严格的 JSON，字段：\n"
-    '  "title_candidates": [3 个吸睛但不虚假的标题],\n'
+    '  "title_candidates": [5 个标题，按你的排序，最好的放第一个],\n'
+    '  "title_scores": [{{"title": "候选原文", "score": 0-100 的总分,'
+    ' "reason": "一句话说明"}}],\n'
     '  "digest": "50-60 字摘要",\n'
     '  "body_md": "Markdown 正文（中文数字编号章节+短段落+'
     '图片用 ![](url) 保留或 [[IMG:0]] 短占位符、视频用 [[VID:0]] 插入）"\n'
@@ -705,6 +731,47 @@ def clean_digest(text: str) -> str:
     return digest[:_DIGEST_MAX]
 
 
+def rank_titles(titles: object,
+                scores: object = None) -> tuple[list[str], list[dict]]:
+    """Order candidates best-first and pair them with the model's scores.
+
+    The model does the ranking, but nothing stops it putting a 40-character
+    title first, and the feed cuts that one no matter how it scored — so
+    anything past the cutoff drops below the titles that survive it.
+    Returns the ordered titles plus the score entries that matched, in the
+    same order; unmatched or malformed entries are dropped.
+    """
+    cleaned: list[str] = []
+    for item in titles or []:
+        text = str(item).strip()
+        if text and text not in cleaned:
+            cleaned.append(text)
+
+    graded: dict[str, dict] = {}
+    for entry in scores or []:
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get("title") or "").strip()
+        if not title:
+            continue
+        try:
+            score = round(float(entry.get("score")), 2)
+        except (TypeError, ValueError):
+            score = 0.0
+        graded[title] = {
+            "title": title,
+            "score": score,
+            "reason": str(entry.get("reason") or "").strip()[:120],
+        }
+
+    ordered = sorted(
+        cleaned,
+        key=lambda t: (len(t) > TITLE_CUTOFF,
+                       -graded.get(t, {}).get("score", 0.0)),
+    )[:_MAX_TITLES]
+    return ordered, [graded[t] for t in ordered if t in graded]
+
+
 def _normalise_tags(md: str) -> str:
     """Normalise tag lines to ``**标签**：#tag1 #tag2`` format.
 
@@ -808,6 +875,17 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
             '并在输出的 JSON 中增加 "digest" 字段，值为上面要求的 50-60 字摘要。\n'
         )
 
+    # Same for the title rules: a custom style asks for its own candidates and
+    # would otherwise never hear about the length limit or the scoring.
+    if style is not None and '"title_scores"' not in instruction_tmpl:
+        instruction_tmpl = (
+            f"{instruction_tmpl}\n\n{TITLE_INSTRUCTION}"
+            '并在输出的 JSON 中给出 5 个 "title_candidates"，'
+            '同时增加 "title_scores" 字段：'
+            '[{"title": "候选原文", "score": 0-100 的总分, '
+            '"reason": "一句话说明"}]。\n'
+        )
+
     seo_block = (
         "4. **标签**：在此处单独输出一行文章标签。\n"
         "   - 格式固定为：`**标签**：#关键词1 #关键词2 #关键词3`\n"
@@ -861,11 +939,13 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
         Message(role="user", content=rewrite_prompt),
     ])
     digest = ""
+    raw_scores: object = []
     parsed = _extract_json(raw)
     if parsed and parsed.get("title_candidates") and parsed.get("body_md"):
         title_candidates = parsed["title_candidates"]
         body_md = parsed["body_md"]
         digest = parsed.get("digest") or ""
+        raw_scores = parsed.get("title_scores") or []
     else:
         # JSON parse failed — try regex-based field extraction as fallback
         fallback = _extract_json_fallback(raw)
@@ -890,6 +970,7 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
                 title_candidates = parsed2["title_candidates"]
                 body_md = parsed2["body_md"]
                 digest = parsed2.get("digest") or ""
+                raw_scores = parsed2.get("title_scores") or []
                 raw = raw2  # use retried response for fact-check
             else:
                 fb2 = _extract_json_fallback(raw2)
@@ -901,6 +982,8 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
                 else:
                     title_candidates = [article.title]
                     body_md = raw
+
+    title_candidates, title_scores = rank_titles(title_candidates, raw_scores)
 
     # Post-process: remove AI slop patterns from the LLM output
     body_md = post_process(body_md)
@@ -950,4 +1033,5 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
         cover_image=None,
         flagged_claims=flagged,
         digest=clean_digest(digest),
+        title_scores=title_scores,
     )

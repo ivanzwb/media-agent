@@ -721,6 +721,7 @@ def _write_chapter(context: _ChapterContext, chapter: dict, chapter_id: int, *,
         source_name=primary.source_name,
         flagged_claims=result.flagged_claims,
         digest=result.digest,
+        title_scores=result.title_scores,
         origin="series",
         sources=[
             {

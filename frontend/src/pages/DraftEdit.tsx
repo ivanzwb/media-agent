@@ -20,6 +20,65 @@ import { convertMermaidInMarkdown, dataUrlToFile } from "../lib/mermaidExport";
 
 const { Title, Text, Paragraph } = Typography;
 
+// Phones cut the title here in the feed, and a keyword past the cut was never
+// shown to anyone.
+const TITLE_CUTOFF = 30;
+const TITLE_MIN = 15;
+
+interface TitleScore { title: string; score?: number; reason?: string }
+
+// 导流体检：微信号、二维码图片、站外链接，公众号都当引流处理。
+interface DiversionFinding {
+  kind: string; label: string; text: string; line: number; where: string;
+}
+
+function diversionSummary(findings: DiversionFinding[]) {
+  const counts = new Map<string, number>();
+  findings.forEach((f) => counts.set(f.label, (counts.get(f.label) || 0) + 1));
+  return [...counts].map(([label, n]) => `${label} ${n}`).join("、");
+}
+
+/** The candidate list under the textarea: length, where the feed cuts, and
+ *  whatever the model thought of each one. Click a row to make it the title. */
+function TitleCandidateList(
+  { text, scores, onPick }:
+  { text: string; scores: TitleScore[]; onPick: (title: string) => void },
+) {
+  const titles = text.split("\n").map((t) => t.trim()).filter(Boolean);
+  if (!titles.length) return null;
+  const byTitle = new Map(scores.map((s) => [s.title, s]));
+  return (
+    <div className="ma-title-list">
+      {titles.map((title, i) => {
+        const scored = byTitle.get(title);
+        const over = title.length > TITLE_CUTOFF;
+        return (
+          <div key={`${i}-${title}`} className="ma-title-row"
+            onClick={() => onPick(title)} title="点击设为文章标题">
+            <Text type="secondary">{i + 1}.</Text>
+            <span className="ma-title-text">
+              {over ? title.slice(0, TITLE_CUTOFF) : title}
+              {over && <span className="ma-title-cut">{title.slice(TITLE_CUTOFF)}</span>}
+            </span>
+            {scored?.score !== undefined && (
+              <Tag color="blue" style={{ marginInlineEnd: 0 }}>{scored.score} 分</Tag>
+            )}
+            {scored?.reason && (
+              <Text className="ma-title-reason" ellipsis style={{ maxWidth: 220 }}>
+                {scored.reason}
+              </Text>
+            )}
+            <Tag color={over ? "red" : title.length < TITLE_MIN ? "orange" : "default"}
+              style={{ marginInlineEnd: 0 }}>
+              {title.length} 字{over ? `，超出 ${title.length - TITLE_CUTOFF}` : ""}
+            </Tag>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Directives whose open line accepts color=/align= params (mirror formatter.py).
 const _PARAM_TYPES = new Set([
   "tip", "info", "warning", "success", "danger", "highlight", "note",
@@ -78,7 +137,8 @@ interface SeriesNav {
 
 interface DraftData {
   ok: boolean; id: number; status: string; title_cn: string;
-  title_candidates: string[]; digest: string; body_md: string; cover_image: string | null;
+  title_candidates: string[]; title_scores?: TitleScore[];
+  digest: string; body_md: string; cover_image: string | null;
   source_url: string; source_name: string; flagged_claims: string[];
   origin?: string;
   sources?: Array<{
@@ -100,7 +160,8 @@ interface DraftData {
     style_id?: string | null; engines?: string[]; queries?: string[];
   };
   series?: SeriesNav | null;
-  sensitive_hits: string[]; article_id: number | null;
+  sensitive_hits: string[]; diversion?: DiversionFinding[];
+  article_id: number | null;
   article_published_at: string | null; article_title: string;
   has_video: boolean; has_narration: boolean; video_brand_name: string;
   statuses: string[];
@@ -548,6 +609,15 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     message.loading({ content: "正在保存并准备微信推送…", key: "wx", duration: 0 });
     try {
       await onSave();
+      // The saved body is what goes out, so the check runs on that. It only
+      // warns — the push carries on either way.
+      const saved = await getJson<DraftData>(`/api/draft/${data.id}`);
+      if (saved.diversion?.length) {
+        message.warning({
+          content: `导流体检发现 ${saved.diversion.length} 处（${diversionSummary(saved.diversion)}），已照常推送，详见页面顶部`,
+          key: "wx-diversion", duration: 8,
+        });
+      }
       const { markdown: bodyMd, count } = await withMermaidPngs(body);
       const r = await postForm<{ ok: boolean; running: boolean; mode: "draft" | "publish"; error?: string }>(
         `/drafts/${data.id}/publish/wechat`,
@@ -809,6 +879,34 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
             children: data.sensitive_hits.join("、"),
           }]} />
       )}
+      {(data.diversion?.length ?? 0) > 0 && (
+        <Collapse size="small" style={{ marginBottom: 12, background: "#fff2f0", borderColor: "#ffccc7", flexShrink: 0 }}
+          items={[{
+            key: "1",
+            label: (
+              <span style={{ color: "#a8071a" }}>
+                📡 导流体检：{data.diversion!.length} 处可能被判为引流
+                （{diversionSummary(data.diversion!)}）
+              </span>
+            ),
+            children: (
+              <>
+                <ul style={{ margin: 0, paddingLeft: 20 }}>
+                  {data.diversion!.map((f: DiversionFinding, i: number) => (
+                    <li key={i}>
+                      <Tag color="red" style={{ marginInlineEnd: 6 }}>{f.label}</Tag>
+                      {f.where}第 {f.line} 行：<Text code>{f.text}</Text>
+                    </li>
+                  ))}
+                </ul>
+                <Text type="secondary" style={{ display: "block", marginTop: 8 }}>
+                  正文、摘要或推广文案里出现微信号、二维码和站外链接，文章会失去推荐流量。
+                  这里只做提示，不会改稿，也不阻止发布。
+                </Text>
+              </>
+            ),
+          }]} />
+      )}
 
       <Row gutter={16} style={{ flex: 1, minHeight: 0 }} wrap={false}>
         {coverCollapsed ? (
@@ -1027,8 +1125,18 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
               {platform && <Button size="small" onClick={onCopyHtml} title="复制当前平台美化 HTML 到剪贴板">复制HTML</Button>}
             </Space>
 
-            <Input placeholder="文章中文标题" value={titleCn} onChange={(e) => setTitleCn(e.target.value)} style={{ marginBottom: 8, flexShrink: 0 }} />
+            <Input placeholder="文章中文标题" value={titleCn}
+              onChange={(e) => setTitleCn(e.target.value)}
+              status={titleCn.length > TITLE_CUTOFF ? "warning" : undefined}
+              suffix={titleCn ? (
+                <Text type={titleCn.length > TITLE_CUTOFF ? "danger" : "secondary"}>
+                  {titleCn.length} / {TITLE_CUTOFF}
+                </Text>
+              ) : <span />}
+              style={{ marginBottom: 8, flexShrink: 0 }} />
             <Input.TextArea placeholder="候选标题（每行一个）" value={titleCands} onChange={(e) => setTitleCands(e.target.value)} rows={2} style={{ marginBottom: 8, flexShrink: 0 }} />
+            <TitleCandidateList text={titleCands} scores={data.title_scores || []}
+              onPick={setTitleCn} />
             <Input.TextArea placeholder="摘要（订阅号列表、转发卡片和搜一搜里显示的就是这段；留空则自动截取正文开头）"
               value={digest} onChange={(e) => setDigest(e.target.value)} rows={2}
               maxLength={120} showCount={{ formatter: ({ count }) => `${count} / 建议 50-60` }}

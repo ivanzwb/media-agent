@@ -36,6 +36,17 @@ body:has(.ma-draft-edit) .ma-content {
 .ma-draft-right-col .ant-card { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .ma-draft-right-col .ant-card > .ant-card-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .ma-draft-right-col .ma-editor-wrap { flex: 1; min-height: 0; }
+/* Title candidates: everything past the feed's cutoff is shown greyed out
+   so it is obvious which words the reader will never see. */
+.ma-title-list { margin: -4px 0 8px; display: flex; flex-direction: column; gap: 2px; }
+.ma-title-row {
+  display: flex; align-items: baseline; gap: 6px;
+  font-size: 12px; line-height: 20px; cursor: pointer;
+}
+.ma-title-row:hover { background: #fafafa; }
+.ma-title-row .ma-title-text { flex: 1; min-width: 0; }
+.ma-title-cut { color: #bfbfbf; text-decoration: line-through; }
+.ma-title-reason { color: #8c8c8c; }
 .ma-run-panel {
   position: fixed; right: 20px; bottom: 20px; width: 600px; max-width: 95vw;
   background: #1e1e1e; color: #ddd; border-radius: 10px; z-index: 1000;

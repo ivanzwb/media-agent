@@ -263,6 +263,8 @@ class Store:
             meta["title_cn"] = draft.title_cn
         if getattr(draft, "digest", ""):
             meta["digest"] = draft.digest
+        if getattr(draft, "title_scores", None):
+            meta["title_scores"] = draft.title_scores
         if draft.score is not None:
             meta["score"] = draft.score
 
@@ -763,6 +765,16 @@ class Store:
             frontmatter.Post("")
         meta = dict(existing.metadata)
         meta["title_candidates"] = title_candidates
+        # Scores are matched to candidates by their text, so an edited or
+        # deleted candidate leaves an entry pointing at a title nobody can see.
+        scores = meta.get("title_scores")
+        if isinstance(scores, list):
+            kept = [s for s in scores if isinstance(s, dict)
+                    and s.get("title") in title_candidates]
+            if kept:
+                meta["title_scores"] = kept
+            else:
+                meta.pop("title_scores", None)
         if title_cn is not None:
             if title_cn:
                 meta["title_cn"] = title_cn

@@ -9,7 +9,8 @@ from app.pipeline.anti_slop import ANTI_SLOP_SYSTEM_INSTRUCTION, post_process
 from app.pipeline.localize import is_page_furniture
 from app.pipeline.rewriter import (
     DIGEST_INSTRUCTION, KEYWORD_INSTRUCTION, OPENING_INSTRUCTION,
-    _extract_json, _extract_json_fallback, _normalise_tags, clean_digest)
+    TITLE_INSTRUCTION, _extract_json, _extract_json_fallback, _normalise_tags,
+    clean_digest, rank_titles)
 
 _SOURCE_CHARS = 2500
 _TOTAL_SOURCE_CHARS = 18000
@@ -28,6 +29,7 @@ class SynthesisResult:
     citations: list[dict] = field(default_factory=list)
     flagged_claims: list[str] = field(default_factory=list)
     digest: str = ""
+    title_scores: list[dict] = field(default_factory=list)
 
 
 def _article_images(article: Article) -> list[str]:
@@ -477,6 +479,7 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
         _promotion_instruction(promotion_footer),
         _seo_instruction(seo_tags_enabled),
         KEYWORD_INSTRUCTION.strip(),
+        TITLE_INSTRUCTION.strip(),
         DIGEST_INSTRUCTION.strip(),
     ]))
     prompt = (
@@ -485,7 +488,9 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
         f"输出语言：{output_language}。\n\n"
         f"{content_rules}\n\n"
         "只输出 JSON 对象，字段：\n"
-        '- "title_candidates": 3 个不夸大的候选标题\n'
+        '- "title_candidates": 5 个候选标题，按你的排序，最好的放第一个\n'
+        '- "title_scores": [{"title":"候选原文","score":0-100 的总分,'
+        '"reason":"一句话说明"}]\n'
         '- "digest": 50-60 字摘要\n'
         '- "body_md": Markdown 正文，关键事实后使用 [1]、[2] 等引用标记；'
         "正文中不要出现任何链接或网址；"
@@ -518,10 +523,11 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
     if not parsed or not parsed.get("title_candidates") or not parsed.get("body_md"):
         raise ValueError("综合创作模型未返回有效 JSON")
 
-    titles = [str(title).strip() for title in parsed["title_candidates"]
-              if str(title).strip()][:3]
+    titles, title_scores = rank_titles(parsed["title_candidates"],
+                                       parsed.get("title_scores"))
     if not titles:
         titles = [topic]
+        title_scores = []
     body = post_process(str(parsed["body_md"]).strip())
     body = _normalise_tags(body)
     body = _strip_external_links(body)
@@ -529,4 +535,5 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
     citations = _coerce_citations(parsed.get("citations"), len(articles))
     flagged = fact_check_multi(body, articles, provider)
     return SynthesisResult(titles, body, citations, flagged,
-                           clean_digest(str(parsed.get("digest") or "")))
+                           clean_digest(str(parsed.get("digest") or "")),
+                           title_scores)

@@ -10,7 +10,7 @@ from app.pipeline.rewriter import (
     _build_manifest, _apply_placeholders, _interleave_missing_images,
     _prune_body_images,
     _extract_json_field, _extract_json_fallback, _normalize_video_markdown,
-    clean_digest,
+    clean_digest, rank_titles,
 )
 
 
@@ -79,6 +79,102 @@ def test_rewrite_asks_for_one_of_the_four_openings():
     for formula in ("**痛点**", "**利益**", "**反常识**", "**短故事**"):
         assert formula in prompt
     assert "不要用「想象一下：」" in prompt
+
+
+# ── titles ───────────────────────────────────────────────────────────────
+
+def test_rewrite_asks_for_five_scored_titles():
+    provider = RecordingProvider([
+        json.dumps({"title_candidates": ["t"], "body_md": "正文"}),
+        json.dumps({"flagged_claims": []}),
+    ])
+    rewrite(sample_article(), provider)
+    prompt = provider.calls[0][1].content
+    assert "5 个候选" in prompt
+    assert "15-28 字" in prompt
+    assert "前 15 字" in prompt
+    assert '"title_scores"' in prompt
+    # The JSON example has to survive prompt formatting as real braces.
+    assert '[{"title": "候选原文"' in prompt
+
+
+def test_rewrite_keeps_the_scores_the_model_gave():
+    rewrite_json = json.dumps({
+        "title_candidates": ["够短的标题写在这里", "另一个候选标题在这"],
+        "title_scores": [
+            {"title": "另一个候选标题在这", "score": 91, "reason": "核心词靠前"},
+            {"title": "够短的标题写在这里", "score": 70, "reason": "略平"},
+        ],
+        "body_md": "正文",
+    })
+    provider = MockProvider(
+        responses=[rewrite_json, json.dumps({"flagged_claims": []})])
+    draft = rewrite(sample_article(), provider)
+    assert draft.title_candidates[0] == "另一个候选标题在这"
+    assert draft.title_scores[0] == {
+        "title": "另一个候选标题在这", "score": 91.0, "reason": "核心词靠前"}
+
+
+def test_a_custom_style_is_asked_for_scored_titles_too():
+    from app.pipeline.styles import RewriteStyle
+
+    style = RewriteStyle(
+        id="custom", name="自定义", description="", prompt="改写文章",
+        instruction="根据原文改写：{content}",
+    )
+    provider = RecordingProvider([
+        json.dumps({"title_candidates": ["t"], "body_md": "正文"}),
+        json.dumps({"flagged_claims": []}),
+    ])
+    rewrite(sample_article(), provider, style=style)
+    prompt = provider.calls[0][1].content
+    assert '"title_scores"' in prompt
+    assert '[{"title": "候选原文"' in prompt
+
+
+def test_a_title_the_feed_would_cut_does_not_become_the_default():
+    long_title = "这是一个非常非常长的标题" * 3  # 36 chars, past the 30 cutoff
+    ordered, _ = rank_titles([long_title, "手机上看得完的标题"])
+    assert ordered[0] == "手机上看得完的标题"
+    assert ordered[1] == long_title
+
+
+def test_a_high_score_does_not_rescue_a_title_past_the_cutoff():
+    long_title = "字" * 40
+    ordered, scores = rank_titles(
+        [long_title, "正常长度的候选标题"],
+        [{"title": long_title, "score": 99},
+         {"title": "正常长度的候选标题", "score": 60, "reason": "稳"}],
+    )
+    assert ordered[0] == "正常长度的候选标题"
+    assert [s["title"] for s in scores] == ordered
+
+
+def test_rank_titles_survives_junk_scores():
+    ordered, scores = rank_titles(
+        ["甲标题", "乙标题", "甲标题", ""],
+        ["not a dict", {"score": 10}, {"title": "乙标题", "score": "高"}],
+    )
+    assert ordered == ["甲标题", "乙标题"]  # deduped, order kept
+    assert scores == [{"title": "乙标题", "score": 0.0, "reason": ""}]
+
+
+def test_a_buried_keyword_loses_to_a_title_that_leads_with_it():
+    """Which title puts the keyword up front is the model's call; ranking
+    only has to honour the score it gave, not the array order."""
+    buried = "在经历了漫长的等待之后我们终于用上了 Claude"
+    upfront = "Claude 值不值得换：三个月实测"
+    ordered, _ = rank_titles(
+        [buried, upfront],
+        [{"title": buried, "score": 55, "reason": "核心词落在 15 字之后"},
+         {"title": upfront, "score": 88, "reason": "核心词开篇"}],
+    )
+    assert ordered[0] == upfront
+
+
+def test_rank_titles_keeps_at_most_five():
+    ordered, _ = rank_titles([f"候选标题第{i}个" for i in range(8)])
+    assert len(ordered) == 5
 
 
 # ── digest ───────────────────────────────────────────────────────────────

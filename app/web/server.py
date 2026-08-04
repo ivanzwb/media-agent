@@ -34,6 +34,7 @@ from app.llm.providers import cli as cli_provider
 from app.models import Article, Draft
 from app.models import slugify as _slugify
 from app.pipeline.adapter import adapt, PLATFORMS
+from app.pipeline.diversion import check_draft
 from app.platforms.registry import get as get_platform, list_all as list_platforms
 from app.pipeline.images import attach_cover
 from app.pipeline.narration import (
@@ -1133,6 +1134,8 @@ def create_app(config: Config | None = None,
             return JSONResponse({"ok": False, "error": "草稿不存在"}, status_code=404)
         body = store.read_draft_body(draft_id)
         title_candidates = body.get("title_candidates", []) or []
+        diversion = check_draft(
+            body, _current_config(store).promotion_footer or "")
         article = store.get_article(row["article_id"]) if row["article_id"] else None
         series_nav = None
         series_id = row["series_id"] if "series_id" in row.keys() else None
@@ -1157,6 +1160,7 @@ def create_app(config: Config | None = None,
             "status": row["status"],
             "title_cn": body.get("title_cn") or (title_candidates[0] if title_candidates else ""),
             "title_candidates": title_candidates,
+            "title_scores": body.get("title_scores", []) or [],
             "digest": body.get("digest", "") or "",
             "body_md": body.get("body_md", ""),
             "cover_image": body.get("cover_image"),
@@ -1164,6 +1168,7 @@ def create_app(config: Config | None = None,
             "source_name": body.get("source_name", ""),
             "flagged_claims": body.get("flagged_claims", []) or [],
             "sensitive_hits": body.get("sensitive_hits", []) or [],
+            "diversion": diversion,
             "origin": body.get("origin") or row["origin"] or "rewrite",
             "sources": body.get("sources", []) or [],
             "citations": body.get("citations", []) or [],
