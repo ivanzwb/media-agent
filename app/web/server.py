@@ -64,7 +64,8 @@ from app.sources.extractor import _images_from_html, _videos_from_html
 from app.sources.web_search import DEFAULT_SEARCH_ENGINES
 from app.tts.base import get_tts_provider
 from app.tts.voices import (
-    list_voices, add_voice, delete_voice, sample_path as voice_sample_path)
+    list_voices, add_voice, delete_voice, sample_path as voice_sample_path,
+    reference_wav as voice_reference_wav)
 from app.scheduler import start_if_enabled
 from app.store import Store
 from app.licensing import LicenseManager
@@ -1951,9 +1952,10 @@ def create_app(config: Config | None = None,
         provider = tts_provider if tts_provider is not None else rc.tts_provider
         voice = tts_voice if tts_voice is not None else rc.tts_voice
         # cosyvoice: resolve the selected voice id to its reference sample
-        # and pass as speaker_wav.
+        # and pass as speaker_wav. Browser recordings are WebM, which the
+        # engine cannot read, so hand it the transcoded WAV.
         if provider == "cosyvoice":
-            sp = voice_sample_path(config, voice)
+            sp = voice_reference_wav(config, voice)
             return get_tts_provider("cosyvoice", voice=str(sp) if sp else None,
                                     instruct=rc.tts_instruct,
                                     data_dir=config.data_dir)

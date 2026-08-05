@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
+import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
 from app.config import Config
+
+logger = logging.getLogger(__name__)
 
 # Local registry of cloned voices: a reference audio sample + metadata, used
 # as the speaker reference for voice-cloning TTS (e.g. Coqui XTTS-v2).
@@ -57,31 +62,53 @@ def sample_path(config: Config, voice_id: str | None) -> Path | None:
     return None
 
 
-def _ensure_16k_ref(config: Config, voice_id: str, filename: str) -> None:
-    """Best-effort: convert a non-WAV voice sample to 16kHz/16bit WAV
-    and save alongside as ``{voice_id}_16k.wav``.
+def _convert_to_wav(src: Path, dst: Path) -> Path:
+    """Transcode a voice sample to 16kHz mono WAV, raising on failure."""
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError(
+            f"声音样本是 {src.suffix or '未知'} 格式，语音引擎只认 WAV，"
+            "转换需要 ffmpeg：请安装 ffmpeg 并加入 PATH（https://ffmpeg.org）")
+    proc = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(src), "-ar", "16000", "-ac", "1", str(dst)],
+        capture_output=True, text=True, timeout=120)
+    if proc.returncode != 0 or not dst.is_file():
+        raise RuntimeError(
+            f"声音样本 {src.name} 转 WAV 失败：{(proc.stderr or '')[-400:]}")
+    logger.info("已缓存参考音频 %s", dst)
+    return dst
 
-    CosyVoice (``_resolve_ref_wav``) checks for this cached variant first,
-    avoiding re-conversion on every ``synthesize()`` call.  If conversion
-    fails (pydub/ffmpeg missing) it is a no-op — the TTS provider will
-    convert lazily on first use.
+
+def reference_wav(config: Config, voice_id: str | None) -> Path | None:
+    """The voice sample in a format the TTS engines can actually open.
+
+    A voice recorded in the browser arrives as WebM/Opus, which libsndfile
+    (and so CosyVoice) cannot read at all — it fails with "Format not
+    recognised". Anything that is not already WAV is transcoded once and
+    cached next to the sample.
+    """
+    src = sample_path(config, voice_id)
+    if src is None or src.suffix.lower() == ".wav":
+        return src
+    dst = src.with_name(f"{src.stem}_16k.wav")
+    if dst.is_file() and dst.stat().st_mtime >= src.stat().st_mtime:
+        return dst
+    return _convert_to_wav(src, dst)
+
+
+def _ensure_16k_ref(config: Config, voice_id: str, filename: str) -> None:
+    """Cache the WAV form of a fresh upload so the first synthesis is quick.
+
+    Best-effort only: a failure here (no ffmpeg yet) surfaces with a proper
+    message from :func:`reference_wav` when the voice is actually used.
     """
     ext = Path(filename or "").suffix.lower()
     if ext == ".wav":
         return
-    src = config.voices_dir / f"{voice_id}{ext}"
-    dst = config.voices_dir / f"{voice_id}_16k.wav"
-    if dst.exists():
-        return
     try:
-        from pydub import AudioSegment
-        audio = AudioSegment.from_file(str(src))
-        audio = audio.set_frame_rate(16000).set_sample_width(2)
-        audio.export(str(dst), format="wav")
-        logger = __import__("logging").getLogger(__name__)
-        logger.info("上传时已缓存 16kHz/16bit 参考音频 %s", dst)
-    except Exception:
-        pass  # non-fatal — cosyvoice provider will convert lazily
+        _convert_to_wav(config.voices_dir / f"{voice_id}{ext}",
+                        config.voices_dir / f"{voice_id}_16k.wav")
+    except Exception as exc:  # noqa: BLE001 - retried lazily on first use
+        logger.info("上传时转换参考音频失败（稍后重试）：%s", exc)
 
 
 def add_voice(config: Config, name: str, data: bytes, filename: str) -> dict:
