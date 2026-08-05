@@ -25,6 +25,11 @@ const { Title, Text, Paragraph } = Typography;
 const TITLE_CUTOFF = 30;
 const TITLE_MIN = 15;
 
+// The slot a component leaves for your own words, e.g. {提示内容}. Directive
+// syntax wears the same braces, so a colon ({color:#e67514}) or a leading
+// slash ({/color}) rules a match out.
+const PLACEHOLDER = /\{[^{}:/][^{}:]*\}/;
+
 interface TitleScore { title: string; score?: number; reason?: string }
 
 // 导流体检：微信号、二维码图片、站外链接，公众号都当引流处理。
@@ -364,13 +369,21 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     queryFn: () => getJson<{ styles: { id: string; name: string; is_builtin: boolean }[] }>("/api/rewrite-styles"),
   });
 
-  // insert text at the markdown textarea cursor
+  // Insert a snippet at the markdown textarea cursor. Selected text is never
+  // thrown away: it fills the snippet's first placeholder, and a snippet with
+  // no placeholder to fill lands after the selection instead of over it.
   function insertAtCursor(text: string) {
     const ta = editorRef.current?.querySelector<HTMLTextAreaElement>(".w-md-editor-text-input");
     const s = ta?.selectionStart ?? body.length;
     const e = ta?.selectionEnd ?? body.length;
-    const before = body.slice(0, s);
+    const selected = body.slice(s, e).trim();
+    let before = body.slice(0, s);
     const after = body.slice(e);
+    if (selected) {
+      const slot = text.match(PLACEHOLDER);
+      if (slot) text = text.replace(slot[0], selected);
+      else before = body.slice(0, e);   // keep the selection, insert after it
+    }
 
     // Block-level snippets (directives, headings, tables, images, quotes,
     // dividers, columns) MUST start at the beginning of a line — otherwise
@@ -1262,9 +1275,16 @@ function ComponentDrawer({ open, onClose, onInsert, getSelection, templates, tem
   const customs = (comps?.components || []).filter((c) => !c.is_builtin);
   const customTpls = (templates || []).filter((t: any) => !t.is_builtin);
 
+  // An unfocused textarea draws no highlight, so once this panel is open the
+  // selection is invisible. Show what is waiting to be filled in.
+  const [selected, setSelected] = useState("");
+  useEffect(() => { if (open) setSelected(getSelection().trim()); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function pick(c: any) {
     onInsert(c.markdown);
-    message.success(`已插入：${c.name}`);
+    message.success(selected && PLACEHOLDER.test(c.markdown)
+      ? `已把选中的 ${selected.length} 字填进：${c.name}`
+      : `已插入：${c.name}`);
   }
 
   async function saveCustom() {
@@ -1411,6 +1431,11 @@ function ComponentDrawer({ open, onClose, onInsert, getSelection, templates, tem
               </Space>
             ) : (
               <>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {selected
+                    ? `已选中 ${selected.length} 字：点击组件会把这段文字填进组件的第一个空位（组件没有空位时，插到选中文字后面，不会覆盖它）。`
+                    : "点击组件在光标处插入。先在正文里选中一段文字再点，可以把它填进组件里。"}
+                </Text>
                 {groups.length === 0 && <Text type="secondary">没有匹配的组件。</Text>}
                 {groups.map(({ cat: gcat, items }) => (
                   <div key={gcat} data-testid="comp-group" data-category={gcat} style={{ marginBottom: 16 }}>
