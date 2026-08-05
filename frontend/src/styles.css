@@ -42,6 +42,17 @@ body:has(.ma-draft-edit) .ma-content {
    let it scroll instead of pushing the editor out of reach. */
 .ma-draft-right-col .ant-card > .ant-card-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
 .ma-draft-right-col .ma-editor-wrap { flex: 1; min-height: 0; }
+/* Editor / preview widths are hard-coded 50/50 upstream. Drive both from one
+   variable so the divider can move the split; only the side-by-side mode has
+   two panes to divide. */
+.ma-editor-wrap .w-md-editor-show-live .w-md-editor-input { width: var(--ma-split, 50%); }
+.ma-editor-wrap .w-md-editor-show-live .w-md-editor-preview { width: calc(100% - var(--ma-split, 50%)); }
+.ma-split-handle { position: absolute; top: 0; bottom: 0; left: var(--ma-split, 50%);
+  width: 11px; margin-left: -6px; z-index: 2; cursor: col-resize; touch-action: none; }
+.ma-split-handle::after { content: ""; position: absolute; top: 0; bottom: 0; left: 5px;
+  width: 1px; background: transparent; transition: background .15s; }
+.ma-split-handle:hover::after { background: #1677ff; box-shadow: 0 0 0 1px #1677ff; }
+.w-md-editor:not(.w-md-editor-show-live) .ma-split-handle { display: none; }
 /* Title candidates: everything past the feed's cutoff is shown greyed out
    so it is obvious which words the reader will never see. */
 .ma-title-list { margin: -4px 0 8px; display: flex; flex-direction: column; gap: 2px; }

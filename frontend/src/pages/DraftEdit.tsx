@@ -11,6 +11,7 @@ import {
 } from "@ant-design/icons";
 import MDEditor, { commands, type ICommand } from "@uiw/react-md-editor";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, getJson, postForm } from "../api/client";
 import { useLocalState } from "../api/hooks";
@@ -273,6 +274,29 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     observer.observe(wrap);
     return () => observer.disconnect();
   }, []);
+  // Editor / preview split. Upstream hard-codes 50/50, so the divider below
+  // drives both panes off one variable. It lives inside the pane area itself,
+  // which keeps it aligned in fullscreen too.
+  const [split, setSplit] = useLocalState<number>("draftedit-split", 50);
+  const [paneEl, setPaneEl] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setPaneEl(editorRef.current?.querySelector<HTMLElement>(".w-md-editor-content") ?? null);
+  }, []);
+  function dragSplit(ev: React.PointerEvent) {
+    ev.preventDefault();
+    if (!paneEl) return;
+    const move = (e: PointerEvent) => {
+      const r = paneEl.getBoundingClientRect();
+      const pct = ((e.clientX - r.left) / r.width) * 100;
+      setSplit(Math.min(85, Math.max(15, Math.round(pct))));
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  }
   const colorRef = useRef("#e67514");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
@@ -1152,13 +1176,19 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
               maxLength={120} showCount={{ formatter: ({ count }) => `${count} / 建议 50-60` }}
               style={{ marginBottom: 16, flexShrink: 0 }} />
 
-            <div ref={editorRef} className="ma-editor-wrap" data-color-mode="light" onKeyDownCapture={onEditorKeyDown}>
+            <div ref={editorRef} className="ma-editor-wrap" data-color-mode="light" onKeyDownCapture={onEditorKeyDown}
+              style={{ "--ma-split": `${split}%` } as React.CSSProperties}>
               <MDEditor value={body} onChange={handleChange} height={editorHeight}
                 preview="live" commands={editorCommands}
                 previewOptions={{
                   remarkPlugins: [remarkAppDirectives],
                   components: previewComponents,
                 }} />
+              {paneEl && createPortal(
+                <div className="ma-split-handle" role="separator" onPointerDown={dragSplit}
+                  onDoubleClick={() => setSplit(50)}
+                  title="拖动调整编辑区 / 预览区宽度（双击恢复各一半）" />,
+                paneEl)}
             </div>
           </Card>
         </Col>
