@@ -34,6 +34,7 @@ from app.llm.providers import cli as cli_provider
 from app.models import Article, Draft
 from app.models import slugify as _slugify
 from app.pipeline.adapter import adapt, PLATFORMS
+from app.pipeline.ai_flavor import check_text as check_ai_flavor
 from app.pipeline.diversion import check_draft
 from app.platforms.registry import get as get_platform, list_all as list_platforms
 from app.pipeline.images import attach_cover
@@ -1188,6 +1189,15 @@ def create_app(config: Config | None = None,
                           for p in list_platforms()],
             "wechat_themes": _list_themes("wechat"),
         }
+
+    @app.post("/api/ai-flavor")
+    def api_ai_flavor(text: str = Form("")):
+        """给一段正文的 AI 口吻打分。
+
+        收的是编辑框里的当前内容而不是草稿 id：改一句就想重测一次，不该逼人
+        先保存。纯正则，没有模型调用，所以可以随手点。
+        """
+        return {"ok": True, **check_ai_flavor(text)}
 
     @app.get("/drafts/{draft_id}/edit", response_class=HTMLResponse)
     def draft_edit(draft_id: int):

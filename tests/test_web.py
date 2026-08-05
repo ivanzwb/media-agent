@@ -481,6 +481,25 @@ def test_draft_api_carries_the_diversion_check(tmp_path):
     assert findings[0]["line"] == 2
 
 
+def test_the_ai_flavor_check_scores_whatever_text_it_is_handed(tmp_path):
+    """体检收的是编辑框里的当前内容，不是存好的草稿，改一句就能重测。"""
+    client, _, _ = make_client(tmp_path)
+    clean = client.post("/api/ai-flavor", data={
+        "text": "上周三我提了个只改一行注释的 PR，CI 跑了十四分钟。\n"
+                "翻日志才发现九分钟花在装依赖上，缓存命中率只有 3%。\n"}).json()
+    assert clean["ok"] and clean["score"] == 0
+
+    slop = client.post("/api/ai-flavor", data={
+        "text": "近年来，随着技术的快速发展，一切都在深刻改变。\n"
+                "说实话，这不仅仅是速度的比拼，更是文化的较量。\n"
+                "此外，值得注意的是，我们要赋能全链路，形成闭环。\n"
+                "总的来说，愿我们都能在这条路上走下去，未来可期。\n"}).json()
+    # 一百来字的片段判不了重，但套路该指得出来。
+    assert slop["score"] >= 20
+    assert {"opening", "elevation"} <= {d["key"] for d in slop["dimensions"]}
+    assert slop["findings"][0]["line"] == 1
+
+
 def test_the_configured_promotion_footer_is_checked_too(tmp_path):
     """推广文案是自由文本，词表管不住，体检要单独查一遍。"""
     client, store, _ = make_client(tmp_path)

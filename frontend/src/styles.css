@@ -53,6 +53,10 @@ body:has(.ma-draft-edit) .ma-content {
   width: 1px; background: transparent; transition: background .15s; }
 .ma-split-handle:hover::after { background: #1677ff; box-shadow: 0 0 0 1px #1677ff; }
 .w-md-editor:not(.w-md-editor-show-live) .ma-split-handle { display: none; }
+/* AI 味体检的命中条目：整行可点，跳到正文对应的那一行。 */
+.ma-flavor-hit { display: flex; align-items: center; gap: 6px; padding: 4px 6px;
+  border-radius: 4px; cursor: pointer; }
+.ma-flavor-hit:hover { background: #f5f5f5; }
 /* Title candidates: everything past the feed's cutoff is shown greyed out
    so it is obvious which words the reader will never see. */
 .ma-title-list { margin: -4px 0 8px; display: flex; flex-direction: column; gap: 2px; }

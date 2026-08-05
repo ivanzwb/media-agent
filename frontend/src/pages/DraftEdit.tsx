@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App as AntApp, Button, Card, Col, Row, Select, Space, Tabs, Tag, Typography,
   Input, Collapse, Modal, Drawer, Tooltip, Divider, FloatButton, ColorPicker,
-  Popover, Segmented, Descriptions,
+  Popover, Segmented, Descriptions, Progress,
 } from "antd";
 import {
   RobotOutlined, HighlightOutlined, FontColorsOutlined,
@@ -36,6 +36,25 @@ interface TitleScore { title: string; score?: number; reason?: string }
 // 导流体检：微信号、二维码图片、站外链接，公众号都当引流处理。
 interface DiversionFinding {
   kind: string; label: string; text: string; line: number; where: string;
+}
+
+// AI 味体检：分数越高越像机器写的，findings 指到具体哪一行。
+interface FlavorFinding { key: string; label: string; text: string; line: number }
+interface FlavorDimension {
+  key: string; label: string; hits: number; points: number; weight: number;
+  advice: string; shown: number; note?: string;
+}
+interface FlavorResult {
+  score: number; level: string; chars: number;
+  dimensions: FlavorDimension[]; findings: FlavorFinding[];
+}
+
+// 分数分四档，颜色跟着档走。
+function flavorColor(score: number) {
+  if (score < 20) return "#389e0d";
+  if (score < 45) return "#7cb305";
+  if (score < 70) return "#d46b08";
+  return "#cf1322";
 }
 
 function diversionSummary(findings: DiversionFinding[]) {
@@ -300,6 +319,9 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   const colorRef = useRef("#e67514");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
+  const [flavor, setFlavor] = useState<FlavorResult | null>(null);
+  const [flavorOpen, setFlavorOpen] = useState(false);
+  const [flavorBusy, setFlavorBusy] = useState(false);
   const [rewriting, setRewriting] = useLocalState<boolean>(`draftedit-rewriting-${data.id}`, false);
   const [rewriteStyle, setRewriteStyle] = useState("");
   const [platform, setPlatform] = useState("");
@@ -837,6 +859,43 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
     icon: label(tplApplying ? "组件面板…（重写中）" : "组件面板 ▸"),
     execute: () => setDrawerOpen(true),
   };
+  // 体检的是编辑框里此刻的内容，不是存下来的草稿：改一句就想重测一次，
+  // 不该逼人先保存。后端是纯正则，点多少次都不花钱。
+  async function checkFlavor() {
+    if (!body.trim()) { message.info("正文是空的，没什么可检测的"); return; }
+    setFlavorBusy(true);
+    try {
+      setFlavor(await postForm<FlavorResult>("/api/ai-flavor", { text: body }));
+      setFlavorOpen(true);
+    } catch {
+      message.error("AI 味体检失败");
+    } finally {
+      setFlavorBusy(false);
+    }
+  }
+
+  // 点命中条目就把光标放到那一行，并让它露在视野中间偏上。
+  function jumpToLine(line: number) {
+    const ta = editorRef.current?.querySelector<HTMLTextAreaElement>(".w-md-editor-text-input");
+    if (!ta) return;
+    const lines = body.split("\n");
+    const start = lines.slice(0, line - 1)
+      .reduce((n: number, l: string) => n + l.length + 1, 0);
+    ta.focus();
+    ta.setSelectionRange(start, start + (lines[line - 1]?.length ?? 0));
+    const lh = parseFloat(getComputedStyle(ta).lineHeight) || 21;
+    ta.scrollTop = Math.max(0, (line - 1) * lh - ta.clientHeight / 3);
+  }
+
+  const flavorCommand: ICommand = {
+    name: "aiflavor", keyCommand: "aiflavor",
+    buttonProps: {
+      title: flavorBusy ? "正在体检…" : "AI 味体检（检测编辑框里当前的内容）",
+      disabled: flavorBusy,
+    },
+    icon: label(flavorBusy ? "AI 味…" : "AI 味"),
+    execute: () => { if (!flavorBusy) checkFlavor(); },
+  };
   const localizeCommand: ICommand = {
     name: "localize", keyCommand: "localize",
     buttonProps: {
@@ -892,7 +951,8 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   };
   const editorCommands: ICommand[] = [
     ...commands.getCommands(), commands.divider,
-    ...styleCommands, styleParamCommand, commands.divider, localizeCommand, commands.divider, panelCommand,
+    ...styleCommands, styleParamCommand, commands.divider, localizeCommand,
+    flavorCommand, commands.divider, panelCommand,
   ];
 
   return (
@@ -1194,6 +1254,9 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
         </Col>
       </Row>
 
+      <FlavorDrawer open={flavorOpen} result={flavor} busy={flavorBusy}
+        onClose={() => setFlavorOpen(false)} onRecheck={checkFlavor}
+        onJump={jumpToLine} />
       <ComponentDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onInsert={insertAtCursor} getSelection={getSelection}
         templates={tplData?.templates || []} templateCategories={tplData?.categories || []}
         hasContent={!!body.trim()} onApplyTemplate={applyTemplate} tplApplying={tplApplying} />
@@ -1275,6 +1338,83 @@ function groupByCategory(comps: any[], order: string[]) {
   const known = order.filter((cat) => groups[cat]?.length);
   const extra = Object.keys(groups).filter((cat) => !order.includes(cat));
   return [...known, ...extra].map((cat) => ({ cat, items: groups[cat] }));
+}
+
+/** AI 味体检的结果面板：总分、每个维度扣了多少分为什么扣，以及每一处命中
+ *  在第几行。点一条就跳到正文里那一行。 */
+function FlavorDrawer(
+  { open, result, busy, onClose, onRecheck, onJump }: {
+    open: boolean; result: FlavorResult | null; busy: boolean;
+    onClose: () => void; onRecheck: () => void; onJump: (line: number) => void;
+  },
+) {
+  const color = result ? flavorColor(result.score) : "#389e0d";
+  return (
+    <Drawer title="AI 味体检" open={open} onClose={onClose} width={430}
+      extra={<Button size="small" loading={busy} onClick={onRecheck}>重新检测</Button>}>
+      {result && (
+        <>
+          <div style={{ textAlign: "center", marginBottom: 20 }}>
+            <div style={{ fontSize: 46, fontWeight: 600, lineHeight: 1.1, color }}>
+              {result.score}
+            </div>
+            <Space size={6} style={{ marginTop: 6 }}>
+              <Tag color={color} style={{ marginInlineEnd: 0 }}>{result.level}</Tag>
+              <Text type="secondary" style={{ fontSize: 12 }}>正文 {result.chars} 字</Text>
+            </Space>
+          </div>
+
+          {result.dimensions.length === 0 ? (
+            <Text type="secondary">没查出成片的套路话，这篇读起来不像模型写的。</Text>
+          ) : (
+            result.dimensions.map((d) => (
+              <div key={d.key} style={{ marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                  <Text strong>{d.label}</Text>
+                  {d.hits > 0 && (
+                    <Text type="secondary" style={{ fontSize: 12 }}>{d.hits} 处</Text>
+                  )}
+                  <Text style={{ marginLeft: "auto", color, fontSize: 12 }}>
+                    +{d.points}
+                  </Text>
+                </div>
+                <Progress percent={Math.round((d.points / d.weight) * 100)}
+                  showInfo={false} size="small" strokeColor={color} />
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {d.note || d.advice}
+                </Text>
+              </div>
+            ))
+          )}
+
+          {result.findings.length > 0 && (
+            <>
+              <Divider style={{ margin: "16px 0 12px" }}>逐条位置</Divider>
+              {result.findings.map((f, i) => (
+                <div key={`${f.line}-${i}`} className="ma-flavor-hit"
+                  onClick={() => onJump(f.line)} title="点击跳到正文里的这一行">
+                  <Tag style={{ marginInlineEnd: 0 }}>{f.label}</Tag>
+                  <Text type="secondary" style={{ fontSize: 12 }}>第 {f.line} 行</Text>
+                  <Text code ellipsis style={{ flex: 1, minWidth: 0 }}>{f.text}</Text>
+                </div>
+              ))}
+              {result.dimensions.some((d) => d.shown < d.hits) && (
+                <Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 8 }}>
+                  同一类命中太多时只列前 {result.dimensions[0].shown} 处，上面的计数是全的。
+                </Text>
+              )}
+            </>
+          )}
+
+          <Divider style={{ margin: "16px 0 12px" }} />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            分数看的是套路话扎堆的程度，偶尔冒一句不算数。这里只做提示，
+            不会改稿，也不阻止发布。
+          </Text>
+        </>
+      )}
+    </Drawer>
+  );
 }
 
 function ComponentDrawer({ open, onClose, onInsert, getSelection, templates, templateCategories, hasContent, onApplyTemplate, tplApplying }: {
