@@ -32,6 +32,7 @@ def test_instruction_contains_key_rules():
     assert "机械结构" in text
     assert "结尾升华" in text
     assert "堆砌修辞" in text
+    assert "破折号" in text
 
 
 def test_instruction_contains_key_forbidden_words():
@@ -168,6 +169,47 @@ class TestPostProcessMechanical:
 
     def test_removes_zongshangsuoshu(self):
         assert "综上所述" not in post_process("综上所述，我们建议采纳。")
+
+
+class TestPostProcessDashes:
+    """破折号要换成正常标点，不能像套话那样一删了事。"""
+
+    def test_a_dash_between_clauses_becomes_a_comma(self):
+        result = post_process("过去三年的降价——很大一部分是锂矿在买单。")
+        assert "——" not in result
+        assert result == "过去三年的降价，很大一部分是锂矿在买单。"
+
+    def test_paired_dashes_both_go(self):
+        result = post_process("这项政策——毫无预警地——影响了上万人。")
+        assert "—" not in result
+        assert "毫无预警地" in result and "影响了上万人" in result
+
+    def test_a_lone_em_dash_counts_too(self):
+        assert "—" not in post_process("他只说了一个词—不。")
+
+    def test_a_decorative_dash_next_to_a_full_stop_just_goes(self):
+        """句末标点旁边的破折号不连接任何东西，补个逗号反而多余。"""
+        assert post_process("结论已经很清楚。——接下来是数据。") == \
+            "结论已经很清楚。接下来是数据。"
+
+    def test_a_dash_after_a_comma_does_not_double_the_pause(self):
+        assert post_process("他想了想，——然后拒绝了。") == "他想了想，然后拒绝了。"
+
+    def test_a_quote_attribution_keeps_its_dash(self):
+        """「——鲁迅」是正当用法，不是 AI 腔。"""
+        text = "希望本无所谓有，无所谓无的。\n\n——鲁迅\n"
+        assert "——鲁迅" in post_process(text)
+
+    def test_dashes_inside_a_code_block_are_left_alone(self):
+        text = ("正文一句话。\n\n"
+                "```python\n"
+                "SEP = '——'  # 分隔符\n"
+                "```\n")
+        assert "SEP = '——'" in post_process(text)
+
+    def test_normal_punctuation_is_untouched(self):
+        text = "GPT-5 今天发布，推理能力提升 3 倍。"
+        assert post_process(text) == text
 
 
 class TestPostProcessCleanup:

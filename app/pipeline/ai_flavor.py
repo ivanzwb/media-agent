@@ -163,7 +163,8 @@ _DIMENSIONS: tuple[_Dimension, ...] = (
     _Dimension(
         key="dash", label="破折号滥用", weight=6, saturate=4.0,
         advice="多数破折号可以换成句号或逗号，句子会更利落。",
-        patterns=_p(r"——"),
+        # 中文破折号是两个 em dash，但单个 em dash 和 en dash 一样是那股味道。
+        patterns=_p(r"[—–]+"),
     ),
     _Dimension(
         key="hollow_adj", label="空洞形容词", weight=5, saturate=8.0,

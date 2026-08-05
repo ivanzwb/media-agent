@@ -50,7 +50,9 @@ ANTI_SLOP_SYSTEM_INSTRUCTION: str = (
     "「总的来说」「综上所述」硬凑段落。\n"
     "8. **忌结尾升华** — 不要在结尾写「在……的道路上，我们……」"
     "「愿我们都能……」这类空洞升华。\n"
-    "9. **忌堆砌修辞** — 不要一句话里塞两个以上的形容词或排比。\n\n"
+    "9. **忌堆砌修辞** — 不要一句话里塞两个以上的形容词或排比。\n"
+    "10. **忌破折号** — 不要用破折号（——）。要停顿就用逗号，要解释就用冒号，"
+    "要另起一层意思就直接断句。引文署名（——某某）除外。\n\n"
     "黄金法则：如果一段话去掉后不影响事实表达，删掉它。"
 )
 
@@ -117,12 +119,57 @@ _SLOP_PATTERNS: list[tuple[Pattern[str], str]] = [
 ]
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Layer 2b — 破折号
+#
+# 破折号是最好认的机器笔迹之一，但它不能和套话一样一删了事：删掉之后两个分句
+# 会黏成一句没有标点的话。所以这里是换，不是删。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 中文破折号是两个 em dash，但模型也会吐单个 em dash 或 en dash。
+_DASH = r"[—–]+"
+
+_DASH_PATTERNS: list[tuple[Pattern[str], str]] = [
+    # 句末标点旁边的破折号不承担连接作用，纯装饰，去掉。
+    (re.compile(rf"(?<=[。！？；：])\s*{_DASH}\s*"), ""),
+    (re.compile(rf"\s*{_DASH}\s*(?=[。！？；])"), ""),
+    (re.compile(rf"\s*{_DASH}\s*$"), ""),
+    # 前面已经有逗号了，再来一个破折号是重复停顿。
+    (re.compile(rf"(?<=[，,、])\s*{_DASH}\s*"), ""),
+    # 其余的当插入语或解释处理，换成逗号，句子照样读得通。
+    (re.compile(rf"\s*{_DASH}\s*"), "，"),
+]
+
+_FENCE = re.compile(r"^\s*(?:```|~~~)")
+# 整行以破折号开头的是引文署名（「——鲁迅」），那是正当用法。
+_ATTRIBUTION = re.compile(rf"^\s*(?:>\s*)*{_DASH}\s*\S")
+
+
+def _fix_dashes(body_md: str) -> str:
+    """把破折号换成正常的标点，代码块和引文署名不动。"""
+    out: list[str] = []
+    in_fence = False
+    for line in body_md.split("\n"):
+        if _FENCE.match(line):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if in_fence or _ATTRIBUTION.match(line):
+            out.append(line)
+            continue
+        for pattern, replacement in _DASH_PATTERNS:
+            line = pattern.sub(replacement, line)
+        out.append(line)
+    return "\n".join(out)
+
+
 def post_process(body_md: str) -> str:
     """Remove common AI slop patterns from rewritten text.
 
-    This is a conservative safety net — it removes obviously bad phrases
-    without attempting major rewrites.  The heavy lifting is done by
-    the system-prompt injection (Layer 1).
+    A conservative safety net: obviously bad phrases are deleted, and dashes
+    are turned into ordinary punctuation, since deleting those would glue two
+    clauses together instead. No attempt is made at bigger rewrites; the heavy
+    lifting is done by the system-prompt injection (Layer 1).
 
     Returns the cleaned markdown string.
     """
@@ -132,6 +179,7 @@ def post_process(body_md: str) -> str:
     cleaned = body_md
     for pattern, replacement in _SLOP_PATTERNS:
         cleaned = pattern.sub(replacement, cleaned)
+    cleaned = _fix_dashes(cleaned)
 
     # Clean up: remove double blank lines left by removed text
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
