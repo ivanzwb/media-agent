@@ -562,3 +562,98 @@ def test_chapter_retry_waits_for_a_running_job(tmp_path, monkeypatch):
 
     assert client.post("/api/series/cancel").status_code == 200
     wait_terminal(client)
+
+
+def test_series_delete_removes_series_and_its_drafts(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.store._web_image_for_title", lambda *args: None)
+    client = make_client(tmp_path, pro=True)
+    config = Config(data_dir=tmp_path)
+    conn = connect(config.db_path)
+    init_db(conn)
+    store = Store(conn, config)
+    series_id = store.create_series(
+        title="强化学习", topic="强化学习", lang="zh", depth="beginner",
+        parts=2, style_id=None)
+    article = store.save_article(Article(
+        title="Source", content_md="facts", url="https://source.test/c",
+        source_name="Source", source_type="scrape",
+        published_at=datetime.now(timezone.utc), images=[], raw_summary=None,
+        fetched_at=datetime.now(timezone.utc), topic="强化学习"))
+    draft = store.save_draft(Draft(
+        article_id=article.id, title_candidates=["第一章成稿"],
+        body_md="## 正文", topic="强化学习", source_url=article.url,
+        source_name=article.source_name, origin="series",
+        series_id=series_id, series_order=1))
+    draft_path = config.data_dir / draft.draft_path
+    assert draft_path.exists()
+    chapter_ids = store.add_chapters(series_id, [
+        {"title": "第一章", "search_queries": ["q1"]},
+        {"title": "第二章", "search_queries": ["q2"]},
+    ])
+    store.update_chapter(chapter_ids[0], status="done", draft_id=draft.id)
+    conn.close()
+
+    response = client.delete(f"/api/series/{series_id}")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "deleted_drafts": 1}
+
+    assert client.get(f"/api/series/{series_id}").status_code == 404
+    assert client.get(f"/api/series/{series_id}/drafts").status_code == 404
+
+    conn = connect(config.db_path)
+    try:
+        fresh = Store(conn, config)
+        assert fresh.get_series(series_id) is None
+        assert fresh.get_draft(draft.id) is None
+        chapters = conn.execute(
+            "SELECT COUNT(*) AS n FROM series_chapters WHERE series_id=?",
+            (series_id,)).fetchone()
+        assert chapters["n"] == 0
+    finally:
+        conn.close()
+    assert not draft_path.exists()
+
+
+def test_series_delete_requires_pro(tmp_path):
+    client = make_client(tmp_path, pro=False)
+    series_id = seed_series(tmp_path)
+    assert client.delete(f"/api/series/{series_id}").status_code == 403
+
+
+def test_series_delete_rejects_unknown_series(tmp_path):
+    client = make_client(tmp_path, pro=True)
+    assert client.delete("/api/series/9999").status_code == 404
+
+
+def test_series_delete_refuses_a_running_series(tmp_path, monkeypatch):
+    def blocking_run(store, provider, options, **kwargs):
+        kwargs["progress"]({
+            "stage": "write", "detail": "第 1/2 章：正在写作…",
+            "current": 1, "total": 2, "stats": {"series_id": 1},
+        })
+        while not kwargs["should_stop"]():
+            time.sleep(0.01)
+        raise SearchCreateCancelled()
+
+    monkeypatch.setattr("app.web.server.run_series_create", blocking_run)
+    client = make_client(tmp_path, pro=True)
+    seed_series(tmp_path)  # series id 1 exists in the DB
+    assert client.post(
+        "/api/series/create", json=valid_payload()).status_code == 200
+
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        state = client.get("/api/series/status").json()
+        # The status endpoint falls back to the latest series row while the
+        # in-memory series_id is still None, so wait for the job's own
+        # progress event instead of the reported series id.
+        if state["stage"] == "write" and state["series_id"] == 1:
+            break
+        time.sleep(0.01)
+
+    response = client.delete("/api/series/1")
+    assert response.status_code == 409
+    assert "正在生成" in response.json()["error"]
+
+    assert client.post("/api/series/cancel").status_code == 200
+    wait_terminal(client)

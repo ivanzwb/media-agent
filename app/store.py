@@ -670,6 +670,18 @@ class Store:
         self.conn.commit()
         return deleted
 
+    def delete_series(self, series_id: int) -> int:
+        """Delete a knowledge series together with every draft it owns
+        (DB rows + markdown files). Chapter rows cascade via the series FK.
+        Returns the number of drafts deleted."""
+        if self.get_series(series_id) is None:
+            return 0
+        draft_ids = [d["id"] for d in self.get_series_drafts(series_id)]
+        deleted = self.delete_drafts(draft_ids) if draft_ids else 0
+        self.conn.execute("DELETE FROM series WHERE id=?", (series_id,))
+        self.conn.commit()
+        return deleted
+
     def delete_articles(self, ids: list[int]) -> int:
         """Delete specific articles (and their dependent drafts) from the DB and
         remove their archive/draft files. Returns the number of articles deleted."""

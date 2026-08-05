@@ -3,7 +3,7 @@ import {
   Alert, App as AntApp, Button, Card, Empty, Input, Progress, Space, Table,
   Tag, Typography,
 } from "antd";
-import { BookOutlined, ReloadOutlined } from "@ant-design/icons";
+import { BookOutlined, DeleteOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useOutletContext } from "react-router-dom";
 import { api, getJson } from "../api/client";
@@ -34,6 +34,7 @@ export default function SeriesLibrary() {
   const [keyword, setKeyword] = useState("");
   const [retrying, setRetrying] = useState<number | null>(null);
   const [starting, setStarting] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState<number | null>(null);
 
   const isPro = !!(license?.active || license?.dev);
   const listQuery = useQuery({
@@ -105,6 +106,40 @@ export default function SeriesLibrary() {
     });
   }
 
+  async function deleteSeries(series: Series) {
+    setDeleting(series.id);
+    try {
+      await api.delete(`/api/series/${series.id}`);
+      message.success("已删除系列及其章节草稿");
+      await qc.invalidateQueries({ queryKey: ["series-status"] });
+      await qc.invalidateQueries({ queryKey: ["series-list"] });
+    } catch (e: any) {
+      if (e?.response?.status === 403) openLicenseGuide();
+      message.error(e?.response?.data?.error || e?.response?.data?.detail || "删除失败");
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  function confirmDelete(series: Series) {
+    const draftCount = series.chapters.filter(
+      (chapter) => chapter.draft_id).length;
+    modal.confirm({
+      title: `删除系列《${series.title}》？`,
+      icon: null,
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      content: (
+        <Space direction="vertical" size={4} style={{ marginTop: 8 }}>
+          <Text>该系列及其 {draftCount} 篇章节草稿将被删除，此操作不可恢复。</Text>
+          <Text type="secondary">已生成的视频产物文件不受影响。</Text>
+        </Space>
+      ),
+      onOk: () => deleteSeries(series),
+    });
+  }
+
   const columns = [
     {
       title: "系列",
@@ -147,7 +182,7 @@ export default function SeriesLibrary() {
       ),
     },
     {
-      title: "操作", width: 260,
+      title: "操作", width: 320,
       render: (_: unknown, item: Series) => (
         <Space wrap size={4}>
           {item.chapters_done > 0 && (
@@ -164,6 +199,10 @@ export default function SeriesLibrary() {
                 {item.status === "planned" ? "开始写作" : "写完剩下的"}
               </Button>
             )}
+          <Button size="small" danger icon={<DeleteOutlined />}
+            loading={deleting === item.id}
+            disabled={running || item.status === "running"}
+            onClick={() => confirmDelete(item)}>删除</Button>
         </Space>
       ),
     },

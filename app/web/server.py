@@ -3330,6 +3330,24 @@ def create_app(config: Config | None = None,
             ],
         }
 
+    @app.delete("/api/series/{series_id}")
+    def api_series_delete(series_id: int):
+        """Delete a knowledge series AND the drafts it generated."""
+        denied = LG.require(license_mgr, LF.SERIES_CREATE)
+        if denied is not None:
+            return denied
+        store = get_store()
+        if store.get_series(series_id) is None:
+            return JSONResponse(
+                {"ok": False, "error": "系列不存在"}, status_code=404)
+        with search_create_lock:
+            if series_state["running"] and series_state["series_id"] == series_id:
+                return JSONResponse(
+                    {"ok": False, "error": "该系列正在生成中，无法删除"},
+                    status_code=409)
+        deleted = store.delete_series(series_id)
+        return {"ok": True, "deleted_drafts": deleted}
+
     def _reviewed_chapters(payload) -> list[dict]:
         if not isinstance(payload, dict):
             raise ValueError("请求体必须为 JSON 对象")
