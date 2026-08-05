@@ -186,13 +186,18 @@ class Engine:
         results = self.model.inference_zero_shot(
             tts_text=str(request["text"]), prompt_text=prompt_text,
             prompt_wav=prompt_wav, stream=False)
-        wrote = False
-        for result in results:
-            audio = result["tts_speech"].detach().cpu().squeeze(0).numpy()
-            sf.write(str(output), audio, self.model.sample_rate)
-            wrote = True
-        if not wrote or not output.is_file():
+        import numpy as np
+        parts = [
+            r["tts_speech"].detach().cpu().squeeze(0).numpy()
+            for r in results
+        ]
+        if not parts:
             raise RuntimeError("CosyVoice did not produce audio")
+        # inference_zero_shot yields one audio per text segment (long
+        # narration is split by token_max_n=80); every segment must be
+        # kept, otherwise only the LAST segment survives the writes.
+        audio = np.concatenate(parts) if len(parts) > 1 else parts[0]
+        sf.write(str(output), audio, self.model.sample_rate)
         return {"ok": True, "output": str(output), "prompt_text": prompt_text}
 
 

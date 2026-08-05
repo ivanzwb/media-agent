@@ -331,3 +331,54 @@ def test_worker_audio_acceptance_rejects_silence_and_bad_duration():
     assert validate(np.zeros(16000, dtype=np.float32), 16000)[0] is False
     assert validate(np.full(100, .1, dtype=np.float32), 16000)[0] is False
     assert validate(np.full(8000, .1, dtype=np.float32), 16000)[0] is True
+
+
+def test_worker_synthesize_concatenates_all_segments(tmp_path: Path):
+    """Long narration is split into segments; every segment must be kept,
+    not just the last one (regression: only the final segment survived)."""
+    import numpy as np
+    import soundfile as sf
+
+    worker = runpy.run_path(str(
+        Path(__file__).parents[1] / "packaging" / "cosyvoice_worker.py"))
+    Engine = worker["Engine"]
+
+    class FakeTensor:
+        def __init__(self, data):
+            self._data = data
+
+        def detach(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def squeeze(self, dim):
+            if dim == 0 and self._data.shape[0] == 1:
+                return FakeTensor(self._data[0])
+            return self
+
+        def numpy(self):
+            return self._data
+
+    class FakeModel:
+        sample_rate = 24000
+
+        def inference_zero_shot(self, tts_text, prompt_text, prompt_wav,
+                                stream):
+            # two segments, like split_paragraph produces for long narration
+            yield {"tts_speech": FakeTensor(np.zeros((1, 20000), np.float32))}
+            yield {"tts_speech": FakeTensor(np.zeros((1, 30000), np.float32))}
+
+    engine = object.__new__(Engine)
+    engine.model = FakeModel()
+    engine.whisper = None
+    out = tmp_path / "scene-0.wav"
+    engine.synthesize({
+        "text": "长旁白会被切段", "prompt_wav": "ref.wav",
+        "prompt_text": "参考", "output": str(out),
+    })
+
+    data, sr = sf.read(str(out))
+    assert sr == 24000
+    assert len(data) == 50000  # both segments kept, not just the last
