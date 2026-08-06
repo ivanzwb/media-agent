@@ -19,6 +19,8 @@ curl_cffi>=0.7.0          # TLS fingerprint impersonation (bypasses Cloudflare)
 json5>=0.9.0              # Lenient JSON parser (handles LLM output violations)
 edge-tts>=6.1.0
 yt-dlp>=2024.1.1
+numpy>=1.26               # narration segment assembly
+soundfile>=0.12.1         # WAV I/O when stitching CosyVoice segments
 cryptography==42.0.8      # retains prebuilt Intel macOS wheels; avoids OpenSSL ABI mismatch
 pytest==8.3.3
 
