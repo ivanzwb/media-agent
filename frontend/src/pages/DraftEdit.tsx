@@ -1920,6 +1920,7 @@ function VideoTab({ data }: { data: DraftData }) {
   const qc = useQueryClient();
   const [narrating, setNarrating] = useLocalState<boolean>(`draftedit-narrating-${data.id}`, false);
   const [synth, setSynth] = useLocalState<boolean>(`draftedit-synth-${data.id}`, false);
+  const [synthProg, setSynthProg] = useState<{ pct: number; eta: number | null } | null>(null);
   const [hasVideo, setHasVideo] = useState(data.has_video);
   const [voice, setVoice] = useState<string | undefined>(undefined);
   const [narrLog, setNarrLog] = useState<string[]>([]);
@@ -1969,10 +1970,11 @@ function VideoTab({ data }: { data: DraftData }) {
     let cancelled = false;
     const poll = setInterval(async () => {
       try {
-        const s = await getJson<{ running: boolean; error: string | null }>(`/api/video-status?draft_id=${data.id}`);
+        const s = await getJson<{ running: boolean; error: string | null; progress: { pct: number; eta: number | null } | null }>(`/api/video-status?draft_id=${data.id}`);
         if (cancelled) return;
+        if (s.progress) setSynthProg(s.progress);
         if (!s.running) {
-          clearInterval(poll); setSynth(false);
+          clearInterval(poll); setSynth(false); setSynthProg(null);
           if (s.error) message.error("合成失败：" + s.error);
           else { message.success("视频已合成"); setHasVideo(true); }
         }
@@ -1996,11 +1998,13 @@ function VideoTab({ data }: { data: DraftData }) {
   }
   async function synthVideo() {
     setSynth(true);
+    setSynthProg(null);
     await postForm(`/drafts/${data.id}/video`);
     if (synthPollRef.current) clearInterval(synthPollRef.current);
     const poll = setInterval(async () => {
-      const s = await getJson<{ running: boolean; error: string | null }>(`/api/video-status?draft_id=${data.id}`);
-      if (!s.running) { clearInterval(poll); setSynth(false); if (s.error) message.error("合成失败：" + s.error); else { message.success("视频已合成"); setHasVideo(true); qc.invalidateQueries({ queryKey: ["draft", data.id] }); } }
+      const s = await getJson<{ running: boolean; error: string | null; progress: { pct: number; eta: number | null } | null }>(`/api/video-status?draft_id=${data.id}`);
+      if (s.progress) setSynthProg(s.progress);
+      if (!s.running) { clearInterval(poll); setSynth(false); setSynthProg(null); if (s.error) message.error("合成失败：" + s.error); else { message.success("视频已合成"); setHasVideo(true); qc.invalidateQueries({ queryKey: ["draft", data.id] }); } }
     }, 2000);
     synthPollRef.current = poll;
   }
@@ -2031,6 +2035,19 @@ function VideoTab({ data }: { data: DraftData }) {
             <div style={{ maxHeight: 200, overflowY: "auto", fontFamily: "monospace", fontSize: 12 }}>
               {narrLog.map((line, i) => <div key={i}>{line}</div>)}
             </div>
+          </Card>
+        )}
+        {synth && synthProg && (
+          <Card size="small" title="合成进度" style={{ background: "#fafafa", marginTop: 8 }}>
+            <Progress percent={Math.round(synthProg.pct * 100)}
+              status={synthProg.pct >= 1 ? "success" : "active"} />
+            {synthProg.eta != null && (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                预计剩余：{synthProg.eta < 60
+                  ? `${Math.ceil(synthProg.eta)} 秒`
+                  : `${Math.floor(synthProg.eta / 60)} 分 ${Math.ceil(synthProg.eta % 60)} 秒`}
+              </Text>
+            )}
           </Card>
         )}
         {hasVideo && (

@@ -4210,7 +4210,7 @@ def create_app(config: Config | None = None,
     # ---- explainer video composition (ffmpeg) ----
     vid_lock = threading.Lock()
     vid_state = {"running": False, "draft_id": None, "logs": [],
-                 "error": None, "done": False}
+                 "error": None, "done": False, "progress": None}
 
     def _vid_log(msg):
         line = f"{datetime.now().strftime('%H:%M:%S')} {msg}"
@@ -4218,6 +4218,14 @@ def create_app(config: Config | None = None,
             vid_state["logs"].append(line)
             if len(vid_state["logs"]) > 300:
                 del vid_state["logs"][:-300]
+
+    def _vid_progress(pct, eta_sec):
+        # pct in (0, 1]; eta_sec: seconds remaining (or None early on)
+        with vid_lock:
+            vid_state["progress"] = {
+                "pct": round(pct, 4),
+                "eta": round(eta_sec, 1) if eta_sec is not None else None,
+            }
 
     @app.post("/drafts/{draft_id}/video")
     def trigger_video(draft_id: int):
@@ -4229,7 +4237,7 @@ def create_app(config: Config | None = None,
                 return {"started": False, "running": True,
                         "message": "已有合成任务在进行"}
             vid_state.update(running=True, draft_id=draft_id, logs=[],
-                             error=None, done=False)
+                             error=None, done=False, progress=None)
 
         def worker():
             try:
@@ -4242,7 +4250,8 @@ def create_app(config: Config | None = None,
                     for _si, _sc in enumerate(_s.get("scenes", [])):
                         if _sc.get("bg_custom"):
                             print(f"[build_video] scene[{_si}] bg_custom={_sc['bg_custom']!r}  exists={(_sp.parent / _sc['bg_custom']).exists()}", flush=True)
-                build_explainer_video(draft_id, rc, progress=_vid_log)
+                build_explainer_video(draft_id, rc, progress=_vid_log,
+                                      on_progress=_vid_progress)
                 with vid_lock:
                     vid_state["done"] = True
             except Exception as e:  # noqa: BLE001 - surface to UI
@@ -4265,6 +4274,7 @@ def create_app(config: Config | None = None,
                 "logs": list(vid_state["logs"]),
                 "error": vid_state["error"],
                 "done": vid_state["done"],
+                "progress": vid_state["progress"],
             }
         if draft_id is not None:
             base["has_video"] = video_path(draft_id, config) is not None

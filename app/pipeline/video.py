@@ -143,9 +143,15 @@ def _migrate_script(script: dict) -> bool:
     return True
 
 
-def build_explainer_video(draft_id: int, config: Config, progress=None) -> Path:
+def build_explainer_video(draft_id: int, config: Config, progress=None,
+                          on_progress=None) -> Path:
     """Compose the explainer video for a draft from its narration script
-    (must be generated first) + article images (localised at fetch time)."""
+    (must be generated first) + article images (localised at fetch time).
+
+    progress: text-log callback (str -> None).
+    on_progress: progress callback (pct: float, eta_sec: float | None),
+        forwarded to build_video for the ffmpeg encode phase.
+    """
     emit = progress or _noop
     script = load_narration(draft_id, config)
     if not script or not script.get("scenes"):
@@ -184,7 +190,8 @@ def build_explainer_video(draft_id: int, config: Config, progress=None) -> Path:
     build_video(script, work, image_map, out, progress=emit,
                 video_map=video_map, fit=(config.video_fit or "fit"),
                 brand_name=(config.video_brand_name or "Media Agent"),
-                avatar=_avatar_spec(config, emit))
+                avatar=_avatar_spec(config, emit),
+                on_progress=on_progress)
     return out
 
 

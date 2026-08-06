@@ -4,6 +4,8 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -261,11 +263,107 @@ def probe_duration(path: Path) -> float | None:
         return None
 
 
-def _run(cmd: list[str]) -> None:
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+def _progress_seconds(line: str) -> float | None:
+    """Parse a single ffmpeg `-progress` stdout line into encoded seconds
+    (from `out_time_us`, reported in microseconds). Returns None for lines
+    that don't carry timing info (frame=, speed=, progress=…)."""
+    line = line.strip()
+    if not line.startswith("out_time_us="):
+        return None
+    try:
+        return int(line.split("=", 1)[1]) / 1_000_000.0
+    except ValueError:
+        return None
+
+
+class _ProgressTracker:
+    """Thread-safe progress tracker used by build_video.
+
+    Work is measured in "seconds of encoded output" so longer scenes weigh
+    more (they genuinely take longer to ffmpeg-encode). Each scene reports
+    sub-second progress via ``tick``; when a clip fully encodes, ``finish_clip``
+    tops it up to its exact duration. Emits ``on_progress(pct, eta)`` where
+    ``pct`` is in (0, 1] and ``eta`` is seconds remaining (or None early on).
+    """
+
+    def __init__(self, total_work: float, on_progress,
+                 t0: float | None = None) -> None:
+        self._total = max(total_work, 1e-6)
+        self._cb = on_progress or (lambda *_: None)
+        self._lock = threading.Lock()
+        self._done = 0.0
+        self._last: dict[int, float] = {}   # clip index -> encoded seconds
+        self._t0 = t0 if t0 is not None else time.monotonic()
+        self._last_emit = float("-inf")   # first emit always passes
+
+    def tick(self, index: int, sec: float, cap: float) -> None:
+        """Add sub-second encoded progress for one clip (parallel-safe)."""
+        with self._lock:
+            prev = self._last.get(index, 0.0)
+            delta = max(0.0, min(sec, cap) - prev)
+            if delta <= 0:
+                return
+            self._last[index] = prev + delta
+            self._done += delta
+
+    def finish_clip(self, index: int, duration: float) -> None:
+        """Mark a clip fully encoded; top up to its exact duration."""
+        with self._lock:
+            prev = self._last.get(index, 0.0)
+            if duration > prev:
+                self._last[index] = duration
+                self._done += duration - prev
+
+    def add_fixed(self, amount: float) -> None:
+        """Add a known chunk of work (e.g. concat) without per-clip ticks."""
+        with self._lock:
+            self._done += max(0.0, amount)
+
+    def finish(self) -> None:
+        """Force 100% (used once the whole build succeeded)."""
+        with self._lock:
+            self._done = self._total
+            self._cb(1.0, 0.0)
+
+    def emit(self, force: bool = False) -> None:
+        with self._lock:
+            pct = min(1.0, self._done / self._total)
+            now = time.monotonic()
+            if not force and now - self._last_emit < 0.5:
+                return
+            self._last_emit = now
+            eta = ((now - self._t0) / pct * (1.0 - pct)
+                   if pct > 0.01 else None)
+            self._cb(pct, eta)
+
+
+def _run(cmd: list[str], on_progress=None) -> None:
+    """Run ffmpeg. When `on_progress` is given, append `-progress pipe:1` and
+    stream the encoded-seconds value (parsed from ffmpeg's machine-readable
+    progress output) to it. Returns after the process exits; raises on error."""
+    if on_progress is None:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"ffmpeg 失败：{' '.join(cmd[:3])}…\n{proc.stderr[-800:]}")
+        return
+
+    # Machine-readable progress: ffmpeg writes key=value blocks to stdout
+    # (frame, out_time_us, ...). out_time_us is the muxed duration in µs.
+    proc = subprocess.Popen(
+        [*cmd, "-progress", "pipe:1", "-nostats"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        encoding="utf-8", errors="replace", bufsize=1)
+    assert proc.stdout is not None and proc.stderr is not None
+    for line in proc.stdout:
+        sec = _progress_seconds(line)
+        if sec and sec > 0 and on_progress:
+            on_progress(sec)
+    err = proc.stderr.read()
+    proc.wait()
     if proc.returncode != 0:
         raise RuntimeError(
-            f"ffmpeg 失败：{' '.join(cmd[:3])}…\n{proc.stderr[-800:]}")
+            f"ffmpeg 失败：{' '.join(cmd[:3])}…\n{err[-800:]}")
 
 
 def _has_audio_stream(path: Path) -> bool:
@@ -281,7 +379,7 @@ def _has_audio_stream(path: Path) -> bool:
 
 
 def _make_clip(frame_png: Path, audio: Path | None, duration: float,
-               out_mp4: Path) -> None:
+               out_mp4: Path, on_progress=None) -> None:
     # Always pin the clip to an explicit duration so video length matches the
     # narration exactly (avoids A/V drift after concat).
     dur = f"{max(1.0, duration):.2f}"
@@ -292,14 +390,14 @@ def _make_clip(frame_png: Path, audio: Path | None, duration: float,
         _run(["ffmpeg", "-y", "-loop", "1", "-i", str(frame_png),
               "-i", str(audio), *common_v,
               "-c:a", "aac", "-b:a", "128k", "-ar", str(_SAMPLE_RATE),
-              "-ac", "2", "-t", dur, str(out_mp4)])
+              "-ac", "2", "-t", dur, str(out_mp4)], on_progress=on_progress)
     else:
         _run(["ffmpeg", "-y", "-loop", "1", "-i", str(frame_png),
               "-f", "lavfi", "-i",
               f"anullsrc=r={_SAMPLE_RATE}:cl=stereo",
               "-t", dur, *common_v,
               "-c:a", "aac", "-b:a", "128k", "-ar", str(_SAMPLE_RATE),
-              "-ac", "2", str(out_mp4)])
+              "-ac", "2", str(out_mp4)], on_progress=on_progress)
 
 
 def _seek_for(offset: float, total: float) -> float:
@@ -334,7 +432,7 @@ def _video_bg_filter(fit: str, freeze_to: float | None = None) -> str:
 
 def _make_video_clip(src_video: Path, overlay_png: Path, audio: Path | None,
                      duration: float, out_mp4: Path, fit: str = "fit",
-                     seek: float = 0.0) -> None:
+                     seek: float = 0.0, on_progress=None) -> None:
     """Use a source video clip as the background (placed per `fit`), starting
     at `seek` seconds (so consecutive scenes on the same video continue rather
     than restart). The last frame is frozen (tpad) to fill `duration` if the
@@ -349,7 +447,7 @@ def _make_video_clip(src_video: Path, overlay_png: Path, audio: Path | None,
               "-i", str(overlay_png), "-i", str(audio),
               "-filter_complex", vf, "-map", "[v]", "-map", "2:a",
               *common, "-c:a", "aac", "-b:a", "128k", "-ar", str(_SAMPLE_RATE),
-              "-ac", "2", "-t", dur, str(out_mp4)])
+              "-ac", "2", "-t", dur, str(out_mp4)], on_progress=on_progress)
     else:
         _run(["ffmpeg", "-y", *seek_args, "-i", str(src_video),
               "-i", str(overlay_png), "-f", "lavfi", "-i",
@@ -357,7 +455,7 @@ def _make_video_clip(src_video: Path, overlay_png: Path, audio: Path | None,
               "-filter_complex", vf, "-map", "[v]", "-map", "2:a",
               "-t", dur, *common,
               "-c:a", "aac", "-b:a", "128k", "-ar", str(_SAMPLE_RATE),
-              "-ac", "2", str(out_mp4)])
+              "-ac", "2", str(out_mp4)], on_progress=on_progress)
 
 
 def _is_enabled(val: str | bool | None) -> bool:
@@ -373,12 +471,15 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
                 video_map: dict[int, Path] | None = None,
                 fit: str = "fit",
                 brand_name: str = "Media Agent",
-                avatar=None) -> Path:
+                avatar=None, on_progress=None) -> Path:
     """Compose a narrated video from a narration script.
 
     image_map: 1-based index -> local image path (for media "image:N").
     video_map: 1-based index -> local video path (for media "video:N").
     fit: how to place media into 1280x720 — fit (letterbox) | crop | blur.
+    on_progress: optional callback(pct: float, eta_sec: float | None) called
+        throughout encoding with overall completion and estimated remaining
+        seconds (None until progress is measurable).
     """
     emit = progress or (lambda *_: None)
     import time as _time
@@ -473,12 +574,14 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
             frame = render_intro_frame(
                 title, brand_name, work_dir / f"intro-{i}.png",
                 bg_image=bg)
-            _make_clip(frame, audio, duration, clip)
+            _make_clip(frame, audio, duration, clip,
+                       on_progress=_track(i, duration))
         elif scene_type == "outro":
             frame = render_outro_frame(
                 brand_name, work_dir / f"outro-{i}.png",
                 bg_image=bg)
-            _make_clip(frame, audio, duration, clip)
+            _make_clip(frame, audio, duration, clip,
+                       on_progress=_track(i, duration))
         else:
             if bg is None:
                 iidx = _idx(media, "image:")
@@ -488,7 +591,10 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
             frame = render_frame(sc.get("narration", ""),
                                  work_dir / f"frame-{i}.png", bg_image=bg,
                                  fit=fit)
-            _make_clip(frame, audio, duration, clip)
+            _make_clip(frame, audio, duration, clip,
+                       on_progress=_track(i, duration))
+        tracker.finish_clip(i, duration)
+        tracker.emit()
 
     def _build_video_clip(i: int) -> None:
         """Render+encode one video-background scene.
@@ -508,12 +614,35 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
         offset = video_pos.get(key, 0.0)
         seek = _seek_for(offset, video_total[key])
         _make_video_clip(src_video, overlay, audio, duration, clip,
-                         fit=fit, seek=seek)
+                         fit=fit, seek=seek,
+                         on_progress=_track(i, duration))
+        tracker.finish_clip(i, duration)
+        tracker.emit()
         video_pos[key] = offset + duration
 
     # Identify scenes that need sequential video-seek ordering
     video_scenes = [i for i in range(total) if _is_video_scene(i)]
     image_scenes = [i for i in range(total) if not _is_video_scene(i)]
+
+    # Weight the progress bar by scene duration (longer scenes encode longer).
+    # Digital-human scenes add a second encode pass (avatar composite), and the
+    # final concat is a fixed small chunk so the bar reaches 100% only at the end.
+    scene_durs = [_scene_audio(i)[1] for i in range(total)]
+    avatar_work = 0.0
+    if avatar is not None and getattr(avatar, "enabled", False) and avatar.ready():
+        from app.video.avatar import scene_avatar_mode
+        avatar_work = sum(scene_durs[i] for i in range(total)
+                          if scene_avatar_mode(scenes[i], avatar) != "off")
+    concat_work = 6.0
+    tracker = _ProgressTracker(sum(scene_durs) + avatar_work + concat_work,
+                               on_progress, t0=_t0)
+
+    def _track(i: int, duration: float):
+        """ffmpeg on_progress hook: report per-clip encoded seconds."""
+        def cb(sec: float):
+            tracker.tick(i, sec, duration)
+            tracker.emit()
+        return cb
 
     # Phase 1 — image / intro / outro scenes: fully independent, parallel
     if image_scenes and emit:
@@ -547,6 +676,8 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
             composite_scene(clips[i], audio, duration,
                             scenes[i].get("narration", ""), mode, avatar,
                             work_dir, i, emit)
+            tracker.add_fixed(duration)
+            tracker.emit()
 
     # Warn about clips without audio (diagnostic — shouldn't normally happen)
     silent: list[int] = []
@@ -578,6 +709,8 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
     except RuntimeError:
         emit("流拷贝拼接失败，尝试重新编码…")
         _concat_demuxer(reencode=True)
+    tracker.add_fixed(concat_work)
+    tracker.emit()
 
     # Verify the output has an audio track (stream-copy can silently produce
     # a file with no audio if any clip lacks one; re-encode also may skip
@@ -632,4 +765,5 @@ def build_video(script: dict, work_dir: Path, image_map: dict[int, Path],
 
     _t2 = _time.monotonic()
     emit(f"视频合成完成，总耗时 {_t2 - _t0:.1f}s")
+    tracker.finish()
     return out_mp4
