@@ -2,6 +2,12 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useEffect, useMemo, useState } from "react";
 
+// The rendered SVG is injected without a second sanitising pass. Mermaid's own
+// securityLevel:"strict" scrubs label markup on the way out, and running the
+// result through DOMPurify again would blank the nodes: mermaid v11 always
+// renders node labels as <foreignObject> regardless of htmlLabels:false, and
+// DOMPurify removes foreignObject contents by default.
+//
 // Mermaid is large and only ever needed on the two series pages, so it is
 // fetched on first render rather than bundled into the initial load.
 let pending: Promise<typeof import("mermaid").default> | null = null;
@@ -49,7 +55,7 @@ export default function KnowledgeMap({ source }: { source?: string | null }) {
     setBroken(false);
     loadMermaid()
       .then((mermaid) => mermaid.render(`ma-map-${sequence += 1}`, text))
-      .then((result) => { if (!dropped) setSvg(DOMPurify.sanitize(result.svg)); })
+      .then((result) => { if (!dropped) setSvg(result.svg); })
       .catch(() => { if (!dropped) setBroken(true); });
     return () => { dropped = true; };
   }, [text, diagram]);

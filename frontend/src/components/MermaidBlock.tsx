@@ -7,12 +7,16 @@
 // degrades to a plain <pre><code> so the author can still read / fix the
 // source. Export to WeChat PNGs is a separate concern (mermaidExport.ts) and
 // must not touch this component.
-import DOMPurify from "dompurify";
 import { useEffect, useRef, useState } from "react";
 
 // One shared lazy promise per app run — mirrors KnowledgeMap's loadMermaid.
-// htmlLabels:false keeps labels as SVG <text>, which survives DOMPurify
-// sanitising (foreignObject content would be dropped and nodes go blank).
+//
+// The rendered SVG is injected without a second sanitising pass. Mermaid's own
+// securityLevel:"strict" scrubs label markup on the way out (verified: event
+// handlers, javascript: URIs, script/iframe tags are all dropped), and running
+// the result through DOMPurify again would blank the nodes: mermaid v11 always
+// renders node labels as <foreignObject> regardless of htmlLabels:false, and
+// DOMPurify removes foreignObject contents by default.
 let pending: Promise<typeof import("mermaid").default> | null = null;
 
 function loadMermaid() {
@@ -44,7 +48,7 @@ export default function MermaidBlock({ code }: { code: string }) {
     setBroken(false);
     loadMermaid()
       .then((mermaid) => mermaid.render(renderId, code))
-      .then((result) => { if (!dropped) setSvg(DOMPurify.sanitize(result.svg)); })
+      .then((result) => { if (!dropped) setSvg(result.svg); })
       .catch(() => { if (!dropped) setBroken(true); });
     return () => { dropped = true; };
   }, [code, renderId]);
