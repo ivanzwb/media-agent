@@ -57,6 +57,11 @@ KNOWLEDGE_MAP = (
 )
 
 
+# Chapters are written at a depth, and a depth commits the prompt to a length,
+# so the synthesizer rejects a body too short to be a finished chapter.
+CHAPTER_BODY = "## 小节\\n这一章的开头段落。\\n\\n" + "正文 [1] 与 [2]。" * 80
+
+
 class ScriptedProvider:
     """Answers by prompt shape, so chapter count never shifts the script."""
 
@@ -80,7 +85,7 @@ class ScriptedProvider:
             index = sum(1 for item in self.prompts if "title_candidates" in item)
             return (
                 f'{{"title_candidates":["成稿 {index}"],'
-                f'"body_md":"## 小节\\n这一章的开头段落。\\n\\n正文 [1] 与 [2]。",'
+                f'"body_md":"{CHAPTER_BODY}",'
                 '"citations":[]}'
             )
         if '"scores"' in prompt:
@@ -869,8 +874,8 @@ def test_chapters_localize_referenced_images(tmp_path, monkeypatch):
             prompt = messages[-1].content
             if "title_candidates" in prompt and "系列文章提纲" not in prompt:
                 return ('{"title_candidates":["成稿"],'
-                        '"body_md":"## 小节\\n图 [[IMG:0]] 与 [[IMG:2]]。'
-                        '\\n\\n正文 [1] 与 [2]。",'
+                        '"body_md":"## 小节\\n图 [[IMG:0]] 与 [[IMG:2]]。\\n\\n'
+                        + "正文 [1] 与 [2]。" * 80 + '",'
                         '"citations":[]}')
             return super().chat(messages, **opts)
 

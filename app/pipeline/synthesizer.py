@@ -329,6 +329,22 @@ _DEPTH_GUIDANCE = {
 }
 
 
+# A stub is not a short article. The model occasionally answers with nothing
+# but the opening hook — two sentences, wrapped in a perfectly well-formed JSON
+# object, with citations for the article it did not write. Nothing downstream
+# can tell that from a finished draft, so it reaches the draft list looking
+# like a successful run and is only found by reading it.
+#
+# The floor sits far below the band the prompt asks for: it is here to catch a
+# stub, not to police length. It applies only where a depth was requested,
+# since that is the only case where the prompt committed to a length at all.
+_DEPTH_BODY_FLOOR = {
+    "beginner": 500,
+    "intermediate": 600,
+    "advanced": 800,
+}
+
+
 def _depth_instruction(depth: str) -> str:
     """How deep to go, and what counts as deep.
 
@@ -502,26 +518,43 @@ def synthesize(topic: str, articles: list[Article], provider: LLMProvider,
         f"{_source_block(articles, include_images=has_images, deep=is_deep)}"
     )
 
+    floor = _DEPTH_BODY_FLOOR.get(depth, 0)
     parsed = None
     raw = ""
+    stub = False
     for attempt in range(2):
-        retry = (
-            "\n\n上一次输出无法解析。必须只输出有效 JSON，字符串中的换行用 \\n。"
-            if attempt else ""
-        )
+        if not attempt:
+            retry = ""
+        elif stub:
+            retry = (
+                f"\n\n上一次只写了个开头就结束了。body_md 要交完整成稿，"
+                f"不少于 {floor} 字：按小节展开，把参考资料里的数据、机制和"
+                "分歧写进去，不要只给一段钩子。"
+            )
+        else:
+            retry = "\n\n上一次输出无法解析。必须只输出有效 JSON，字符串中的换行用 \\n。"
         raw = provider.chat([
             Message(role="system", content=system),
             Message(role="user", content=prompt + retry),
         ])
-        parsed = _extract_json(raw)
-        if parsed and parsed.get("title_candidates") and parsed.get("body_md"):
-            break
-        fallback = _extract_json_fallback(raw)
-        if fallback:
-            parsed = fallback
+        candidate = _extract_json(raw)
+        if not (candidate and candidate.get("title_candidates")
+                and candidate.get("body_md")):
+            candidate = _extract_json_fallback(raw)
+        if not (candidate and candidate.get("title_candidates")
+                and candidate.get("body_md")):
+            stub = False
+            continue
+        parsed = candidate
+        stub = len(str(candidate["body_md"]).strip()) < floor
+        if not stub:
             break
     if not parsed or not parsed.get("title_candidates") or not parsed.get("body_md"):
         raise ValueError("综合创作模型未返回有效 JSON")
+    if stub:
+        raise ValueError(
+            f"综合创作只写出 {len(str(parsed['body_md']).strip())} 字正文，"
+            f"少于 {floor} 字，判定为半成品，未保存草稿；请重试")
 
     titles, title_scores = rank_titles(parsed["title_candidates"],
                                        parsed.get("title_scores"))

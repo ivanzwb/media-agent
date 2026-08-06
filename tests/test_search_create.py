@@ -520,10 +520,15 @@ def test_synthesize_uses_content_style_settings_and_examples():
     assert "**标签**：#AI #智能体" in result.body_md
 
 
+# Long enough to clear the stub floor: these tests are about what reaches the
+# prompt, not about the guard that rejects a body the model never finished.
+_FULL_BODY = "## 正文\\n" + "事实 [1]，另一处事实 [2]。" * 60
+
+
 class CapturingProvider(MockProvider):
     def __init__(self):
         super().__init__([
-            '{"title_candidates":["标题"],"body_md":"## 正文\\n事实 [1]。"}',
+            '{"title_candidates":["标题"],"body_md":"' + _FULL_BODY + '"}',
             '{"flagged_claims":[]}',
         ])
         self.calls = []
@@ -555,6 +560,71 @@ def test_length_is_a_range_rather_than_a_floor():
         assert expected in prompt
         assert "不少于" not in prompt
         assert "上限到了就删" in prompt
+
+
+def test_a_body_that_stops_after_the_hook_is_retried():
+    """The model sometimes ships the opening paragraph as the whole article."""
+    provider = MockProvider([
+        '{"title_candidates":["标题"],"body_md":"只写了个开头钩子就没了。"}',
+        '{"title_candidates":["标题"],"body_md":"' + _FULL_BODY + '"}',
+        '{"flagged_claims":[]}',
+    ])
+    result = synthesize("AI", [article(1), article(2)], provider,
+                        depth="intermediate")
+    assert "另一处事实 [2]" in result.body_md
+
+
+def test_the_retry_says_what_was_wrong_with_the_stub():
+    class Capture(MockProvider):
+        def __init__(self):
+            super().__init__([
+                '{"title_candidates":["标题"],"body_md":"开头就没了。"}',
+                '{"title_candidates":["标题"],"body_md":"' + _FULL_BODY + '"}',
+                '{"flagged_claims":[]}',
+            ])
+            self.calls = []
+
+        def chat(self, messages, **opts):
+            self.calls.append(messages)
+            return super().chat(messages, **opts)
+
+    provider = Capture()
+    synthesize("AI", [article(1), article(2)], provider, depth="intermediate")
+    second = provider.calls[1][-1].content
+    assert "只写了个开头就结束了" in second
+    assert "不少于 600 字" in second
+    # The parse-failure wording would send the model chasing the wrong problem.
+    assert "上一次输出无法解析" not in second
+
+
+def test_a_stub_is_refused_rather_than_saved_as_a_draft():
+    stub = '{"title_candidates":["标题"],"body_md":"两句话就结束了。"}'
+    provider = MockProvider([stub, stub, '{"flagged_claims":[]}'])
+    with pytest.raises(ValueError, match="半成品"):
+        synthesize("AI", [article(1), article(2)], provider,
+                   depth="intermediate")
+
+
+def test_the_floor_rises_with_the_depth_that_was_asked_for():
+    body = "## 正文\\n" + "事实 [1]。" * 90          # ~630 chars
+    ok = '{"title_candidates":["标题"],"body_md":"' + body + '"}'
+    passing = MockProvider([ok, '{"flagged_claims":[]}'])
+    assert synthesize("AI", [article(1), article(2)], passing,
+                      depth="intermediate").body_md
+
+    failing = MockProvider([ok, ok, '{"flagged_claims":[]}'])
+    with pytest.raises(ValueError, match="半成品"):
+        synthesize("AI", [article(1), article(2)], failing, depth="advanced")
+
+
+def test_without_a_depth_the_floor_is_not_enforced():
+    """No depth means the prompt never asked for a length, so there is
+    nothing to hold the body to."""
+    provider = MockProvider([
+        '{"title_candidates":["标题"],"body_md":"很短。"}',
+        '{"flagged_claims":[]}',
+    ])
+    assert "很短。" in synthesize("AI", [article(1), article(2)], provider).body_md
 
 
 def test_without_a_depth_nothing_is_claimed_about_it():
