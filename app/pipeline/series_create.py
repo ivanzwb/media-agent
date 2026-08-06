@@ -132,10 +132,8 @@ def probe_topic(options: SeriesCreateOptions, *,
     search_options = options.chapter_options()
     search_options.validate()
     base = _topic_search_terms(options.topic, options.lang)
-    if options.lang == "en":
-        queries = [base, f"{base} overview", f"{base} tutorial"]
-    else:
-        queries = [base, f"{base} 综述", f"{base} 入门"]
+    queries = [base, f"{base} 综述", f"{base} 入门",
+               f"{base} overview", f"{base} tutorial"]
 
     hits = search_queries(queries, search_options, should_stop=should_stop)
     lines: list[str] = []
@@ -347,7 +345,8 @@ def generate_series_outline(topic: str, grounding: str, provider: LLMProvider,
             "宁可少而扎实，也不要为凑数拆出内容重复或撑不满一篇的章节。")
     prompt = (
         f"{opening}"
-        f"深度定位：{_DEPTH_LABELS[depth]}。输出语言：{language}。\n"
+        f"深度定位：{_DEPTH_LABELS[depth]}。输出语言：{language}，"
+        "只约束 title 和 scope；search_queries 不受它限制。\n"
         "章节之间要有清晰的递进关系，共同覆盖该领域的主要脉络，"
         "彼此不重复。\n"
         "第一章是整个系列的开篇总览：交代这个主题的全貌、几个部分之间的关系，"
@@ -357,8 +356,8 @@ def generate_series_outline(topic: str, grounding: str, provider: LLMProvider,
         "只输出 JSON 对象：\n"
         '{"chapters":[{"title":"章节标题",'
         '"scope":"这一章讲什么、读者读完能得到什么，100 字以内",'
-        '"search_queries":["2-4 个用于检索该章资料的检索词，短而具体，'
-        '使用该领域实际通用的说法"],'
+        '"search_queries":["2-4 个用于检索该章资料的检索词，中文英文各至少一个，'
+        '短而具体，使用该领域实际通用的说法，英文不要从中文逐字翻译"],'
         '"prerequisites":["需要先读的本系列其他章节标题"]}]}\n'
         f"{_DEPTH_QUERY_HINTS[depth]}\n"
         f"{count_rule}不要输出代码围栏或额外说明。"
@@ -389,7 +388,8 @@ def _repair_chapter_queries(chapters: list[dict], thin: list[int], topic: str,
         f"{grounding_block}"
         f"需要改写的章节：\n{listing}\n\n"
         '只输出 JSON：{"fixes":[{"index":1,"search_queries":["检索词"]}]}\n'
-        "检索词要短、具体、用该领域公开资料里实际出现的说法，每章 2-4 个。"
+        "检索词要短、具体、用该领域公开资料里实际出现的说法，每章 2-4 个，"
+        "中文英文各至少一个。"
     )
     try:
         parsed = _extract_json(

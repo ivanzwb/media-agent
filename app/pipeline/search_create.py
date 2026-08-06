@@ -115,18 +115,27 @@ def _topic_search_terms(topic: str, lang: str) -> str:
     return " ".join(segments) or compact or topic
 
 
+def _local_query_fallback(base: str) -> list[str]:
+    """Bilingual queries built without the model, for when expansion fails."""
+    return [base, f"{base} 分析", f"{base} 专家 建议",
+            f"{base} research", f"{base} expert analysis"]
+
+
 def expand_search_queries(topic: str, lang: str,
                           provider: LLMProvider) -> list[str]:
-    language = {
-        "zh": "以中文检索词为主",
-        "en": "只使用英文检索词",
-        "bilingual": "同时给出中文和英文检索词",
-    }[lang]
+    """Turn a topic into search queries in both Chinese and English.
+
+    ``lang`` is the language the article gets written in, not a limit on where
+    its material may come from: the best writing on a subject is often only in
+    the other language, so both are always searched and the synthesiser
+    translates what it quotes.
+    """
     prompt = (
-        f"为主题「{topic}」生成 3-5 个适合查找高质量新闻、研究和深度文章的"
-        f"搜索引擎检索词。{language}。检索词要短而具体，把最有区分度的核心"
-        "概念放在最前面，不要照抄完整问句；同时覆盖专业解释、风险/收益、"
-        "专家建议和可靠数据。"
+        f"为主题「{topic}」生成 4-6 个适合查找高质量新闻、研究和深度文章的"
+        "搜索引擎检索词。中文和英文检索词都要有，数量大致各半；英文用该领域"
+        "英文资料里实际通用的说法，不要把中文逐字翻译过去。检索词要短而具体，"
+        "把最有区分度的核心概念放在最前面，不要照抄完整问句；同时覆盖专业解释、"
+        "风险/收益、专家建议和可靠数据。"
         '只输出 JSON：{"queries":["..."]}。'
     )
     try:
@@ -136,27 +145,32 @@ def expand_search_queries(topic: str, lang: str,
         cleaned = [str(query).strip() for query in queries if str(query).strip()]
         if cleaned:
             base = _topic_search_terms(topic, lang)
-            return list(dict.fromkeys([base, *cleaned]))[:5]
+            return list(dict.fromkeys([base, *cleaned]))[:6]
         logger.warning(
             "检索词扩展未返回有效 queries，使用本地兜底；响应：%r",
             str(raw)[:300])
     except Exception as exc:  # noqa: BLE001
         logger.warning("检索词扩展失败，使用本地兜底：%s", exc)
 
-    base = _topic_search_terms(topic, lang)
-    if lang == "en":
-        return [base, f"{base} research", f"{base} expert analysis"]
-    if lang == "bilingual":
-        return [base, f"{base} 分析", f"{base} research review"]
-    return [base, f"{base} 分析", f"{base} 专家 建议"]
+    return _local_query_fallback(_topic_search_terms(topic, lang))
 
 
 def _search_timelimit(days: int | None) -> str | None:
     return {7: "w", 30: "m", 90: "y"}.get(days or 0)
 
 
-def _search_region(lang: str) -> str:
-    return {"zh": "cn-zh", "en": "us-en"}.get(lang, "wt-wt")
+_CJK = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _query_region(query: str) -> str:
+    """Pick the search region from the query's own script.
+
+    Queries are bilingual now, so one region per run would search half of them
+    in the wrong place — an English query sent to Bing with ``setlang=zh-hans``
+    finds Chinese pages about it rather than the English writing it was for.
+    Deciding per query also keeps the Baidu fallback for the Chinese ones.
+    """
+    return "cn-zh" if _CJK.search(query or "") else "us-en"
 
 
 def search_queries(queries: list[str], options: SearchCreateOptions, *,
@@ -178,7 +192,7 @@ def search_queries(queries: list[str], options: SearchCreateOptions, *,
                 query,
                 max_results=options.max_results_per_query,
                 timelimit=_search_timelimit(options.time_range_days),
-                region=_search_region(options.lang),
+                region=_query_region(query),
                 engines=options.engines,
                 proxy=options.proxy,
                 timeout=options.search_timeout,

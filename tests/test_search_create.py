@@ -11,8 +11,9 @@ from app.db import connect, init_db
 from app.llm.providers.mock import MockProvider
 from app.models import Article
 from app.pipeline.search_create import (
-    SearchCreateCancelled, SearchCreateOptions, expand_search_queries,
-    rank_by_topic, run_search_create, scrape_search_hits)
+    SearchCreateCancelled, SearchCreateOptions, _query_region,
+    expand_search_queries, rank_by_topic, run_search_create,
+    scrape_search_hits)
 from app.pipeline.synthesizer import (
     _image_manifest, _visual_instruction, expand_image_refs, referenced_images,
     synthesize)
@@ -285,11 +286,51 @@ def test_query_expansion_parses_json_and_has_fallback():
 def test_conversational_topic_falls_back_to_search_terms():
     provider = MockProvider(["not json"])
     assert expand_search_queries("长期远程办公，真的好吗", "zh", provider) == [
-        "长期远程办公", "长期远程办公 分析", "长期远程办公 专家 建议"]
+        "长期远程办公", "长期远程办公 分析", "长期远程办公 专家 建议",
+        "长期远程办公 research", "长期远程办公 expert analysis"]
     keeps_terms = MockProvider(['{"queries":["远程办公 效率 研究"]}'])
     assert expand_search_queries(
         "长期远程办公，究竟好不好？", "zh", keeps_terms) == [
             "长期远程办公", "远程办公 效率 研究"]
+
+
+class RecordingProvider(MockProvider):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.prompts: list[str] = []
+
+    def chat(self, messages, **opts):
+        self.prompts.append(messages[-1].content if messages else "")
+        return super().chat(messages, **opts)
+
+
+def test_query_expansion_asks_for_both_languages_whatever_the_article_lang():
+    for lang in ("zh", "en", "bilingual"):
+        provider = RecordingProvider(
+            ['{"queries":["远程办公 研究","remote work study"]}'])
+        assert expand_search_queries("远程办公", lang, provider) == [
+            "远程办公", "远程办公 研究", "remote work study"]
+        assert "中文和英文检索词都要有" in provider.prompts[0]
+
+
+def test_query_expansion_fallback_carries_english_terms():
+    # The offline fallback cannot translate, so it can only hang English
+    # qualifiers off the topic's own wording. Genuinely bilingual queries come
+    # from the model path; this only keeps the degraded path from being
+    # single-language.
+    for lang in ("zh", "en", "bilingual"):
+        queries = expand_search_queries("远程办公", lang, MockProvider(["nope"]))
+        assert queries[0] == "远程办公"
+        assert any("分析" in query for query in queries)
+        assert any("research" in query for query in queries)
+
+
+def test_search_region_follows_the_query_not_the_article_language():
+    # A bilingual query list run under one region would send half the queries
+    # to the wrong place; Chinese ones must still reach the Baidu fallback.
+    assert _query_region("远程办公 研究") == "cn-zh"
+    assert _query_region("remote work productivity study") == "us-en"
+    assert _query_region("GPT-4 论文") == "cn-zh"
 
 
 def test_search_hit_filter_rejects_generic_partial_chinese_matches():
