@@ -1228,7 +1228,6 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
                 </Text>
               ) : <span />}
               style={{ marginBottom: 8, flexShrink: 0 }} />
-            <Input.TextArea placeholder="候选标题（每行一个）" value={titleCands} onChange={(e) => setTitleCands(e.target.value)} rows={2} style={{ marginBottom: 8, flexShrink: 0 }} />
             <TitleCandidateList text={titleCands} scores={data.title_scores || []}
               onPick={setTitleCn} />
             <Input.TextArea placeholder="摘要（订阅号列表、转发卡片和搜一搜里显示的就是这段；留空则自动截取正文开头）"
