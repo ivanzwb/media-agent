@@ -61,10 +61,22 @@ PLATFORM_LEVELS = {
 _ORDINARY_AFTER: dict[str, tuple[str, ...]] = {
     "第一": ("次", "步", "时间", "手", "线", "章", "节", "部", "季", "集",
              "天", "轮", "批", "版", "期", "课", "讲", "人称", "现场",
-             "作者", "语言", "阶段", "选择"),
+             "作者", "语言", "阶段", "选择",
+             # enumeration / list markers: 第一点 第一个 第一项 第一条 …
+             "点", "个", "项", "条",
+             # ordinary phrases: 第一句 第一反应 第一印象 第一段 第一页 第一场 第一站 第一题
+             "句", "反应", "印象", "段", "页", "场", "站", "题"),
     "最高": ("法院", "人民法院", "气温", "温度", "时速", "海拔", "法规"),
     "最大": ("值", "化", "限度", "公约数", "公因数", "程度"),
 }
+
+# 「第一」is also an enumeration marker ("第一，第二，第三…" / "第一、第二…" /
+# "第一：先说结论。第二：…" / "第一是效率，第二是成本"). The negative
+# lookahead below additionally exempts 第一 when an ordinal word (第二…第十)
+# follows shortly (≤40 chars, same line), so numbered lists survive — while
+# ranking claims ("行业第一") with no following ordinal are still masked.
+# Inherited by 全球第一/全国第一 via _ordinary_after()'s endswith matching.
+_ENUM_SEQUENCE_AFTER = r".{0,40}第[二三四五六七八九十]"
 
 
 def _ordinary_after(word: str) -> tuple[str, ...]:
@@ -80,6 +92,10 @@ def _word_pattern(word: str) -> re.Pattern[str]:
     if not suffixes:
         return re.compile(re.escape(word))
     tail = "|".join(re.escape(s) for s in suffixes)
+    if word.endswith("第一"):
+        # numbered lists ("第一，第二，第三…") keep 第一; ranking claims
+        # ("行业第一") are still masked. Inherited by 全球第一/全国第一.
+        tail += f"|{_ENUM_SEQUENCE_AFTER}"
     return re.compile(rf"{re.escape(word)}(?!{tail})")
 
 

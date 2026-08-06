@@ -32,6 +32,35 @@ def test_ordinary_phrases_survive_the_adlaw_list():
         assert hits == []
 
 
+def test_enumeration_sequences_survive_the_adlaw_list():
+    """「第一，第二，第三」style numbered lists are structure, not claims.
+    The 第一 marker must survive so lists are not mangled into "，第二，第三"."""
+    words = builtin_words("basic")
+    for text in ("第一，第二，第三", "第一、第二、第三",
+                 "第一：先说结论。第二：再说细节",
+                 "第一是效率，第二是成本",
+                 "第一，也是最关键的，第二",
+                 "第一点，第二点，第三点",
+                 "第一个方案，第二个方案",
+                 "第一句话要打动读者，第二句话给出信息",
+                 "我的第一反应是拒绝，第二反应是接受",
+                 "全国第一，第二，第三"):
+        clean, hits = sanitize(text, words)
+        assert clean == text, text
+        assert hits == []
+
+
+def test_enumeration_exemption_does_not_weaken_claims():
+    """The enumeration exemption must not let real ranking claims through."""
+    words = builtin_words("basic")
+    assert sanitize("行业第一的品牌", words)[0] == "行业的品牌"
+    assert sanitize("这是全球第一", words)[0] == "这是"
+    assert sanitize("第一名的成绩", words)[0] == "名的成绩"
+    # 第一次 is ordinary, but a standalone claim after 是 is still masked
+    assert sanitize("第一次是第一，第一步也是第一", words)[0] == \
+        "第一次是，第一步也是"
+
+
 def test_the_claim_itself_is_still_masked():
     words = builtin_words("basic")
     assert sanitize("行业第一的品牌", words)[0] == "行业的品牌"
