@@ -45,8 +45,29 @@ def _download_remote_image(url: str, work: Path, emit) -> Path | None:
         return None
 
 
+def _download_remote_video(url: str, work: Path, emit) -> Path | None:
+    """Best-effort download of a remote video into the draft's video work dir
+    so it can be used as a scene background. Direct .mp4/.webm/etc. go through
+    the httpx strategy; platform embeds (YouTube/Bilibili/…) fall back to
+    yt-dlp."""
+    try:
+        from app.pipeline.localize import _download_video
+        work.mkdir(parents=True, exist_ok=True)
+        key = hashlib.sha1(url.encode("utf-8")).hexdigest()[:12]
+        dest = work / f"dl-{key}"
+        dest.mkdir(parents=True, exist_ok=True)
+        p = _download_video(url, dest, 1, emit)
+        if p and p.exists():
+            return p
+        emit(f"    远程视频下载失败：{url[:60]}…")
+        return None
+    except Exception as exc:  # noqa: BLE001 - never block the build
+        emit(f"    远程视频下载失败：{url[:60]}… ({exc})")
+        return None
+
+
 def _resolve_one(url: str, config: Config, work: Path | None,
-                 emit, download: bool) -> Path | None:
+                 emit, download: bool, kind: str = "image") -> Path | None:
     if not url:
         return None
     # Drafts written by the rewriter/localizer store file-relative paths
@@ -66,20 +87,24 @@ def _resolve_one(url: str, config: Config, work: Path | None,
         p = (config.videos_dir / url[len("/videos/"):]).resolve()
         return p if p.exists() else None
     if download and work is not None and url.startswith(("http://", "https://")):
+        if kind == "video":
+            return _download_remote_video(url, work, emit)
         return _download_remote_image(url, work, emit)
     return None
 
 
 def _resolve_media(urls: list[str], config: Config, work: Path | None = None,
-                   emit=None, download: bool = False) -> dict[int, Path]:
+                   emit=None, download: bool = False,
+                   kind: str = "image") -> dict[int, Path]:
     """Resolve media URLs (index→Path). Handles absolute /media|/images|/videos
     paths AND file-relative ../../media|../../images (as drafts store them). When
-    *download* is set, remote http(s) images are fetched into *work* so article
-    images embedded as remote URLs still become scene backgrounds."""
+    *download* is set, remote http(s) media are fetched into *work* so remote
+    URLs still become scene backgrounds (kind="video" routes to the video
+    downloader chain)."""
     emit = emit or _noop
     out: dict[int, Path] = {}
     for i, url in enumerate(urls, 1):
-        p = _resolve_one(url, config, work, emit, download)
+        p = _resolve_one(url, config, work, emit, download, kind)
         if p:
             out[i] = p
     return out
@@ -145,7 +170,10 @@ def build_explainer_video(draft_id: int, config: Config, progress=None) -> Path:
     video_map: dict[int, Path] = {}
     if referenced and script.get("videos"):
         emit("查找本地原视频…")
-        video_map = _resolve_media(script["videos"], config)
+        video_map = _resolve_media(script["videos"], config, work=work,
+                                   emit=emit, download=True, kind="video")
+        if not video_map:
+            emit("提示：视频素材均无法解析为本地文件，相关分镜将用图片背景")
 
     # Migrate old-format scripts (intro_audio/outro_audio at top level)
     if _migrate_script(script):
