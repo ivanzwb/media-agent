@@ -144,6 +144,55 @@ _FENCE = re.compile(r"^\s*(?:```|~~~)")
 # 整行以破折号开头的是引文署名（「——鲁迅」），那是正当用法。
 _ATTRIBUTION = re.compile(rf"^\s*(?:>\s*)*{_DASH}\s*\S")
 
+# Mermaid diagrams: models are told to wrap them in ```mermaid fences but
+# often write a bare "graph TD" block or fence it as ```graph/```flowchart,
+# which renders as plain text. Both are repaired below.
+_MERMAID_OPEN = re.compile(r"^\s*(?:graph|flowchart)\b", re.IGNORECASE)
+_MERMAID_EDGE = re.compile(r"(?:-->|---|==>|\.\.>|--\s*\|)")
+_WRONG_FENCE = re.compile(r"^\s*```\s*(?:graph|flowchart)\b.*$", re.IGNORECASE)
+
+
+def _fence_mermaid(body_md: str) -> str:
+    """Wrap unfenced mermaid blocks in ```mermaid and fix wrong fence labels.
+
+    The LLM is instructed to use ```mermaid fences, but when it forgets, a
+    bare ``graph TD`` block renders as plain code instead of a diagram. A
+    line that opens with graph/flowchart and continues with mermaid edge
+    syntax is unambiguous enough to repair; anything else is left alone.
+    """
+    lines = (body_md or "").split("\n")
+    out: list[str] = []
+    in_fence = False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if _FENCE.match(line):
+            was_fence = in_fence
+            in_fence = not in_fence
+            # ```graph TD / ```flowchart is a fence with the wrong label;
+            # fix it only on the opening fence line.
+            out.append(_WRONG_FENCE.sub("```mermaid", line)
+                       if (not was_fence and in_fence) else line)
+            i += 1
+            continue
+        if not in_fence and _MERMAID_OPEN.match(line):
+            block = [line]
+            i += 1
+            while (i < len(lines) and lines[i].strip()
+                   and not _FENCE.match(lines[i])):
+                block.append(lines[i])
+                i += 1
+            if any(_MERMAID_EDGE.search(b) for b in block):
+                out.append("```mermaid")
+                out.extend(block)
+                out.append("```")
+            else:
+                out.extend(block)
+            continue
+        out.append(line)
+        i += 1
+    return "\n".join(out)
+
 
 def _fix_dashes(body_md: str) -> str:
     """把破折号换成正常的标点，代码块和引文署名不动。"""
@@ -180,6 +229,7 @@ def post_process(body_md: str) -> str:
     for pattern, replacement in _SLOP_PATTERNS:
         cleaned = pattern.sub(replacement, cleaned)
     cleaned = _fix_dashes(cleaned)
+    cleaned = _fence_mermaid(cleaned)
 
     # Clean up: remove double blank lines left by removed text
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)

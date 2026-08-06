@@ -326,3 +326,52 @@ def test_rewrite_applies_post_processing():
     assert "赋能" not in draft.body_md
     # Core content preserved
     assert "正文实质内容" in draft.body_md
+
+
+# ── Mermaid fences: the model is told to wrap diagrams, but often forgets ──
+
+
+class TestPostProcessMermaidFences:
+    def test_bare_graph_block_gets_a_mermaid_fence(self):
+        body = ("先看脉络。\n"
+                "graph TD\n"
+                "    A[开始] --> B[结束]\n"
+                "    B --> C[结果]\n"
+                "\n后面还有正文。")
+        result = post_process(body)
+        assert result.startswith("先看脉络。\n```mermaid\ngraph TD\n")
+        assert result.endswith("```\n\n后面还有正文。")
+        assert result.count("```mermaid") == 1
+
+    def test_bare_flowchart_block_gets_a_mermaid_fence(self):
+        body = "如下：\nflowchart LR\n    A[输入] --> B[处理]\n\n继续。"
+        result = post_process(body)
+        assert "```mermaid\nflowchart LR\n" in result
+
+    def test_graph_fence_label_is_fixed_to_mermaid(self):
+        body = "先看图：\n```graph TD\n    A --> B\n```\n后文。"
+        result = post_process(body)
+        assert "```mermaid\n    A --> B\n```" in result
+        assert "```graph" not in result
+
+    def test_flowchart_fence_label_is_fixed_to_mermaid(self):
+        body = "```flowchart LR\n    A --> B\n```"
+        result = post_process(body)
+        assert result == "```mermaid\n    A --> B\n```"
+
+    def test_already_correct_fence_is_untouched(self):
+        body = "```mermaid\ngraph TD\n    A --> B\n```"
+        assert post_process(body) == body
+
+    def test_plain_code_fence_is_untouched(self):
+        body = "```\ngraph TD\n    A --> B\n```"
+        assert post_process(body) == body
+
+    def test_prose_that_mentions_graph_is_untouched(self):
+        body = "Graph 是数据结构，flowchart 是图表。正文继续。"
+        assert post_process(body) == body
+
+    def test_bare_graph_without_edges_is_untouched(self):
+        # A "graph" line with no edge syntax could be prose; don't fence it.
+        body = "graph TD\n说明文字，不是图。"
+        assert post_process(body) == body
