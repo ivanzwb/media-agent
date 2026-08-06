@@ -56,6 +56,7 @@ from app.pipeline.series_create import (
     SeriesCreateOptions, plan_series, retry_chapter, run_series_chapters,
     run_series_create)
 from app.pipeline.series_export import series_html, series_markdown
+from app.pipeline import references
 from app.pipeline import styles as rewrite_styles
 from app.pipeline import style_learner
 from app.wechat import components as editor_components
@@ -1272,8 +1273,12 @@ def create_app(config: Config | None = None,
 
     def _agent_run_background(draft_id: int, run_id: str, prompt: str,
                               full_md: str, provider: LLMProvider,
-                              workspace: Path):
-        """Run one isolated Agent edit and publish only its current result."""
+                              workspace: Path, *, references_tail: str = ""):
+        """Run one isolated Agent edit and publish only its current result.
+
+        ``references_tail`` is the machine-generated reference list the caller
+        held back from the model; it is pinned onto the result unchanged.
+        """
         out_path = workspace / "output-draft.md"
         result_body: str | None = None
         failure: str | None = None
@@ -1335,7 +1340,7 @@ def create_app(config: Config | None = None,
                     f"Agent {source} 看起来是执行摘要而不是完整正文；"
                     f"请检查 CLI 权限，或确认它写入了 {out_path}")
 
-            result_body = parsed_body
+            result_body = references.restore(parsed_body, references_tail)
 
         except RuntimeError as exc:
             logger.error("agent-edit draft=%d run=%s failed: %s",
@@ -1497,6 +1502,10 @@ def create_app(config: Config | None = None,
 
         row = store.get_draft(draft_id)
         source_body = body["body_md"] if body_md is None else body_md
+        # 参考文献清单不参与重写。模板自带结尾结构，模型照做时会把清单顶掉，
+        # 而正文里的每个 [n] 都指着它——丢了不报错，只剩满篇断头引用。摘出去，
+        # 事后原样接回来。
+        source_body, references_tail = references.split(source_body)
         source_titles = body.get("title_candidates", []) or []
         if title_candidates is not None:
             source_titles = [
@@ -1563,6 +1572,7 @@ def create_app(config: Config | None = None,
         t = threading.Thread(
             target=_agent_run_background,
             args=(draft_id, run_id, prompt, full_md, provider, workspace),
+            kwargs={"references_tail": references_tail},
             daemon=True,
         )
         t.start()

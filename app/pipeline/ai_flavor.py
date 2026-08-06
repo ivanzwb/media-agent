@@ -20,6 +20,8 @@ import statistics
 from dataclasses import dataclass
 from typing import Pattern
 
+from app.pipeline import references
+
 
 @dataclass(frozen=True)
 class _Dimension:
@@ -195,12 +197,6 @@ _DIRECTIVE = re.compile(r"^\s*:::")
 _URL = re.compile(r"https?://\S+")
 _IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _HTML_TAG = re.compile(r"<[^>]{1,200}>")
-# 参考文献是流水线自己拼的，不是谁写的句子。合成器给每条都配了一个破折号
-# （「标题 —— 来源」），照单全收的话，每篇带引用的稿子都要白白背上一笔
-# 「破折号滥用」，还会收到「把破折号换成句号」这种对着机器生成的清单说的
-# 建议。它永远在正文最后，扫到就收工。
-_REFERENCES = re.compile(r"^\s*#{1,6}\s*(?:参考文献|参考资料|References)\s*$",
-                         re.IGNORECASE)
 _SENTENCE_SPLIT = re.compile(r"[。！？!?；;]+")
 # 统计句长时，标记本身不算字。
 _MD_MARK = re.compile(r"[*_`>#\[\]()~|-]+")
@@ -209,17 +205,18 @@ _MD_MARK = re.compile(r"[*_`>#\[\]()~|-]+")
 def _prose_lines(text: str) -> list[tuple[int, str]]:
     """正文里真正是「话」的那些行，带原始行号。
 
-    代码块、组件标记、图片、链接地址和文末的参考文献都不是人写给读者看的
-    句子，留着只会让词表误命中。
+    代码块、组件标记、图片、链接地址都不是人写给读者看的句子，留着只会让
+    词表误命中。文末的参考文献同理，而且合成器给每条都配了一个破折号
+    （「标题 —— 来源」），照单全收的话，每篇带引用的稿子都要白白背上一笔
+    「破折号滥用」，还会收到「把破折号换成句号」这种对着机器生成的清单说
+    的建议。
     """
     out: list[tuple[int, str]] = []
     in_fence = False
-    for index, raw in enumerate((text or "").splitlines()):
+    for index, raw in enumerate(references.split(text or "")[0].splitlines()):
         if _FENCE.match(raw):
             in_fence = not in_fence
             continue
-        if not in_fence and _REFERENCES.match(raw):
-            break
         if in_fence or _DIRECTIVE.match(raw):
             continue
         line = _URL.sub(" ", _IMAGE.sub(" ", raw))

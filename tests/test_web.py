@@ -1131,6 +1131,75 @@ def test_rewrite_preserves_title_not_body(tmp_path):
     assert body_now and row["title_cn"] != body_now
 
 
+def test_apply_template_cannot_eat_the_reference_list(tmp_path):
+    """A search-created article's 参考文献 list is provenance, not prose: the
+    body's [n] markers point into it. The template carries its own ending
+    structure, so a model told to follow it will happily replace the list —
+    and nothing about the result looks broken until you follow a citation.
+    """
+    import time
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    prose = "# 原正文\n第一段说了件事 [1]。\n\n第二段说了另一件 [2]。"
+    tail = "\n\n---\n\n## 参考文献\n1. 甲文 — 甲媒体\n2. 乙文 — 乙媒体\n"
+    store.update_draft_body(draft.id, title_candidates=["原标题"],
+                            body_md=prose + tail, status="drafted",
+                            title_cn="我的中文标题")
+
+    tpls = client.get("/api/editor/templates").json()["templates"]
+    r = client.post(f"/api/draft/{draft.id}/apply-template",
+                    data={"template_id": tpls[0]["id"]})
+    assert r.status_code == 200 and r.json().get("running") is True
+
+    for _ in range(200):
+        status = client.get(f"/api/draft/{draft.id}/agent-status").json()
+        if status.get("status") in ("completed", "error"):
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError("apply-template did not finish in time")
+    assert status["status"] == "completed", status
+
+    body_now = store.read_draft_body(draft.id).get("body_md", "") or ""
+    assert body_now.rstrip().endswith("2. 乙文 — 乙媒体")
+    assert body_now.count("## 参考文献") == 1
+
+
+def test_apply_template_does_not_send_the_reference_list_to_the_model(
+        tmp_path, monkeypatch):
+    """Held back rather than merely restored: a list the model never sees is
+    a list it cannot renumber."""
+    import time
+    client, store, _ = make_client(tmp_path)
+    _, draft = seed(store)
+    store.update_draft_body(
+        draft.id, title_candidates=["原标题"], status="drafted",
+        title_cn="我的中文标题",
+        body_md="# 原正文\n正文 [1]。\n\n---\n\n## 参考文献\n1. 甲文 — 甲媒体\n")
+
+    from app.llm.providers.mock import MockProvider
+
+    seen: list[str] = []
+    original = MockProvider.chat
+
+    def spy(self, messages, **opts):
+        seen.append("\n".join(m.content for m in messages))
+        return original(self, messages, **opts)
+
+    monkeypatch.setattr(MockProvider, "chat", spy)
+    tpls = client.get("/api/editor/templates").json()["templates"]
+    client.post(f"/api/draft/{draft.id}/apply-template",
+                data={"template_id": tpls[0]["id"]})
+    for _ in range(200):
+        if client.get(f"/api/draft/{draft.id}/agent-status"
+                      ).json().get("status") in ("completed", "error"):
+            break
+        time.sleep(0.1)
+
+    assert seen, "expected the template rewrite to call the provider"
+    assert "甲文 — 甲媒体" not in seen[0]
+
+
 def test_sadtalker_setup_stream_uses_standard_sse(tmp_path, monkeypatch):
     from app.video import sadtalker_setup as st
 

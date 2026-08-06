@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from app.llm.base import LLMProvider, Message
 from app.models import Article
+from app.pipeline import references
 from app.pipeline.anti_slop import ANTI_SLOP_SYSTEM_INSTRUCTION, post_process
 from app.pipeline.localize import is_page_furniture
 from app.pipeline.rewriter import (
@@ -213,7 +214,7 @@ def _strip_external_links(body: str) -> str:
 
 
 def _references(articles: list[Article]) -> str:
-    lines = ["## 参考文献"]
+    lines = [references.HEADING]
     for index, article in enumerate(articles, 1):
         lines.append(f"{index}. {article.title} — {article.source_name}")
     return "\n".join(lines)
