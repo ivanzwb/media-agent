@@ -177,6 +177,46 @@ def test_rank_titles_keeps_at_most_five():
     assert len(ordered) == 5
 
 
+def test_scored_objects_do_not_become_the_headline():
+    """Asked for candidates and scores separately, a model may answer with one
+    merged list; the draft then carried the whole object as its title."""
+    ordered, scores = rank_titles([
+        {"title": "脑机接口商业化元年", "score": 92, "reason": "场景切入"},
+        {"title": "谁在真正落地？", "score": 85, "reason": "提问引发好奇"},
+    ])
+    assert ordered == ["脑机接口商业化元年", "谁在真正落地？"]
+    assert [s["score"] for s in scores] == [92.0, 85.0]
+    assert scores[0]["reason"] == "场景切入"
+
+
+def test_merged_candidates_still_lose_to_the_length_cutoff():
+    long_title = "字" * 40
+    ordered, _ = rank_titles([
+        {"title": long_title, "score": 99},
+        {"title": "正常长度的候选标题", "score": 60},
+    ])
+    assert ordered[0] == "正常长度的候选标题"
+
+
+def test_rank_titles_skips_objects_without_a_title():
+    ordered, scores = rank_titles(
+        [{"score": 90, "reason": "没有标题"}, {"title": "  "}, "正常标题"])
+    assert ordered == ["正常标题"]
+    assert scores == []
+
+
+def test_extract_json_fallback_unwraps_scored_candidate_objects():
+    """The regex fallback would otherwise take field names as titles."""
+    text = (
+        '{"title_candidates": ['
+        '{"title": "第一个标题", "score": 92, "reason": "很好"},'
+        '{"title": "第二个标题", "score": 80, "reason": "还行"}'
+        '], "body_md": "正文"}'
+    )
+    result = _extract_json_fallback(text)
+    assert result["title_candidates"] == ["第一个标题", "第二个标题"]
+
+
 # ── digest ───────────────────────────────────────────────────────────────
 
 def test_rewrite_keeps_the_digest_the_model_wrote():

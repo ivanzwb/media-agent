@@ -635,8 +635,13 @@ def _extract_json_fallback(text: str) -> dict | None:
     titles: list[str] = []
     tc_m = _re.search(r'"title_candidates"\s*:\s*\[(.*?)\]', text, _re.DOTALL)
     if tc_m:
-        for s in _re.findall(r'"([^"]*)"', tc_m.group(1)):
-            titles.append(s)
+        block = tc_m.group(1)
+        # The candidates may be scored objects rather than bare strings, in
+        # which case every quoted run includes the field names and reasons.
+        if "{" in block:
+            titles = _re.findall(r'"title"\s*:\s*"([^"]*)"', block)
+        else:
+            titles = _re.findall(r'"([^"]*)"', block)
     if not titles:
         return None
     return {"title_candidates": titles, "body_md": body_md,
@@ -740,15 +745,27 @@ def rank_titles(titles: object,
     anything past the cutoff drops below the titles that survive it.
     Returns the ordered titles plus the score entries that matched, in the
     same order; unmatched or malformed entries are dropped.
+
+    A candidate may arrive as ``{"title": ..., "score": ..., "reason": ...}``
+    rather than a bare string: asked for candidates and scores as two fields,
+    models sometimes answer with one merged list. Stringifying those would put
+    the whole object in the headline, so the title is unwrapped and the score
+    it carried is kept.
     """
     cleaned: list[str] = []
+    merged: list[dict] = []
     for item in titles or []:
-        text = str(item).strip()
+        if isinstance(item, dict):
+            text = str(item.get("title") or "").strip()
+            if text:
+                merged.append({**item, "title": text})
+        else:
+            text = str(item).strip()
         if text and text not in cleaned:
             cleaned.append(text)
 
     graded: dict[str, dict] = {}
-    for entry in scores or []:
+    for entry in [*merged, *(scores or [])]:
         if not isinstance(entry, dict):
             continue
         title = str(entry.get("title") or "").strip()
