@@ -211,6 +211,41 @@ def test_series_writes_linked_drafts_in_order(tmp_path, monkeypatch):
     assert body["search_meta"]["chapter"] == "第一章"
 
 
+def test_every_chapter_arrives_with_a_score(tmp_path, monkeypatch):
+    """Scoring ran only on the rewrite path, so a whole series could land
+    in the list with nothing said about any of it."""
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+
+    result = run_series_create(store, ScriptedProvider(), options())
+
+    scores = [store.get_draft(draft_id)["score"]
+              for draft_id in result["draft_ids"]]
+    assert all(score and score > 0 for score in scores)
+
+
+def test_a_chapter_survives_a_grading_failure(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("评分服务挂了")
+
+    monkeypatch.setattr("app.pipeline.series_create.grade_draft", explode)
+    events: list[dict] = []
+
+    result = run_series_create(store, ScriptedProvider(), options(),
+                               progress=events.append)
+
+    assert result["status"] == "done"
+    assert len(result["draft_ids"]) == 3
+    assert any("评分失败" in event["detail"] for event in events)
+
+
 def test_chapters_never_reuse_an_earlier_chapters_sources(
         tmp_path, monkeypatch):
     store = make_store(tmp_path)

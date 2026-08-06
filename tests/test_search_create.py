@@ -926,6 +926,100 @@ def _wire_search_e2e(monkeypatch, rows):
     monkeypatch.setattr("app.store._web_image_for_title", lambda *args: None)
 
 
+def _e2e_store(tmp_path) -> Store:
+    config = Config(data_dir=tmp_path)
+    config.ensure_dirs()
+    conn = connect(config.db_path)
+    init_db(conn)
+    return Store(conn, config)
+
+
+def _graded_script(body: str) -> list[str]:
+    return [
+        '{"queries":["AI research"]}',
+        "[0,1]",
+        '{"scores":[{"index":0,"score":90},{"index":1,"score":80}]}',
+        '{"title_candidates":["综合标题"],"body_md":"' + body + '",'
+        '"citations":[]}',
+        '{"flagged_claims":[]}',
+    ]
+
+
+def test_a_search_created_draft_arrives_with_a_score(tmp_path, monkeypatch):
+    """Scoring ran only on the rewrite path, so a search-created draft
+    reached the list with nothing said about it and a stub was
+    indistinguishable from a finished article."""
+    store = _e2e_store(tmp_path)
+    _wire_search_e2e(monkeypatch, [article(1, days_old=365),
+                                   article(2, days_old=365)])
+
+    result = run_search_create(
+        store, MockProvider(_graded_script("## 正文\\n事实 [1] 与 [2]。")),
+        SearchCreateOptions(topic="AI", time_range_days=30, ref_count=5))
+
+    assert store.get_draft(result["draft_id"])["score"] > 0
+    assert result["stats"]["score"] > 0
+
+
+def test_the_diversion_check_runs_at_creation_not_on_opening(
+        tmp_path, monkeypatch):
+    """It used to run only when someone opened the draft, so a WeChat ID
+    sat in the article until it was read."""
+    store = _e2e_store(tmp_path)
+    _wire_search_e2e(monkeypatch, [article(1, days_old=365),
+                                   article(2, days_old=365)])
+    events: list[dict] = []
+
+    result = run_search_create(
+        store, MockProvider(_graded_script(
+            "## 正文\\n事实 [1]。\\n\\n加微信：aidaily2026")),
+        SearchCreateOptions(topic="AI", time_range_days=30, ref_count=5),
+        progress=events.append)
+
+    assert result["stats"]["diversion"] == 1
+    notice = [e["detail"] for e in events if "导流体检" in e["detail"]]
+    assert notice and "微信号" in notice[0]
+
+
+def test_a_clean_draft_is_not_accused_of_diverting(tmp_path, monkeypatch):
+    store = _e2e_store(tmp_path)
+    _wire_search_e2e(monkeypatch, [article(1, days_old=365),
+                                   article(2, days_old=365)])
+    events: list[dict] = []
+
+    result = run_search_create(
+        store, MockProvider(_graded_script("## 正文\\n事实 [1] 与 [2]。")),
+        SearchCreateOptions(topic="AI", time_range_days=30, ref_count=5),
+        progress=events.append)
+
+    assert result["stats"]["diversion"] == 0
+    assert not [e for e in events if "导流体检" in e["detail"]]
+
+
+def test_a_grading_failure_does_not_cost_the_draft(tmp_path, monkeypatch):
+    """Grading is advisory. The article is the thing that took ten minutes
+    to produce."""
+    store = _e2e_store(tmp_path)
+    _wire_search_e2e(monkeypatch, [article(1, days_old=365),
+                                   article(2, days_old=365)])
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("评分服务挂了")
+
+    monkeypatch.setattr("app.pipeline.search_create.grade_draft", explode)
+    events: list[dict] = []
+
+    result = run_search_create(
+        store, MockProvider(_graded_script("## 正文\\n事实 [1] 与 [2]。")),
+        SearchCreateOptions(topic="AI", time_range_days=30, ref_count=5),
+        progress=events.append)
+
+    assert result["draft_id"]
+    assert store.read_draft_body(result["draft_id"])["body_md"]
+    assert store.get_draft(result["draft_id"])["score"] is None
+    assert any("评分失败" in e["detail"] for e in events)
+
+
 def test_search_create_writes_to_the_depth_it_was_given(tmp_path, monkeypatch):
     """Search creation used to call synthesize with no depth at all, which
     left the single-draft path with no length control whatsoever."""

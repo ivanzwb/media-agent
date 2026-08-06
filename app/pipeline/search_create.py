@@ -14,6 +14,7 @@ from app.pipeline.orchestrator import filter_by_age
 from app.pipeline.relevance import filter_relevant
 from app.pipeline.rewriter import _extract_json
 from app.pipeline.sanitizer import sanitize_draft
+from app.pipeline.score import grade_draft
 from app.pipeline.localize import localize_reference_images
 from app.pipeline.synthesizer import (
     DEPTHS, expand_image_refs, referenced_images, synthesize)
@@ -419,6 +420,31 @@ def collect_references(queries: list[str], options: SearchCreateOptions,
     return rank_by_topic(articles, topic, provider, options.ref_count)
 
 
+def _grade(store, draft, draft_id: int, provider: LLMProvider,
+           promotion_footer: str, progress: ProgressCallback | None,
+           stats: dict) -> None:
+    """Record the score and the diversion findings for a finished draft.
+
+    Advisory only: a draft that cannot be graded is still a draft, so nothing
+    here is allowed to lose one.
+    """
+    try:
+        score, findings = grade_draft(
+            draft, provider=provider, promotion_footer=promotion_footer)
+    except Exception as exc:                        # noqa: BLE001
+        _emit(progress, "grade", f"评分失败（已跳过）：{exc}", stats=stats)
+        return
+    stats["score"] = score
+    stats["diversion"] = len(findings)
+    store.update_draft_score(draft_id, score)
+    _emit(progress, "grade", f"综合评分 {score}/100", stats=stats)
+    if findings:
+        kinds = "、".join(dict.fromkeys(f["label"] for f in findings))
+        _emit(progress, "grade",
+              f"导流体检发现 {len(findings)} 处（{kinds}），发布前需处理",
+              stats=stats)
+
+
 def run_search_create(store, provider: LLMProvider,
                       options: SearchCreateOptions, *, style=None,
                       promotion_footer: str = "",
@@ -534,6 +560,8 @@ def run_search_create(store, provider: LLMProvider,
     sanitize_draft(draft, sensitive_words or set())
     saved_draft = store.save_draft(draft)
     stats["draft_id"] = saved_draft.id
+    _grade(store, draft, saved_draft.id, provider, promotion_footer,
+           progress, stats)
     _emit(progress, "done", f"已保存草稿 #{saved_draft.id}", stats=stats)
     return {
         "draft_id": saved_draft.id,

@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from app.llm.base import LLMProvider, Message
+from app.pipeline.diversion import check_draft
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,38 @@ def compute_draft_score(
     if not is_mock:
         return _llm_score(title, topic, source_name, body_preview, published_at, provider)
     return _heuristic_score(title, topic, source_name, body_preview, published_at)
+
+
+def grade_draft(draft, *, provider: LLMProvider | None = None,
+                published_at: datetime | str | None = None,
+                promotion_footer: str = "") -> tuple[float, list[dict]]:
+    """Score a finished draft and run the pre-publish diversion check.
+
+    Both signals existed already but neither reached an article that was not
+    rewritten from a single source: scoring ran only on the rewrite path, and
+    the diversion check only when someone opened the draft. A search- or
+    series-created article therefore arrived in the list with nothing said
+    about it, and a bad one was indistinguishable from a good one until it
+    was read.
+    """
+    score = compute_draft_score(
+        title=draft.title_candidates[0] if draft.title_candidates else "",
+        topic=draft.topic or "",
+        source_name=draft.source_name or "",
+        body_preview=draft.body_md,
+        published_at=published_at,
+        provider=provider,
+    )
+    findings = check_draft(
+        {
+            "title_candidates": draft.title_candidates,
+            "title_cn": draft.title_cn or "",
+            "digest": draft.digest or "",
+            "body_md": draft.body_md,
+        },
+        promotion_footer,
+    )
+    return score, findings
 
 
 def _llm_score(

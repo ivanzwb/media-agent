@@ -24,6 +24,7 @@ from app.models import Article, Draft
 from app.config import Config
 from app.pipeline.rewriter import _extract_json
 from app.pipeline.sanitizer import sanitize_draft
+from app.pipeline.score import grade_draft
 from app.pipeline.search_create import (
     ProgressCallback, SearchCreateCancelled, SearchCreateOptions, _check_cancel,
     _emit, _topic_search_terms, _url_key, collect_references, search_queries)
@@ -629,6 +630,31 @@ class _ChapterContext:
         return [item["title"] for item in self.plan]
 
 
+def _grade_chapter(store, draft, draft_id: int, context: _ChapterContext,
+                   index: int, progress: ProgressCallback | None,
+                   stats: dict | None) -> None:
+    """Record the score and diversion findings for a finished chapter.
+
+    Advisory only: a chapter that cannot be graded is still written, so a
+    failure here must never cost the draft.
+    """
+    try:
+        score, findings = grade_draft(
+            draft, provider=context.provider,
+            promotion_footer=context.promotion_footer)
+    except Exception as exc:                        # noqa: BLE001
+        _emit(progress, "grade", f"第 {index} 章评分失败（已跳过）：{exc}",
+              stats=stats)
+        return
+    store.update_draft_score(draft_id, score)
+    _emit(progress, "grade", f"第 {index} 章综合评分 {score}/100", stats=stats)
+    if findings:
+        kinds = "、".join(dict.fromkeys(f["label"] for f in findings))
+        _emit(progress, "grade",
+              f"第 {index} 章导流体检发现 {len(findings)} 处（{kinds}）",
+              stats=stats)
+
+
 def _write_chapter(context: _ChapterContext, chapter: dict, chapter_id: int, *,
                    index: int, total: int, seen_urls: set[str],
                    written: list[dict],
@@ -754,6 +780,8 @@ def _write_chapter(context: _ChapterContext, chapter: dict, chapter_id: int, *,
     )
     sanitize_draft(draft, context.sensitive_words)
     saved_draft = store.save_draft(draft)
+    _grade_chapter(store, draft, saved_draft.id, context, index, progress,
+                   stats)
     summary = _chapter_summary(result.body_md)
     store.update_chapter(chapter_id, status="done", draft_id=saved_draft.id,
                          summary=summary, error=None)
