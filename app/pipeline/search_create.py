@@ -14,7 +14,7 @@ from app.pipeline.orchestrator import filter_by_age
 from app.pipeline.relevance import filter_relevant
 from app.pipeline.rewriter import _extract_json
 from app.pipeline.sanitizer import sanitize_draft
-from app.pipeline.score import grade_draft
+from app.pipeline.score import FLAVOR_NOTICE_AT, grade_draft
 from app.pipeline.localize import localize_reference_images
 from app.pipeline.synthesizer import (
     DEPTHS, expand_image_refs, referenced_images, synthesize)
@@ -429,19 +429,26 @@ def _grade(store, draft, draft_id: int, provider: LLMProvider,
     here is allowed to lose one.
     """
     try:
-        score, findings = grade_draft(
+        grade = grade_draft(
             draft, provider=provider, promotion_footer=promotion_footer)
     except Exception as exc:                        # noqa: BLE001
         _emit(progress, "grade", f"评分失败（已跳过）：{exc}", stats=stats)
         return
-    stats["score"] = score
-    stats["diversion"] = len(findings)
-    store.update_draft_score(draft_id, score)
-    _emit(progress, "grade", f"综合评分 {score}/100", stats=stats)
-    if findings:
-        kinds = "、".join(dict.fromkeys(f["label"] for f in findings))
+    flavor = grade.ai_flavor
+    stats["score"] = grade.score
+    stats["diversion"] = len(grade.diversion)
+    stats["ai_flavor"] = flavor["score"]
+    store.update_draft_score(draft_id, grade.score)
+    _emit(progress, "grade", f"综合评分 {grade.score}/100", stats=stats)
+    if flavor["score"] >= FLAVOR_NOTICE_AT:
+        worst = "、".join(d["label"] for d in flavor["dimensions"][:3])
         _emit(progress, "grade",
-              f"导流体检发现 {len(findings)} 处（{kinds}），发布前需处理",
+              f"AI 味{flavor['level']}（{flavor['score']}/100）：{worst}",
+              stats=stats)
+    if grade.diversion:
+        kinds = "、".join(dict.fromkeys(f["label"] for f in grade.diversion))
+        _emit(progress, "grade",
+              f"导流体检发现 {len(grade.diversion)} 处（{kinds}），发布前需处理",
               stats=stats)
 
 

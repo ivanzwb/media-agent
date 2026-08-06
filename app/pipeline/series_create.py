@@ -23,8 +23,9 @@ from app.llm.base import LLMProvider, Message
 from app.models import Article, Draft
 from app.config import Config
 from app.pipeline.rewriter import _extract_json
+from app.pipeline.anti_slop import ANTI_SLOP_SYSTEM_INSTRUCTION
 from app.pipeline.sanitizer import sanitize_draft
-from app.pipeline.score import grade_draft
+from app.pipeline.score import FLAVOR_NOTICE_AT, grade_draft
 from app.pipeline.search_create import (
     ProgressCallback, SearchCreateCancelled, SearchCreateOptions, _check_cancel,
     _emit, _topic_search_terms, _url_key, collect_references, search_queries)
@@ -308,6 +309,19 @@ def _normalise_chapters(value, topic: str, parts: int,
     return chapters
 
 
+# The outline is not just read by a person and thrown away: each chapter's
+# scope is handed verbatim to the writer as 「本篇要交付什么」 (see
+# _brief_instruction). A scope written as 「在……的背景下，本章将深入浅出地
+# 带你了解」 seeds that register into the chapter itself, so the anti-slop
+# rules have to reach the outline as well as the article.
+_OUTLINE_SYSTEM = (
+    "你是中文技术内容主编，把一个领域拆成互不重复、层层递进的章节。"
+    "章节标题和 scope 都要具体：说清这一章讲哪件事、读者读完能做什么，"
+    "不要写成宣传语。\n\n"
+    + ANTI_SLOP_SYSTEM_INSTRUCTION
+)
+
+
 def generate_series_outline(topic: str, grounding: str, provider: LLMProvider,
                             *, parts: int | None = None, depth: str,
                             lang: str = "zh",
@@ -363,7 +377,10 @@ def generate_series_outline(topic: str, grounding: str, provider: LLMProvider,
         f"{_DEPTH_QUERY_HINTS[depth]}\n"
         f"{count_rule}不要输出代码围栏或额外说明。"
     )
-    raw = provider.chat([Message(role="user", content=prompt)])
+    raw = provider.chat([
+        Message(role="system", content=_OUTLINE_SYSTEM),
+        Message(role="user", content=prompt),
+    ])
     chapters = _normalise_chapters(
         (_extract_json(raw) or {}).get("chapters"), topic,
         parts or MAX_PARTS, lang)
@@ -639,19 +656,27 @@ def _grade_chapter(store, draft, draft_id: int, context: _ChapterContext,
     failure here must never cost the draft.
     """
     try:
-        score, findings = grade_draft(
+        grade = grade_draft(
             draft, provider=context.provider,
             promotion_footer=context.promotion_footer)
     except Exception as exc:                        # noqa: BLE001
         _emit(progress, "grade", f"第 {index} 章评分失败（已跳过）：{exc}",
               stats=stats)
         return
-    store.update_draft_score(draft_id, score)
-    _emit(progress, "grade", f"第 {index} 章综合评分 {score}/100", stats=stats)
-    if findings:
-        kinds = "、".join(dict.fromkeys(f["label"] for f in findings))
+    flavor = grade.ai_flavor
+    store.update_draft_score(draft_id, grade.score)
+    _emit(progress, "grade", f"第 {index} 章综合评分 {grade.score}/100",
+          stats=stats)
+    if flavor["score"] >= FLAVOR_NOTICE_AT:
+        worst = "、".join(d["label"] for d in flavor["dimensions"][:3])
         _emit(progress, "grade",
-              f"第 {index} 章导流体检发现 {len(findings)} 处（{kinds}）",
+              f"第 {index} 章 AI 味{flavor['level']}"
+              f"（{flavor['score']}/100）：{worst}",
+              stats=stats)
+    if grade.diversion:
+        kinds = "、".join(dict.fromkeys(f["label"] for f in grade.diversion))
+        _emit(progress, "grade",
+              f"第 {index} 章导流体检发现 {len(grade.diversion)} 处（{kinds}）",
               stats=stats)
 
 

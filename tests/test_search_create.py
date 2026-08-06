@@ -10,6 +10,7 @@ from app.config import Config
 from app.db import connect, init_db
 from app.llm.providers.mock import MockProvider
 from app.models import Article
+from app.pipeline.score import FLAVOR_NOTICE_AT
 from app.pipeline.search_create import (
     SearchCreateCancelled, SearchCreateOptions, _query_region,
     expand_search_queries, rank_by_topic, run_search_create,
@@ -994,6 +995,65 @@ def test_a_clean_draft_is_not_accused_of_diverting(tmp_path, monkeypatch):
 
     assert result["stats"]["diversion"] == 0
     assert not [e for e in events if "导流体检" in e["detail"]]
+
+
+def test_the_anti_slop_rules_reach_the_synthesis_system_prompt():
+    """Both creation paths write through synthesize, so this is where the
+    rules have to land for either of them to be covered."""
+    provider = CapturingProvider()
+    synthesize("AI", [article(1), article(2)], provider)
+    assert "严禁 AI 腔" in provider.calls[0][0].content
+    assert "忌破折号" in provider.calls[0][0].content
+
+
+def test_a_machine_sounding_article_is_flagged_at_creation(
+        tmp_path, monkeypatch):
+    """The AI-flavour check was a button in the editor, so nobody saw it
+    until they were already reading the article.
+
+    The slop here is deliberately the kind ``post_process`` does not strip —
+    that layer already deletes 「近年来」「深入浅出」 and friends, so what
+    reaches the check is whatever the word list never covered.
+    """
+    store = _e2e_store(tmp_path)
+    _wire_search_e2e(monkeypatch, [article(1, days_old=365),
+                                   article(2, days_old=365)])
+    slop = "\n\n".join([
+        "## 正文",
+        "众所周知，这件事没那么容易 [1]。不可否认，它确实有难度。",
+        "归根结底，问题出在成本上 [2]。与其说是技术瓶颈，不如说是钱的问题。",
+        "由此可见，路径已经清楚。不难看出，剩下的只是执行。"
+        "值得注意的是，时间窗口不长。",
+        "一文读懂之后，划重点：先做小规模验证。",
+        "写在最后，未来可期。",
+    ])
+    events: list[dict] = []
+
+    result = run_search_create(
+        store, MockProvider(_graded_script(slop)),
+        SearchCreateOptions(topic="AI", time_range_days=30, ref_count=5),
+        progress=events.append)
+
+    assert result["stats"]["ai_flavor"] >= FLAVOR_NOTICE_AT
+    notice = [e["detail"] for e in events if "AI 味" in e["detail"]]
+    assert notice and "假深刻" in notice[0]
+
+
+def test_a_plain_article_is_not_nagged_about_ai_flavour(tmp_path, monkeypatch):
+    store = _e2e_store(tmp_path)
+    _wire_search_e2e(monkeypatch, [article(1, days_old=365),
+                                   article(2, days_old=365)])
+    events: list[dict] = []
+
+    result = run_search_create(
+        store, MockProvider(_graded_script(
+            "## 正文\n实验用了三块 A100，跑了 42 小时 [1]。"
+            "误差从 4.1% 降到 0.7% [2]。团队把批大小砍了一半才跑通。")),
+        SearchCreateOptions(topic="AI", time_range_days=30, ref_count=5),
+        progress=events.append)
+
+    assert result["stats"]["ai_flavor"] < FLAVOR_NOTICE_AT
+    assert not [e for e in events if "AI 味" in e["detail"]]
 
 
 def test_a_grading_failure_does_not_cost_the_draft(tmp_path, monkeypatch):

@@ -3,12 +3,18 @@ from __future__ import annotations
 import json
 import re
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 
 from app.llm.base import LLMProvider, Message
+from app.pipeline.ai_flavor import check_text
 from app.pipeline.diversion import check_draft
 
 logger = logging.getLogger(__name__)
+
+# 低于这个分数的 AI 味不值得打断创作日志：谁写东西都会偶尔冒一句套话，
+# 报得太勤，真正偏重的那几篇反而淹了。对应 ai_flavor 的「偏重」档。
+FLAVOR_NOTICE_AT = 45
 
 SCORING_PROMPT = (
     "你是资深自媒体内容评分专家。请对以下草稿进行多维度的综合评分（0-100 分），"
@@ -75,17 +81,29 @@ def compute_draft_score(
     return _heuristic_score(title, topic, source_name, body_preview, published_at)
 
 
+@dataclass(frozen=True)
+class DraftGrade:
+    """Everything that can be said about a finished draft without a human.
+
+    ``ai_flavor`` is the :func:`app.pipeline.ai_flavor.check_text` report.
+    """
+    score: float
+    diversion: list[dict]
+    ai_flavor: dict
+
+
 def grade_draft(draft, *, provider: LLMProvider | None = None,
                 published_at: datetime | str | None = None,
-                promotion_footer: str = "") -> tuple[float, list[dict]]:
-    """Score a finished draft and run the pre-publish diversion check.
+                promotion_footer: str = "") -> DraftGrade:
+    """Grade a finished draft: recommendation score, diversion, AI flavour.
 
-    Both signals existed already but neither reached an article that was not
-    rewritten from a single source: scoring ran only on the rewrite path, and
-    the diversion check only when someone opened the draft. A search- or
-    series-created article therefore arrived in the list with nothing said
-    about it, and a bad one was indistinguishable from a good one until it
-    was read.
+    All three checks existed already, and none of them reached an article
+    that was not rewritten from a single source. Scoring ran only on the
+    rewrite path, while the diversion check and the AI-flavour check ran only
+    when someone opened the draft and, for the latter, clicked a button. A
+    search- or series-created article therefore arrived in the list with
+    nothing said about it, and a bad one was indistinguishable from a good
+    one until it was read.
     """
     score = compute_draft_score(
         title=draft.title_candidates[0] if draft.title_candidates else "",
@@ -104,7 +122,7 @@ def grade_draft(draft, *, provider: LLMProvider | None = None,
         },
         promotion_footer,
     )
-    return score, findings
+    return DraftGrade(score, findings, check_text(draft.body_md or ""))
 
 
 def _llm_score(

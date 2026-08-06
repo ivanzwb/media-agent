@@ -65,14 +65,19 @@ CHAPTER_BODY = "## 小节\\n这一章的开头段落。\\n\\n" + "正文 [1] 与
 class ScriptedProvider:
     """Answers by prompt shape, so chapter count never shifts the script."""
 
-    def __init__(self, outline: str = OUTLINE, fixes: str = '{"fixes":[]}'):
+    def __init__(self, outline: str = OUTLINE, fixes: str = '{"fixes":[]}',
+                 chapter_body: str = CHAPTER_BODY):
         self.outline = outline
         self.fixes = fixes
+        self.chapter_body = chapter_body
         self.prompts: list[str] = []
+        self.systems: list[str] = []
 
     def chat(self, messages, **opts) -> str:
         prompt = messages[-1].content
         self.prompts.append(prompt)
+        self.systems.append("\n".join(
+            m.content for m in messages if m.role == "system"))
         if "事实核查员" in prompt:
             return '{"flagged_claims":[]}'
         if "梳理知识主题" in prompt:
@@ -85,7 +90,7 @@ class ScriptedProvider:
             index = sum(1 for item in self.prompts if "title_candidates" in item)
             return (
                 f'{{"title_candidates":["成稿 {index}"],'
-                f'"body_md":"{CHAPTER_BODY}",'
+                f'"body_md":"{self.chapter_body}",'
                 '"citations":[]}'
             )
         if '"scores"' in prompt:
@@ -181,6 +186,17 @@ def test_outline_falls_back_to_topic_terms_when_queries_missing():
     assert chapters[0]["prerequisites"] == ["入门"]
 
 
+def test_the_outline_is_written_under_the_anti_slop_rules():
+    """A scope is not just read and discarded — it is handed to the writer as
+    「本篇要交付什么」, so slop in the outline seeds slop in every chapter."""
+    provider = ScriptedProvider()
+    generate_series_outline(
+        "强化学习", "", provider, parts=1, depth="intermediate")
+    outline_call = provider.prompts.index(next(
+        p for p in provider.prompts if "系列文章提纲" in p))
+    assert "严禁 AI 腔" in provider.systems[outline_call]
+
+
 def test_outline_rejects_unusable_model_output():
     provider = ScriptedProvider('{"chapters":[]}')
     with pytest.raises(ValueError, match="系列提纲生成失败"):
@@ -224,6 +240,33 @@ def test_every_chapter_arrives_with_a_score(tmp_path, monkeypatch):
     scores = [store.get_draft(draft_id)["score"]
               for draft_id in result["draft_ids"]]
     assert all(score and score > 0 for score in scores)
+
+
+def test_a_machine_sounding_chapter_is_flagged_at_creation(
+        tmp_path, monkeypatch):
+    """The slop here is the kind ``post_process`` leaves alone; the phrases
+    that layer already deletes never reach the check."""
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url)
+    slop = "。".join([
+        "众所周知，这条路走了很久",
+        "不可否认，代价不小",
+        "归根结底，问题在成本",
+        "与其说是技术瓶颈，不如说是钱的问题",
+        "由此可见，方向已经清楚",
+        "不难看出，剩下的是执行",
+        "值得注意的是，窗口不长",
+        "写在最后，未来可期",
+    ]) + "。"
+    events: list[dict] = []
+
+    run_series_create(store, ScriptedProvider(chapter_body=slop * 8),
+                      options(), progress=events.append)
+
+    notice = [e["detail"] for e in events if "AI 味" in e["detail"]]
+    assert notice and notice[0].startswith("第 1 章 AI 味")
 
 
 def test_a_chapter_survives_a_grading_failure(tmp_path, monkeypatch):
