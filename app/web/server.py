@@ -1384,6 +1384,10 @@ def create_app(config: Config | None = None,
             return JSONResponse(
                 {"ok": False, "error": "草稿不存在"}, status_code=404)
         source_body = body["body_md"] if body_md is None else body_md
+        # 同套用模板：参考文献清单不参与改写。指令是用户写的，但没人会为了
+        # 「把小标题改活泼点」赌上满篇 [n] 的去向。真要删清单，编辑器里删掉
+        # 那几行就是了，比让模型顺手带走可靠。
+        source_body, references_tail = references.split(source_body)
         source_titles = body.get("title_candidates", []) or []
         if title_candidates is not None:
             source_titles = [
@@ -1462,6 +1466,7 @@ def create_app(config: Config | None = None,
         t = threading.Thread(
             target=_agent_run_background,
             args=(draft_id, run_id, prompt, full_md, provider, workspace),
+            kwargs={"references_tail": references_tail},
             daemon=True,
         )
         t.start()

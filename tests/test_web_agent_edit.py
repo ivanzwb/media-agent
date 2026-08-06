@@ -400,6 +400,33 @@ def test_agent_stdout_apply_preserves_title_and_uses_editor_snapshot(
     assert saved["body_md"] == "## 新正文\n来自 stdout"
 
 
+def test_agent_edit_cannot_lose_the_reference_list(tmp_path, monkeypatch):
+    """The list is provenance the body's [n] markers point into, and nobody
+    asking for a polish is offering to gamble it. It is held back from the
+    model rather than restored afterwards, so there is nothing to renumber."""
+    seen_prompt = {}
+
+    def respond(_provider, messages, _opts):
+        seen_prompt["text"] = messages[-1].content
+        return _edited_document("## 润色后的正文\n第一段 [1]。")
+
+    _fake_cli(monkeypatch, respond)
+    client, store, draft = _agent_client(tmp_path / "data")
+    tail = "\n\n---\n\n## 参考文献\n1. 甲文 — 甲媒体\n2. 乙文 — 乙媒体\n"
+
+    response = client.post(f"/api/draft/{draft.id}/agent-edit", data={
+        "prompt": "润色正文",
+        "body_md": "## 原正文\n第一段 [1]。" + tail,
+    })
+    run_id = response.json()["run_id"]
+    assert _wait_agent(client, draft.id)["status"] == "completed"
+
+    assert "甲文 — 甲媒体" not in seen_prompt["text"]
+    client.post(f"/api/draft/{draft.id}/agent-apply", data={"run_id": run_id})
+    saved = store.read_draft_body(draft.id)["body_md"]
+    assert saved.rstrip() == ("## 润色后的正文\n第一段 [1]。" + tail).rstrip()
+
+
 def test_the_api_model_name_is_kept_away_from_the_cli_agent(
         tmp_path, monkeypatch):
     """llm_model belongs to the OpenAI-compatible API, not to the CLI tool.
