@@ -85,6 +85,21 @@ def test_a_picture_url_is_not_an_outbound_link():
     assert scan_text("![图](https://cdn.x.com/photo.png)") == []
 
 
+def test_a_video_platform_url_is_not_an_outbound_link():
+    """视频整段嵌入播放，平台不把它当引流，报出来只会吓人。"""
+    for line in ("[演示](https://www.youtube.com/watch?v=dQw4w9WgXcQ)",
+                 "https://www.bilibili.com/video/BV1xx411c7mD",
+                 "<iframe src=\"https://player.vimeo.com/video/123\">"):
+        assert scan_text(line) == [], line
+
+
+def test_a_direct_video_file_is_not_an_outbound_link():
+    """直链视频和配图一样会被当成素材上传，不是站外链接。"""
+    for line in ("[素材](https://cdn.x.com/clip.mp4)",
+                 "https://cdn.x.com/live.m3u8"):
+        assert scan_text(line) == [], line
+
+
 def test_a_link_back_into_wechat_is_not_outbound():
     assert scan_text("往期：https://mp.weixin.qq.com/s/abc") == []
 

@@ -41,6 +41,16 @@ _FENCE = re.compile(r"^\s*(?:```|~~~)")
 # 公众号内部的链接不算站外，平台自己也这么认。
 _IN_PLATFORM = ("mp.weixin.qq.com", "weixin.qq.com", "channels.weixin.qq.com")
 
+# 视频链接不算站外：发布前会被按视频处理（上传成素材或嵌入播放）。
+# 与 app/sources/extractor.py 的媒体识别保持一致。
+_VIDEO_HOST_HINTS = (
+    "youtube.com", "youtu.be", "youtube-nocookie.com",
+    "player.vimeo.com", "vimeo.com/video", "bilibili.com", "player.bilibili",
+    "youku.com", "dailymotion.com/embed", "wistia",
+    "brightcove", "ixigua.com", "v.qq.com",
+)
+_VIDEO_EXTS = (".mp4", ".webm", ".mov", ".m4v", ".ogv", ".m3u8")
+
 
 def _finding(kind: str, text: str, line: int, where: str) -> dict:
     return {"kind": kind, "label": KIND_LABELS[kind],
@@ -50,6 +60,14 @@ def _finding(kind: str, text: str, line: int, where: str) -> dict:
 def _is_in_platform(url: str) -> bool:
     host = url.split("//", 1)[-1].split("/", 1)[0].lower()
     return any(host == d or host.endswith("." + d) for d in _IN_PLATFORM)
+
+
+def _is_video_url(url: str) -> bool:
+    lower = url.lower()
+    if any(hint in lower for hint in _VIDEO_HOST_HINTS):
+        return True
+    path = lower.split("//", 1)[-1].split("?", 1)[0].split("#", 1)[0]
+    return path.endswith(_VIDEO_EXTS)
 
 
 def scan_text(text: str, where: str = "正文") -> list[dict]:
@@ -80,7 +98,8 @@ def scan_text(text: str, where: str = "正文") -> list[dict]:
             if near_qr_words or _QR_HINT.search(f"{alt} {url}"):
                 findings.append(_finding("qr_image", url, line_no, where))
 
-        # 图片链接不是外链，发布前会被上传成微信素材。
+        # 图片链接不是外链，发布前会被上传成微信素材；视频链接也一样，
+        # 要么整段嵌入播放，要么被当成素材上传，都不算引流。
         rest = _HTML_IMAGE.sub(" ", _MD_IMAGE.sub(" ", line))
         links: list[tuple[int, str]] = []
         seen: set[str] = set()
@@ -88,7 +107,7 @@ def scan_text(text: str, where: str = "正文") -> list[dict]:
             for match in pattern.finditer(rest):
                 url = (match.group(1) if pattern is not _BARE_URL
                        else match.group(0)).rstrip(".,;:!?)")
-                if url in seen or _is_in_platform(url):
+                if url in seen or _is_in_platform(url) or _is_video_url(url):
                     continue
                 seen.add(url)
                 links.append((match.start(), url))
