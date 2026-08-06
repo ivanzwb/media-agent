@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 # Sensitive / restricted words that commonly trigger throttling or rejection on
 # Chinese self-media platforms. Focused on 广告法绝对化用语 / 夸大宣传 / 医疗金融
@@ -52,6 +53,36 @@ PLATFORM_LEVELS = {
 }
 
 
+# A few restricted words are also the opening of perfectly ordinary phrases.
+# The filter deletes what it matches, so masking one of these mangles the
+# sentence ("第一次握住水杯" → "次握住水杯") without removing any claim. Matches
+# followed by one of these are left alone; they are keyed by how the word ends
+# so "全球第一" and "全国第一" inherit 第一's list.
+_ORDINARY_AFTER: dict[str, tuple[str, ...]] = {
+    "第一": ("次", "步", "时间", "手", "线", "章", "节", "部", "季", "集",
+             "天", "轮", "批", "版", "期", "课", "讲", "人称", "现场",
+             "作者", "语言", "阶段", "选择"),
+    "最高": ("法院", "人民法院", "气温", "温度", "时速", "海拔", "法规"),
+    "最大": ("值", "化", "限度", "公约数", "公因数", "程度"),
+}
+
+
+def _ordinary_after(word: str) -> tuple[str, ...]:
+    for stem, suffixes in _ORDINARY_AFTER.items():
+        if word.endswith(stem):
+            return suffixes
+    return ()
+
+
+@lru_cache(maxsize=512)
+def _word_pattern(word: str) -> re.Pattern[str]:
+    suffixes = _ordinary_after(word)
+    if not suffixes:
+        return re.compile(re.escape(word))
+    tail = "|".join(re.escape(s) for s in suffixes)
+    return re.compile(rf"{re.escape(word)}(?!{tail})")
+
+
 def builtin_words(level: str = "standard") -> set[str]:
     words: set[str] = set()
     for cat in LEVELS.get((level or "standard").lower(), LEVELS["standard"]):
@@ -88,10 +119,11 @@ def sanitize(text: str, words: set[str],
     for w in sorted(words, key=len, reverse=True):
         if not w:
             continue
-        count = out.count(w)
-        if count:
-            hits.append({"word": w, "count": count, "pos": out.find(w)})
-            out = out.replace(w, replace)
+        pattern = _word_pattern(w)
+        found = list(pattern.finditer(out))
+        if found:
+            hits.append({"word": w, "count": len(found), "pos": found[0].start()})
+            out = pattern.sub(lambda _: replace, out)
     return out, hits
 
 

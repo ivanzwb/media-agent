@@ -21,6 +21,39 @@ def test_sanitize_longest_first():
     assert clean == "的"
 
 
+def test_ordinary_phrases_survive_the_adlaw_list():
+    """A draft title lost its 第一: the filter deletes what it matches, and
+    "第一" matches inside "第一次", leaving "次握住水杯"."""
+    words = builtin_words("basic")
+    for text in ("10年瘫痪患者第一次握住水杯", "迈出第一步", "第一时间响应",
+                 "全球第一次实现商业化", "最高人民法院裁定", "取最大值"):
+        clean, hits = sanitize(text, words)
+        assert clean == text
+        assert hits == []
+
+
+def test_the_claim_itself_is_still_masked():
+    words = builtin_words("basic")
+    assert sanitize("行业第一的品牌", words)[0] == "行业的品牌"
+    assert sanitize("这是全球第一", words)[0] == "这是"
+    assert sanitize("效果最好", words)[0] == "效果"
+    assert sanitize("首个商业化案例", words)[0] == "商业化案例"
+
+
+def test_exception_suffixes_are_counted_correctly():
+    clean, hits = sanitize("第一次是第一，第一步也是第一", {"第一"})
+    assert clean == "第一次是，第一步也是"
+    assert hits == [{"word": "第一", "count": 2, "pos": 4}]
+
+
+def test_custom_words_are_matched_literally():
+    # Custom entries are user text, not patterns.
+    clean, _ = sanitize("价格 100% 划算", {"100%"})
+    assert clean == "价格  划算"
+    clean, _ = sanitize("a.c 与 abc", {"a.c"})
+    assert clean == " 与 abc"
+
+
 def test_levels_escalate():
     assert "最好" in builtin_words("basic")          # adlaw
     assert "加微信" not in builtin_words("basic")
