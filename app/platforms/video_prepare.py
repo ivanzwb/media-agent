@@ -55,8 +55,14 @@ def build_video_caption(meta: dict, provider: LLMProvider | None,
                 "不要输出 JSON 以外的任何内容。\n\n"
                 f"原标题：{base_title}\n\n主稿：\n{body[:3000]}"
             )
+            # 简介是发出去的文案，而且要求「口语化」——正是「说实话」「不得
+            # 不说」这类假口语最容易冒出来的地方。只注规则，不做正则清洗：
+            # 两三句话里删掉一个短语，留下的多半是个病句。
+            from app.pipeline.anti_slop import ANTI_SLOP_SYSTEM_INSTRUCTION
             raw = provider.chat([
-                Message(role="system", content=style_prompt),
+                Message(role="system",
+                        content=f"{style_prompt}\n\n"
+                                f"{ANTI_SLOP_SYSTEM_INSTRUCTION}"),
                 Message(role="user", content=instruction),
             ])
             parsed = _extract_json(raw)

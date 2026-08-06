@@ -4,14 +4,18 @@ import json
 import re
 
 from app.llm.base import LLMProvider, Message
+from app.pipeline.anti_slop import ANTI_SLOP_SYSTEM_INSTRUCTION
 
 _IMG_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
 _IFRAME_RE = re.compile(r'<iframe[^>]+src=["\']([^"\']+)["\']', re.I)
 _LINK_VIDEO_RE = re.compile(r"\[\u25b6[^\]]*\]\(([^)\s]+)\)")  # [▶ ...](url)
 
+# 旁白是要念出来给人听的，「口语化」的要求又恰好把模型往「说实话」「不得不
+# 说」「敲黑板」上引——那不是口语，是模仿口语的腔调，念出来比书面语更假。
 SCRIPT_SYSTEM = (
     "你是资深短视频编导。把图文稿改写成口播讲解视频的分镜脚本，"
-    "语言口语化、有节奏、适合配音，只基于稿件事实，不要编造。"
+    "语言口语化、有节奏、适合配音，只基于稿件事实，不要编造。\n\n"
+    + ANTI_SLOP_SYSTEM_INSTRUCTION
 )
 
 SCRIPT_INSTRUCTION = (

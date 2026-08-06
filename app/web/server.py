@@ -35,6 +35,7 @@ from app.models import Article, Draft
 from app.models import slugify as _slugify
 from app.pipeline.adapter import adapt, PLATFORMS
 from app.pipeline.ai_flavor import check_text as check_ai_flavor
+from app.pipeline.anti_slop import ANTI_SLOP_SYSTEM_INSTRUCTION
 from app.pipeline.diversion import check_draft
 from app.platforms.registry import get as get_platform, list_all as list_platforms
 from app.pipeline.images import attach_cover
@@ -1295,7 +1296,10 @@ def create_app(config: Config | None = None,
                     f"5. 如果具备文件写入能力，必须把最终完整文件写入这个绝对路径："
                     f"`{out_path}`（UTF-8）；当前工作目录也是该文件所在目录。"
                     "不要在项目目录或其他目录创建 output-draft.md。"
-                    "如果不能写文件，就把完整文件输出到 stdout。")),
+                    "如果不能写文件，就把完整文件输出到 stdout。\n\n"
+                    # 改写出来的是要发出去的正文。合成和改写路径都防了 AI 腔，
+                    # 这里不防，套一次模板就能把整篇的口吻打回原形。
+                    + ANTI_SLOP_SYSTEM_INSTRUCTION)),
                 Message(role="user", content=(
                     f"## 当前草稿文件\n```markdown\n{full_md}\n```\n\n"
                     f"## 用户指令\n{prompt}")),

@@ -23,8 +23,16 @@ class Platform(ABC):
         """Convert a master draft to this platform's format via LLM.
 
         Returns ``{"title_candidates": [...], "body_md": "..."}``.
+
+        This is the copy that actually gets published, so it gets the same two
+        layers as the master draft: the anti-slop rules go into the system
+        prompt, and the output is cleaned afterwards. Each platform's own voice
+        survives — the rules ban 「说实话」 and 「深入浅出」, not spoken register
+        or emoji, so 小红书 stays 小红书.
         """
         from app.llm.base import Message
+        from app.pipeline.anti_slop import (
+            ANTI_SLOP_SYSTEM_INSTRUCTION, post_process)
         from app.pipeline.rewriter import _extract_json
 
         instruction = (
@@ -34,14 +42,16 @@ class Platform(ABC):
             f"原标题：{title}\n\n主稿：\n{master_md[:6000]}"
         )
         raw = provider.chat([
-            Message(role="system", content=self.system_prompt()),
+            Message(role="system",
+                    content=f"{self.system_prompt()}\n\n"
+                            f"{ANTI_SLOP_SYSTEM_INSTRUCTION}"),
             Message(role="user", content=instruction),
         ])
         parsed = _extract_json(raw)
         if parsed and parsed.get("title_candidates") and parsed.get("body_md"):
             return {"title_candidates": parsed["title_candidates"],
-                    "body_md": parsed["body_md"]}
-        return {"title_candidates": [title], "body_md": raw}
+                    "body_md": post_process(str(parsed["body_md"]))}
+        return {"title_candidates": [title], "body_md": post_process(raw)}
 
     @property
     def publish_url(self) -> str | None:

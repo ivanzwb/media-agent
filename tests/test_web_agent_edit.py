@@ -400,6 +400,26 @@ def test_agent_stdout_apply_preserves_title_and_uses_editor_snapshot(
     assert saved["body_md"] == "## 新正文\n来自 stdout"
 
 
+def test_the_agent_editor_is_held_to_the_anti_slop_rules(tmp_path, monkeypatch):
+    """套用模板 and Agent 编辑 both rewrite the body that gets published. The
+    synthesis and rewrite paths guard their register; without the same guard
+    here, one template pass undoes it for the whole article."""
+    seen = {}
+
+    def respond(_provider, messages, _opts):
+        seen["system"] = "\n".join(
+            m.content for m in messages if m.role == "system")
+        return _edited_document("## 新正文\n一句话。")
+
+    _fake_cli(monkeypatch, respond)
+    client, _store, draft = _agent_client(tmp_path / "data")
+    client.post(f"/api/draft/{draft.id}/agent-edit", data={"prompt": "润色"})
+    assert _wait_agent(client, draft.id)["status"] == "completed"
+
+    assert "严禁 AI 腔" in seen["system"]
+    assert "忌破折号" in seen["system"]
+
+
 def test_agent_edit_cannot_lose_the_reference_list(tmp_path, monkeypatch):
     """The list is provenance the body's [n] markers point into, and nobody
     asking for a polish is offering to gamble it. It is held back from the

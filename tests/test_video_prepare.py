@@ -27,6 +27,26 @@ def test_build_video_caption_fallback_without_llm():
     assert cap["description"]
 
 
+def test_the_caption_is_written_under_the_anti_slop_rules():
+    """A published caption asked to be 口语化 is where 「不得不说」 lands."""
+    class _Spy(_JsonProvider):
+        def __init__(self):
+            super().__init__('{"title":"短标题","description":"简介。",'
+                             '"hashtags":["AI"]}')
+            self.systems: list[str] = []
+
+        def chat(self, messages, **k):
+            self.systems += [m.content for m in messages
+                             if m.role == "system"]
+            return super().chat(messages, **k)
+
+    prov = _Spy()
+    build_video_caption({"body_md": "正文", "topic": "AI"}, prov, "平台风格")
+    assert prov.systems
+    assert "平台风格" in prov.systems[0]      # the platform voice survives
+    assert "严禁 AI 腔" in prov.systems[0]
+
+
 def test_toutiao_platform_has_video_url():
     from app.platforms.registry import get
     t = get("toutiao")

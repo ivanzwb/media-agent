@@ -37,6 +37,19 @@ def _samples():
     ]
 
 
+def test_the_analyser_is_told_not_to_learn_the_slop():
+    """A learned style ends up as a writing prompt, with the anti-slop rules
+    appended after it. Guidance that codifies 「随着……的发展」 as this author's
+    opening then contradicts those rules — and being the more specific of the
+    two, it tends to win. Cheaper to refuse the pattern while analysing.
+    """
+    provider = Provider({"suggested_name": "x", "style_guidance": "y"})
+    L.analyse_samples(_samples(), provider)
+    system = provider.calls[0][0].content
+    assert "随着" in system and "深入浅出" in system
+    assert "style_guidance" in system
+
+
 def test_learn_style_extracts_structure_and_saves_examples():
     provider = Provider({
         "suggested_name": "亲切种草风",

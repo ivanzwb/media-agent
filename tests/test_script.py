@@ -33,6 +33,21 @@ def test_build_script_parses_llm_json():
     assert script["images"] and script["videos"]
 
 
+def test_narration_is_written_under_the_anti_slop_rules():
+    """Narration is read aloud, and asking for 口语化 is exactly what pulls
+    the model toward 「说实话」「敲黑板」 — imitation speech, which sounds
+    faker spoken than plain prose does."""
+    systems: list[str] = []
+
+    class _Spy(MockProvider):
+        def chat(self, messages, **opts):
+            systems.extend(m.content for m in messages if m.role == "system")
+            return super().chat(messages, **opts)
+
+    build_script(BODY, "标题", _Spy())
+    assert systems and "严禁 AI 腔" in systems[0]
+
+
 def test_build_script_falls_back_to_paragraphs():
     # default mock echoes non-JSON -> fallback splits body into scenes
     script = build_script(BODY, "标题", MockProvider())
