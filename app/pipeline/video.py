@@ -8,7 +8,12 @@ from urllib.parse import urlparse
 import json as _json
 
 from app.config import Config
-from app.pipeline.localize import local_media_file
+from app.pipeline.localize import (
+    _download_image,
+    _download_set,
+    _download_video,
+    local_media_file,
+)
 from app.pipeline.narration import load_narration
 from app.video.builder import build_video
 
@@ -110,6 +115,63 @@ def _resolve_media(urls: list[str], config: Config, work: Path | None = None,
     return out
 
 
+def _remote_urls(urls: list[str]) -> list[str]:
+    """Keep only fetchable remote http(s) URLs (the ones worth localizing)."""
+    return [u for u in (urls or []) if u.startswith(("http://", "https://"))]
+
+
+def localize_script_media(script: dict, config: Config, emit=None) -> bool:
+    """Localize the script's remote images/videos into ``data/media/<hash>/``,
+    the same way article content is localized, and rewrite
+    ``script["images"]``/``script["videos"]`` to local ``/media/...`` paths so
+    re-synthesizing the video never re-downloads them.
+
+    Remote URLs that fail to download are kept as-is (the build still resolves
+    whatever it can). Local paths (``/media/...``, ``/images/...``,
+    ``/videos/...``, ``../../media|images/...``) pass through untouched.
+
+    Returns True when any reference was rewritten (caller should persist
+    script.json).
+    """
+    emit = emit or _noop
+    changed = False
+    imgs = list(script.get("images") or [])
+    vids = list(script.get("videos") or [])
+    if not _remote_urls(imgs) and not _remote_urls(vids):
+        return False
+
+    # One stable folder per media set, so identical scripts (or re-runs after
+    # work-dir cleanup) resolve to the same already-downloaded files.
+    folder = hashlib.sha1(
+        "|".join(sorted(_remote_urls(imgs + vids))).encode("utf-8")
+    ).hexdigest()[:16]
+    dest = config.media_dir / folder
+    dest.mkdir(parents=True, exist_ok=True)
+    workers = config.workers
+
+    if _remote_urls(imgs):
+        emit(f"本地化脚本配图 {len(imgs)} 张…")
+        new_imgs = _download_set(imgs, dest, folder, _download_image,
+                                 workers, emit)
+        if new_imgs != imgs:
+            script["images"] = new_imgs
+            changed = True
+
+    if _remote_urls(vids):
+        # yt-dlp spawns subprocesses — cap video concurrency lower.
+        vworkers = max(1, min(workers, 2))
+        emit(f"本地化脚本视频 {len(vids)} 个…")
+        new_vids = _download_set(vids, dest, folder, _download_video,
+                                 vworkers, emit)
+        if new_vids != vids:
+            script["videos"] = new_vids
+            changed = True
+
+    if changed:
+        emit(f"脚本媒体已本地化：{dest}")
+    return changed
+
+
 def _migrate_script(script: dict) -> bool:
     """Convert old script format (intro_audio/outro_audio at top level) to
     new format (intro/outro as scenes with type field). Returns True if
@@ -158,6 +220,12 @@ def build_explainer_video(draft_id: int, config: Config, progress=None,
         raise ValueError("请先生成讲解脚本+配音，再合成视频")
 
     work = config.videos_dir / f"draft-{draft_id}"
+    # Localize remote media into data/media/<hash>/ (same mechanism as article
+    # content localization) and rewrite script refs to /media/... so re-running
+    # the synthesis never re-downloads them. Persist script.json on change.
+    if localize_script_media(script, config, emit):
+        (work / "script.json").write_text(
+            _json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
     imgs = script.get("images", [])
     if not imgs:
         emit("提示：正文未发现图片，画面会是纯色；可在归档页对该文章「重写」"
