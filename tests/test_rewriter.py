@@ -1,6 +1,8 @@
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from app.models import Article, Draft
 from app.llm.providers.mock import MockProvider
 from app.pipeline.rewriter import (
@@ -10,7 +12,7 @@ from app.pipeline.rewriter import (
     _build_manifest, _apply_placeholders, _interleave_missing_images,
     _prune_body_images,
     _extract_json_field, _extract_json_fallback, _normalize_video_markdown,
-    clean_digest, rank_titles,
+    clean_digest, rank_titles, _rewrite_body_floor, REWRITE_INSTRUCTION,
 )
 
 
@@ -1487,3 +1489,155 @@ def test_rewrite_no_retry_when_fallback_works():
     assert draft.title_candidates[0] == "直接用回退提取的标题"
     assert "回退正文" in draft.body_md
     assert "正则提取" in draft.body_md
+
+
+# ── 长原文截断（A）──────────────────────────────────────────────────────
+
+
+def test_rewrite_does_not_truncate_long_source_at_8000():
+    """A 15000-char source must reach the model in full: the old hard
+    8000-char slice silently hid the second half of long articles, so a
+    deep rewrite of a long source came back thin. Content past 8000 chars
+    must appear in the prompt."""
+    long_md = "第一段内容。" * 3000  # 15000 chars
+    art = Article(title="长文", content_md=long_md,
+                  url="https://x.com/long", source_name="X Blog",
+                  source_type="rss", published_at=None, images=[],
+                  raw_summary=None,
+                  fetched_at=datetime.now(timezone.utc), topic="AI")
+    rewrite_json = json.dumps({
+        "title_candidates": ["长文改写标题"],
+        "body_md": "## 开头钩子\n" + "改写正文。" * 800,  # 3200+ chars, clears floor
+    })
+    check_json = json.dumps({"flagged_claims": []})
+    provider = RecordingProvider(responses=[rewrite_json, check_json])
+    draft = rewrite(art, provider)
+    # The last 4000 chars (positions 11000-15000) survive the slice
+    tail = long_md[11000:]
+    assert tail in provider.calls[0][1].content
+    assert draft.title_candidates[0] == "长文改写标题"
+
+
+def test_rewrite_still_caps_pathological_sources():
+    """A 100k-char dump must not blow the model context: the source is
+    capped at _MAX_REWRITE_SOURCE_CHARS."""
+    huge_md = "溢出的内容。" * 20000  # 100k chars
+    art = Article(title="超大", content_md=huge_md,
+                  url="https://x.com/huge", source_name="X Blog",
+                  source_type="rss", published_at=None, images=[],
+                  raw_summary=None,
+                  fetched_at=datetime.now(timezone.utc), topic="AI")
+    rewrite_json = json.dumps({
+        "title_candidates": ["超大改写标题"],
+        "body_md": "## 开头钩子\n" + "改写正文。" * 800,  # 3200+ chars, clears floor
+    })
+    check_json = json.dumps({"flagged_claims": []})
+    provider = RecordingProvider(responses=[rewrite_json, check_json])
+    rewrite(art, provider)
+    prompt = provider.calls[0][1].content
+    assert "溢出的内容。" * 20000 not in prompt
+    assert len(prompt) < 40000  # roughly capped, not a 100k dump
+
+
+# ── 篇幅要求（B）────────────────────────────────────────────────────────
+
+
+def test_rewrite_instruction_demands_source_length():
+    """REWRITE_INSTRUCTION must tell the model the body covers every point
+    of the source and stays comparable in length — without that, models
+    compress a deep article into a summary."""
+    assert "篇幅与原文相当" in REWRITE_INSTRUCTION
+    assert "不要因为「改写」就把深度报道压成摘要" in REWRITE_INSTRUCTION
+    assert "要点一个都不能丢" in REWRITE_INSTRUCTION
+
+
+# ── 过短正文兜底（C）────────────────────────────────────────────────────
+
+
+def test_rewrite_body_floor_scales_with_source():
+    # Snippet-level sources: no guard
+    assert _rewrite_body_floor(100) == 0
+    assert _rewrite_body_floor(299) == 0
+    # 300-1499 chars: keep the source's own length
+    assert _rewrite_body_floor(300) == 300
+    assert _rewrite_body_floor(800) == 800
+    assert _rewrite_body_floor(1499) == 1499
+    # ≥1500: at least 20%, clamped to 1500-3000
+    assert _rewrite_body_floor(1500) == 1500       # 20% of 1500, min floor
+    assert _rewrite_body_floor(10000) == 2000      # 20%
+    assert _rewrite_body_floor(20000) == 3000      # 20% capped at max
+    assert _rewrite_body_floor(100000) == 3000     # huge source: cap holds
+
+
+def test_rewrite_retries_once_when_long_source_comes_back_thin():
+    """A 15000-char source that yields a 100-char body is a summary, not a
+    rewrite — retry once with an explicit length demand."""
+    long_md = "原文要点。" * 3000  # 15000 chars, floor = 3000
+    art = Article(title="长文", content_md=long_md,
+                  url="https://x.com/long", source_name="X Blog",
+                  source_type="rss", published_at=None, images=[],
+                  raw_summary=None,
+                  fetched_at=datetime.now(timezone.utc), topic="AI")
+    thin_json = json.dumps({
+        "title_candidates": ["过短标题"],
+        "body_md": "## 开头\n只有一句话。",
+    })
+    full_json = json.dumps({
+        "title_candidates": ["完整改写标题"],
+        "body_md": "## 开头钩子\n" + "完整正文。" * 800,  # 3200+ chars
+    })
+    check_json = json.dumps({"flagged_claims": []})
+    provider = RecordingProvider(responses=[thin_json, full_json, check_json])
+    draft = rewrite(art, provider)
+    # Retry prompt carried the length demand
+    retry_prompt = provider.calls[1][1].content
+    assert "不少于 3000 字" in retry_prompt
+    assert "不是改写，是摘要" in retry_prompt
+    # Final draft used the full retry, not the thin stub
+    assert draft.title_candidates[0] == "完整改写标题"
+    assert len(draft.body_md) >= 3000
+
+
+def test_rewrite_raises_when_stub_survives_retry():
+    """If even the retry comes back thin, raise instead of silently saving
+    a half-finished draft (mirrors synthesizer's stub behaviour)."""
+    long_md = "原文要点。" * 3000
+    art = Article(title="长文", content_md=long_md,
+                  url="https://x.com/long", source_name="X Blog",
+                  source_type="rss", published_at=None, images=[],
+                  raw_summary=None,
+                  fetched_at=datetime.now(timezone.utc), topic="AI")
+    thin1 = json.dumps({"title_candidates": ["标题1"],
+                        "body_md": "## 开头\n还是太短。"})
+    thin2 = json.dumps({"title_candidates": ["标题2"],
+                        "body_md": "## 开头\n重试也短。"})
+    provider = MockProvider(responses=[thin1, thin2])
+    with pytest.raises(ValueError, match="半成品"):
+        rewrite(art, provider)
+
+
+def test_rewrite_short_source_keeps_its_own_length():
+    """A 800-char source rewritten down to a few hundred chars is a lossy
+    compression, not a rewrite: the floor is the source's own length, so a
+    thin result triggers the retry demanding the original length back."""
+    src_md = "短文段落。" * 200  # 1000 chars, below the 1500 keep band
+    art = Article(title="短文", content_md=src_md,
+                  url="https://x.com/short", source_name="X Blog",
+                  source_type="rss", published_at=None, images=[],
+                  raw_summary=None,
+                  fetched_at=datetime.now(timezone.utc), topic="AI")
+    thin_json = json.dumps({
+        "title_candidates": ["缩水标题"],
+        "body_md": "## 开头\n只有一句。",
+    })
+    full_json = json.dumps({
+        "title_candidates": ["保持原文长度的标题"],
+        "body_md": "## 开头钩子\n" + "完整短文。" * 200,  # ~1000+ chars
+    })
+    check_json = json.dumps({"flagged_claims": []})
+    provider = RecordingProvider(responses=[thin_json, full_json, check_json])
+    draft = rewrite(art, provider)
+    # Retry demanded the source's own length, not a fixed floor
+    retry_prompt = provider.calls[1][1].content
+    assert f"不少于 {len(src_md)} 字" in retry_prompt
+    assert draft.title_candidates[0] == "保持原文长度的标题"

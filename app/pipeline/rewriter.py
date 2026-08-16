@@ -30,6 +30,41 @@ REWRITE_SYSTEM = (
 TITLE_CUTOFF = 30
 _MAX_TITLES = 5
 
+# Cap on how much of the original article is fed to the rewrite model.
+# The budget grows with the source (so a 20k-char deep article is not cut to
+# a digestible sliver), but stops here so pathological pages still fit the
+# model's context window.
+_MAX_REWRITE_SOURCE_CHARS = 30000
+
+# Stub guard for the rewrite body. A rewrite that comes back far shorter than
+# its source is not a rewrite, it is a summary — the model answered the opening
+# hook and stopped. We retry once with an explicit length demand, then raise
+# instead of silently saving a half-finished draft.
+#
+# Floor bands, by source length:
+#   < 300 chars        → not a real article (snippet/fixture): no guard
+#   300–1499 chars     → keep the source's own length (a short article must
+#                        not come back shorter than the original)
+#   ≥ 1500 chars       → at least 20% of the source, clamped to 1500–3000
+_REWRITE_BODY_FLOOR_ENABLE_MIN = 300    # below this the guard makes no sense
+_REWRITE_BODY_FLOOR_KEEP_MAX = 1500     # below this, floor = source length
+_REWRITE_BODY_FLOOR_RATIO = 0.2        # above that, body ≥ 20% of source
+_REWRITE_BODY_FLOOR_MIN = 1500         # ... but never below this many chars
+_REWRITE_BODY_FLOOR_MAX = 3000         # ... and never demand more than this
+
+
+def _rewrite_body_floor(source_len: int) -> int:
+    """Floor (in chars) a rewrite of a *source_len*-char source must clear,
+    or 0 when the source is too short for the guard to make sense."""
+    if source_len < _REWRITE_BODY_FLOOR_ENABLE_MIN:
+        return 0
+    if source_len < _REWRITE_BODY_FLOOR_KEEP_MAX:
+        return source_len
+    return min(
+        _REWRITE_BODY_FLOOR_MAX,
+        max(_REWRITE_BODY_FLOOR_MIN, int(source_len * _REWRITE_BODY_FLOOR_RATIO)),
+    )
+
 TITLE_INSTRUCTION = (
     "### 标题（出 5 个候选）\n\n"
     "读者在推荐流里只看得到标题、封面和摘要，标题决定他点不点开。\n"
@@ -112,6 +147,9 @@ REWRITE_INSTRUCTION = (
     "- **讲故事**，不是列知识点。每章从故事/场景/问题切入，再展开说明\n"
     "- **用比喻、类比**来解释复杂概念——这是好文章的亮点\n"
     "- **短句、短段落**（不超过 4 行），手机友好\n"
+    "- **篇幅与原文相当**：原文讲到的要点一个都不能丢，"
+    "正文长度大致对应原文（原文长则改写长，原文短则改写短），"
+    "不要因为「改写」就把深度报道压成摘要——那是提炼，不是改写\n"
     "- **数据全部保留**，这是硬价值\n"
     "- **专业术语**保留英文原文，不要硬译成中文；"
     "确属生僻、读者可能不认识的术语，才用一句话通俗解释，术语本身仍保留英文\n"
@@ -864,7 +902,16 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
         or [body.find(_relativize_media(v)) for v in videos
             if body.find(_relativize_media(v)) >= 0]
         or [0])
-    slice_limit = max(8000, img_end + 500)
+    # A long original article must not be silently cut to 8000 chars: the
+    # model can only rewrite what it sees, and a deep rewrite of a 20k-char
+    # source needs the whole source. We grow the budget with the source up
+    # to a hard cap so pathological pages (or huge dumps) still fit the
+    # model's context window.
+    slice_limit = max(
+        8000,
+        img_end + 500,
+        min(len(body), _MAX_REWRITE_SOURCE_CHARS),
+    )
     content = body[:slice_limit]
 
     if style is None:
@@ -1006,6 +1053,52 @@ def rewrite(article: Article, provider: LLMProvider, style=None,
                     body_md = raw
 
     title_candidates, title_scores = rank_titles(title_candidates, raw_scores)
+
+    # ── Stub guard ────────────────────────────────────────────────────────
+    # A long source that comes back as a few hundred chars is a summary, not
+    # a rewrite. Retry once with an explicit length demand; if the model still
+    # under-delivers, raise instead of silently saving a half-finished draft.
+    floor = _rewrite_body_floor(len(content))
+    if floor and len((body_md or "").strip()) < floor:
+        stub_prompt = (
+            rewrite_prompt + "\n\n"
+            f"⚠️ 你的上一次回复只有 {len((body_md or '').strip())} 字正文，"
+            f"而原文有 {len(content)} 字。这不是改写，是摘要："
+            f"正文必须覆盖原文全部要点，不少于 {floor} 字。"
+            "只输出一个 JSON 对象（以 { 开始，以 } 结束），"
+            "不要添加任何前言、后语、解释、摘要、「已完成」等元评论。"
+        )
+        raw_stub = provider.chat([
+            Message(role="system", content=system_prompt),
+            Message(role="user", content=stub_prompt),
+        ])
+        parsed_stub = _extract_json(raw_stub)
+        if (parsed_stub and parsed_stub.get("title_candidates")
+                and parsed_stub.get("body_md")):
+            title_candidates = parsed_stub["title_candidates"]
+            body_md = parsed_stub["body_md"]
+            digest = parsed_stub.get("digest") or ""
+            raw_scores = parsed_stub.get("title_scores") or []
+            raw = raw_stub  # fact-check the retried response
+            title_candidates, title_scores = rank_titles(
+                title_candidates, raw_scores)
+        else:
+            fb_stub = _extract_json_fallback(raw_stub)
+            if fb_stub:
+                title_candidates = fb_stub["title_candidates"]
+                body_md = fb_stub["body_md"]
+                digest = fb_stub.get("digest") or ""
+                raw = raw_stub
+                title_candidates, title_scores = rank_titles(
+                    title_candidates, raw_scores)
+            else:
+                raise ValueError(
+                    f"保真改写只写出 {len((body_md or '').strip())} 字正文，"
+                    f"少于 {floor} 字，判定为半成品，未保存草稿；请重试")
+        if len((body_md or "").strip()) < floor:
+            raise ValueError(
+                f"保真改写重试后仍只有 {len((body_md or '').strip())} 字正文，"
+                f"少于 {floor} 字，判定为半成品，未保存草稿；请重试")
 
     # Post-process: remove AI slop patterns from the LLM output
     body_md = post_process(body_md)
