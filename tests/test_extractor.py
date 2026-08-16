@@ -3,7 +3,7 @@ from pathlib import Path
 from app.sources.extractor import (
     extract_from_html, _videos_with_placeholders, _images_from_html,
     _videos_from_html, _date_from_html, _fix_markdown_tables,
-    _jsonld_image, _filter_article_images,
+    _jsonld_image, _filter_article_images, _break_sections,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_article.html"
@@ -118,6 +118,59 @@ def test_extract_collects_videos():
 
 
 # ── date extraction ───────────────────────────────────────────────────────
+
+def test_extract_breaks_section_paragraphs():
+    """WeChat 公众号 wraps every paragraph in nested <section> instead of <p>.
+    trafilatura merges those into a single line, which fails the ≥3-line
+    quality gate in _is_article_content() → scrape_single() returns None.
+    The </section> paragraph-boundary break must restore the line structure.
+    """
+    from app.sources.scraper import _is_article_content
+    para = (
+        "本文从多个维度展开论述，首先交代研究的出发点与背景信息，详细说明"
+        "该问题为何值得关注，并梳理已有工作的脉络与不足，接着提出本文的核心"
+        "思路与创新点，辅以具体的数据与实验过程，验证方法的可行性与有效性，"
+        "最后总结全文要点并展望后续的研究方向，为读者提供进一步的阅读指引"
+        "与思考空间，整体结构完整、论证充分，是一篇具有参考价值的专业文章。"
+    )
+    sections = "".join(
+        f'<section data-layout-id="{i}" style="font-size: 17px;line-height: 2;">'
+        f'<span leaf=""><span textstyle="">{para}</span></span></section>'
+        for i in range(1, 8)
+    )
+    html = (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<title>公众号文章标题测试</title>"
+        '<meta property="article:published_time" content="2025-04-13T10:30:00+08:00">'
+        "</head><body>"
+        '<div id="js_content" style="visibility: hidden; opacity: 0;">'
+        f"{sections}</div>"
+        '<div id="js_tags">相关阅读</div>'
+        "</body></html>"
+    )
+    # The raw section markup makes trafilatura merge the whole article into
+    # one or two lines; the </section> break must restore paragraph lines.
+    import trafilatura
+    raw_md = trafilatura.extract(
+        html, output_format="markdown", include_images=True,
+        include_links=True, url="https://mp.weixin.qq.com/s/abc") or ""
+    fixed_md = trafilatura.extract(
+        _break_sections(html), output_format="markdown", include_images=True,
+        include_links=True, url="https://mp.weixin.qq.com/s/abc") or ""
+    raw_lines = [l for l in raw_md.split("\n") if l.strip()]
+    fixed_lines = [l for l in fixed_md.split("\n") if l.strip()]
+    assert len(raw_lines) <= 2, (
+        f"fixture must reproduce the merged-line bug, got {len(raw_lines)} lines"
+    )
+    assert len(fixed_lines) >= 3, (
+        f"section break must restore paragraph lines, got {len(fixed_lines)}"
+    )
+    # And the full extraction pipeline must now pass the quality gate.
+    result = extract_from_html(html, url="https://mp.weixin.qq.com/s/abc")
+    assert _is_article_content(result), (
+        "section-based article must pass the quality gate after the break"
+    )
+
 
 def test_date_from_standard_meta_and_jsonld():
     cases = [

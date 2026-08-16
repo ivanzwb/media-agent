@@ -253,6 +253,29 @@ def _content_fallback(html: str) -> str:
     return "\n\n".join(texts)
 
 
+# Many CMS editors (WeChat 公众号, WordPress block editor) wrap every
+# paragraph in a nested <section> instead of <p>. trafilatura treats those
+# sections as inline containers and merges the whole article into a single
+# text line, which then fails the "≥3 non-empty text lines" quality gate in
+# _is_article_content() and makes scrape_single() drop the article (returning
+# None → "第 N 篇 URL 未抓取到有效正文" in style learning).
+#
+# We therefore turn every </section> into a paragraph boundary *before* the
+# full-HTML trafilatura pass. Section tags are block-level by spec, so this
+# only restores the line structure the author intended; it cannot pull in
+# surrounding page chrome (that stays the job of the readability pass).
+_SECTION_BREAK_RE = re.compile(r"</section>", re.IGNORECASE)
+
+
+def _break_sections(html: str) -> str:
+    """Replace ``</section>`` with itself + a newline (paragraph boundary).
+
+    Only affects the fallback extraction passes that run trafilatura on the
+    raw HTML; the readability pass already understands sections natively.
+    """
+    return _SECTION_BREAK_RE.sub("</section>\n", html)
+
+
 # An optionally backslash-escaped quote. Lets the JSON patterns below also
 # match dates embedded in JS hydration blobs (Next.js RSC ``self.__next_f``,
 # ``__NEXT_DATA__``, Nuxt, etc.) where the JSON is serialized inside a JS
@@ -532,7 +555,7 @@ def extract_from_html(html: str, url: str) -> dict:
             article_pl, videos = _videos_with_placeholders(
                 article_pl, base_url=url)
             content_md = trafilatura.extract(
-                article_pl, output_format="markdown",
+                _break_sections(article_pl), output_format="markdown",
                 include_images=True, include_links=True, url=url) or ""
     except Exception:                          # noqa: BLE001
         pass
@@ -610,8 +633,8 @@ def extract_from_html(html: str, url: str) -> dict:
         full_pl, full_images = _images_with_placeholders(html, base_url=url)
         full_pl, full_videos = _videos_with_placeholders(full_pl, base_url=url)
         full_md = trafilatura.extract(
-            full_pl, output_format="markdown", include_images=True,
-            include_links=True, url=url) or ""
+            _break_sections(full_pl), output_format="markdown",
+            include_images=True, include_links=True, url=url) or ""
         if len(full_md) >= len(content_md) * 2:
             content_md = full_md
             images = full_images
@@ -622,8 +645,8 @@ def extract_from_html(html: str, url: str) -> dict:
         html_pl, images = _images_with_placeholders(html, base_url=url)
         html_pl, videos = _videos_with_placeholders(html_pl, base_url=url)
         content_md = trafilatura.extract(
-            html_pl, output_format="markdown", include_images=True,
-            include_links=True, url=url) or ""
+            _break_sections(html_pl), output_format="markdown",
+            include_images=True, include_links=True, url=url) or ""
 
     # ── 3. plain <p> tag extraction (last resort) ──
     if not content_md.strip():
