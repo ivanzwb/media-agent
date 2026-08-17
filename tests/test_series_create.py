@@ -231,6 +231,21 @@ def test_a_topic_that_cannot_be_understood_still_gets_probed(monkeypatch):
     assert "入门指南：基础" in grounding
 
 
+def test_stacked_chapter_queries_are_cut_down_before_they_are_searched():
+    """提纲也会写出「A的B与C方法」这种一条顶三条的检索词，引擎全 AND 到零结果。"""
+    provider = ScriptedProvider(
+        '{"chapters":[{"title":"价值函数","scope":"打底","search_queries":'
+        '["强化学习的价值函数与策略梯度方法","policy gradient methods"]}]}')
+
+    chapters = generate_series_outline(
+        "强化学习", "", provider, parts=1, depth="intermediate")
+
+    assert chapters[0]["search_queries"] == [
+        "强化学习 价值函数", "policy gradient"]
+    outline = next(item for item in provider.prompts if "系列文章提纲" in item)
+    assert "一条检索词只查一件事" in outline
+
+
 def test_outline_falls_back_to_topic_terms_when_queries_missing():
     provider = ScriptedProvider(
         '{"chapters":[{"title":"背景","scope":"","prerequisites":"入门"}]}')

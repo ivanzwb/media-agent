@@ -18,7 +18,8 @@ from app.pipeline.score import FLAVOR_NOTICE_AT, grade_draft
 from app.pipeline.localize import localize_reference_images
 from app.pipeline.synthesizer import (
     DEPTHS, expand_image_refs, referenced_images, synthesize)
-from app.pipeline.topic_intent import TopicIntent, understand_topic
+from app.pipeline.topic_intent import (
+    TopicIntent, shorten_query, understand_topic)
 from app.sources.dedup import dedup, dedup_near_content
 from app.sources.scraper import scrape_single
 from app.sources.web_search import (
@@ -110,48 +111,81 @@ def _query_region(query: str) -> str:
     return "cn-zh" if _CJK.search(query or "") else "us-en"
 
 
+# 检索词堆了几个概念时引擎会一条都不返回。落空的那几条各自再退一步试试，
+# 掉的是尾巴上的词，留下的是它开头那个最有区分度的概念。两轮为止：再退就只剩
+# 一个泛词，搜回来的东西跟选题也没关系了。
+_SHORTEN_ROUNDS = 2
+
+
 def search_queries(queries: list[str], options: SearchCreateOptions, *,
                    progress: ProgressCallback | None = None,
                    should_stop: Callable[[], bool] | None = None,
                    stats: dict | None = None) -> list[SearchHit]:
     groups: list[list[SearchHit]] = [[] for _ in queries]
-    detail_lines: list[list[str]] = [[] for _ in queries]
+    # 每一格实际搜的词：落空重试后它就不是原来那条了。
+    searched = list(queries)
+    tried = {query for query in queries}
 
-    def make_on_detail(index: int) -> Callable[[str], None]:
-        def on_detail(message: str) -> None:
-            detail_lines[index].append(message)
-        return on_detail
+    def run(pending: list[tuple[int, str]]) -> None:
+        detail_lines: dict[int, list[str]] = {index: [] for index, _ in pending}
 
-    with ThreadPoolExecutor(max_workers=min(4, len(queries) or 1)) as executor:
-        futures = {
-            executor.submit(
-                search_query,
-                query,
-                max_results=options.max_results_per_query,
-                timelimit=_search_timelimit(options.time_range_days),
-                region=_query_region(query),
-                engines=options.engines,
-                proxy=options.proxy,
-                timeout=options.search_timeout,
-                on_detail=make_on_detail(index),
-            ): index
-            for index, query in enumerate(queries)
-        }
-        done = 0
-        for future in as_completed(futures):
-            _check_cancel(should_stop)
-            index = futures[future]
-            try:
-                groups[index] = future.result()
-            except Exception:  # noqa: BLE001
-                groups[index] = []
-            done += 1
-            for line in detail_lines[index]:
-                _emit(progress, "search", f"{queries[index]}：{line}",
-                      current=done, total=len(queries), stats=stats)
+        def make_on_detail(index: int) -> Callable[[str], None]:
+            def on_detail(message: str) -> None:
+                detail_lines[index].append(message)
+            return on_detail
+
+        with ThreadPoolExecutor(max_workers=min(4, len(pending) or 1)) as executor:
+            futures = {
+                executor.submit(
+                    search_query,
+                    query,
+                    max_results=options.max_results_per_query,
+                    timelimit=_search_timelimit(options.time_range_days),
+                    region=_query_region(query),
+                    engines=options.engines,
+                    proxy=options.proxy,
+                    timeout=options.search_timeout,
+                    on_detail=make_on_detail(index),
+                ): index
+                for index, query in pending
+            }
+            done = 0
+            for future in as_completed(futures):
+                _check_cancel(should_stop)
+                index = futures[future]
+                try:
+                    groups[index] = future.result()
+                except Exception:  # noqa: BLE001
+                    groups[index] = []
+                done += 1
+                for line in detail_lines[index]:
+                    _emit(progress, "search", f"{searched[index]}：{line}",
+                          current=done, total=len(pending), stats=stats)
+                _emit(progress, "search",
+                      f"已完成检索：{searched[index]}"
+                      f"（原始命中 {len(groups[index])} 条）",
+                      current=done, total=len(pending), stats=stats)
+
+    run(list(enumerate(queries)))
+
+    for _ in range(_SHORTEN_ROUNDS):
+        pending: list[tuple[int, str]] = []
+        for index, group in enumerate(groups):
+            if group:
+                continue
+            shorter = shorten_query(searched[index])
+            if not shorter or shorter in tried:
+                continue
             _emit(progress, "search",
-                  f"已完成检索：{queries[index]}（原始命中 {len(groups[index])} 条）",
-                  current=done, total=len(queries), stats=stats)
+                  f"「{searched[index]}」没搜到结果，改用「{shorter}」重试",
+                  stats=stats)
+            searched[index] = shorter
+            tried.add(shorter)
+            pending.append((index, shorter))
+        if not pending:
+            break
+        run(pending)
+
     merged = merge_search_hits(groups)
     _emit(progress, "search",
           f"检索完成：合并去重后共 {len(merged)} 条候选来源",

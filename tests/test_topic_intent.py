@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from app.llm.providers.mock import MockProvider
 from app.pipeline.topic_intent import (
-    TopicIntent, topic_search_terms, understand_topic)
+    TopicIntent, atomize_query, query_terms, shorten_query, topic_search_terms,
+    understand_topic)
 
 
 class RecordingProvider(MockProvider):
@@ -41,10 +42,9 @@ def test_the_understanding_comes_back_with_the_queries():
     assert intent.goal == "想判断要不要长期推行远程办公"
     assert intent.audience == "技术团队管理者"
     assert intent.focus == ("长期影响", "团队协作")
-    # 主题打头：它是这个选题最适合拿去搜的形式，后面的排序也按它评分。
+    # subject 是写给人读的一句话，恰恰是搜索引擎匹配不了的东西，不进检索词。
     assert intent.queries == (
-        "远程办公对团队产出的影响", "远程办公 生产率 研究",
-        "remote work productivity study")
+        "远程办公 生产率 研究", "remote work productivity study")
     # 原话留着，后面的提示词要靠它保住用户自己的说法。
     assert intent.raw == "长期远程办公，真的好吗"
 
@@ -77,6 +77,7 @@ def test_a_pasted_url_is_understood_instead_of_searched():
         "https://github.com/guillaumemeyer/watermarks-remover", "zh", provider)
 
     assert intent.subject == "watermarks-remover 开源去水印工具"
+    assert intent.queries == ("开源 去水印 工具", "watermark removal open source")
     assert not any("github.com" in query for query in intent.queries)
     # 网址本身进了提示词，模型得看着它判断。
     assert "github.com/guillaumemeyer" in provider.prompts[0]
@@ -88,7 +89,7 @@ def test_both_languages_are_asked_for_whatever_the_article_language():
             ['{"subject":"远程办公",'
              '"queries":["远程办公 研究","remote work study"]}'])
         assert understand_topic("远程办公", lang, provider).queries == (
-            "远程办公", "远程办公 研究", "remote work study")
+            "远程办公 研究", "remote work study")
         assert "中文和英文检索词都要有" in provider.prompts[0]
 
 
@@ -99,7 +100,75 @@ def test_a_model_that_only_returns_queries_still_counts_as_understood():
 
     assert intent.understood
     assert intent.subject == "AI"
-    assert intent.queries == ("AI", "AI research", "AI news")
+    assert intent.queries == ("AI research", "AI news")
+
+
+def test_stacked_queries_are_cut_down_before_they_are_searched():
+    """一条词堆三四个概念，引擎全 AND 起来谁也满足不了，返回零结果。"""
+    provider = MockProvider([
+        '{"subject":"大模型输出水印的识别与去除",'
+        '"queries":["大模型输出水印的识别与去除技术",'
+        '"LLM watermark detection removal techniques",'
+        '"Claude output watermark"]}'
+    ])
+    intent = understand_topic("怎么去掉大模型输出的水印", "zh", provider)
+
+    # 汉字数超了就从尾巴上砍：留下的是它开头那个最有区分度的概念。「去除」这一头
+    # 由同一批里的英文检索词接住，不靠这一条包全。
+    assert intent.queries == (
+        "大模型输出水印 识别",
+        "LLM watermark detection removal",
+        "Claude output watermark")
+    # 描述性的 subject 原样留着给排序和界面用，只是不拿去搜。
+    assert intent.subject == "大模型输出水印的识别与去除"
+    # 自己拼检索词的调用方（系列摸底）拿到的是能搜的那一份。
+    assert intent.search_base == "大模型输出水印 识别"
+
+
+def test_the_query_rule_and_its_example_reach_the_model():
+    provider = RecordingProvider(['{"subject":"A","queries":["a"]}'])
+    understand_topic("远程办公", "zh", provider)
+    prompt = provider.prompts[0]
+
+    assert "一条检索词只查一件事" in prompt
+    assert "10 个汉字以内" in prompt
+    assert "太粗：大模型输出水印的识别与去除技术" in prompt
+
+
+def test_connectives_split_but_ordinary_words_that_contain_them_survive():
+    assert query_terms("大模型输出水印的识别与去除技术") == [
+        "大模型输出水印", "识别", "去除"]
+    assert query_terms("扩散模型和自回归模型对比") == [
+        "扩散模型", "自回归模型对比"]
+    # 「参与」「目的」「和平」里的这几个字不是连接词，断在这儿就把词拆坏了。
+    assert query_terms("公众参与机制") == ["公众参与机制"]
+    assert query_terms("研究目的与方法") == ["研究目的"]
+    assert query_terms("亚洲和平进程") == ["亚洲和平进程"]
+    assert query_terms("的士司机收入") == ["的士司机收入"]
+
+
+def test_vacuous_tails_are_dropped_and_short_queries_left_alone():
+    assert atomize_query("RAG 检索 优化方法") == "RAG 检索 优化"
+    assert atomize_query("watermark removal techniques") == "watermark removal"
+    # 已经够原子的不动，包括摸底检索靠的那些「综述」「overview」限定词。
+    for query in ("远程办公 效率 研究", "RAG 综述", "LLM watermark removal",
+                  "reinforcement learning overview"):
+        assert atomize_query(query) == query
+
+
+def test_a_long_chinese_query_is_trimmed_from_the_tail():
+    assert atomize_query("大模型 水印 检测 去除 部署 成本") == "大模型 水印 检测"
+    assert atomize_query("强化学习 策略梯度 收敛性 证明") == "强化学习 策略梯度"
+    # 一个字都断不开的长词只能原样送出去，切在词中间比长着更糟。
+    assert atomize_query("大模型输出水印检测") == "大模型输出水印检测"
+
+
+def test_shortening_keeps_the_leading_concept_and_then_gives_up():
+    assert shorten_query("大模型输出水印 识别 去除") == "大模型输出水印 识别"
+    assert shorten_query("大模型输出水印 识别") == "大模型输出水印"
+    assert shorten_query("大模型输出水印") == ""
+    assert shorten_query("LLM watermark removal") == "LLM watermark"
+    assert shorten_query("") == ""
 
 
 def test_unusable_answers_fall_back_to_local_terms():

@@ -13,7 +13,7 @@ from app.models import Article
 from app.pipeline.score import FLAVOR_NOTICE_AT
 from app.pipeline.search_create import (
     SearchCreateCancelled, SearchCreateOptions, _query_region, rank_by_topic,
-    run_search_create, scrape_search_hits)
+    run_search_create, scrape_search_hits, search_queries)
 from app.pipeline.synthesizer import (
     _image_manifest, _visual_instruction, expand_image_refs, referenced_images,
     synthesize)
@@ -273,6 +273,60 @@ def test_baidu_search_resolves_redirects_and_drops_ads(monkeypatch):
                   "一项长期跟踪研究。"),
         SearchHit("无法解析", "http://www.baidu.com/link?url=broken", ""),
     ]
+
+
+def _search_options(**overrides) -> SearchCreateOptions:
+    values = {"topic": "水印", "engines": ["duckduckgo"], "workers": 2}
+    values.update(overrides)
+    return SearchCreateOptions(**values)
+
+
+def test_a_query_that_finds_nothing_is_retried_with_a_shorter_one(monkeypatch):
+    """堆了几个概念的检索词会被引擎 AND 到零结果，退一步只搜它开头那个概念。"""
+    asked: list[str] = []
+
+    def fake_search_query(query, **kwargs):
+        asked.append(query)
+        if query == "大模型输出水印":
+            return [SearchHit("命中", "https://a.test/one", "")]
+        return []
+
+    monkeypatch.setattr(
+        "app.pipeline.search_create.search_query", fake_search_query)
+
+    hits = search_queries(["大模型输出水印 识别 去除"], _search_options())
+
+    assert asked == [
+        "大模型输出水印 识别 去除", "大模型输出水印 识别", "大模型输出水印"]
+    assert [hit.url for hit in hits] == ["https://a.test/one"]
+
+
+def test_a_query_that_found_something_is_left_alone(monkeypatch):
+    asked: list[str] = []
+    monkeypatch.setattr(
+        "app.pipeline.search_create.search_query",
+        lambda query, **kwargs: (
+            asked.append(query),
+            [SearchHit("命中", f"https://a.test/{len(asked)}", "")])[1])
+
+    search_queries(["大模型 水印 去除"], _search_options())
+
+    assert asked == ["大模型 水印 去除"]
+
+
+def test_retries_are_capped_and_never_search_the_same_thing_twice(monkeypatch):
+    asked: list[str] = []
+    monkeypatch.setattr(
+        "app.pipeline.search_create.search_query",
+        lambda query, **kwargs: asked.append(query) or [])
+
+    # 「watermark」已经缩不动了；「a b」缩出来的正是同一批里的「a」，都不再重搜。
+    search_queries(["大模型 水印 检测 去除 成本", "watermark", "a b", "a"],
+                   _search_options())
+
+    assert sorted(asked) == sorted([
+        "大模型 水印 检测 去除 成本", "watermark", "a b", "a",
+        "大模型 水印 检测 去除", "大模型 水印 检测"])
 
 
 def test_search_region_follows_the_query_not_the_article_language():
@@ -930,9 +984,8 @@ def test_the_understood_subject_drives_the_search_and_the_ranking(
         store, Recording(script),
         SearchCreateOptions(topic=url, time_range_days=None, ref_count=5))
 
-    assert searched == [[
-        "开源去水印工具 watermarks-remover", "开源 去水印 工具",
-        "watermark removal open source"]]
+    # 搜的是模型写的检索词；subject 是给人读的一句话，不进检索词。
+    assert searched == [["开源 去水印 工具", "watermark removal open source"]]
     # 排序也按理解出来的主题打分，而不是拿那串网址逐字去比。
     ranking = next(item for item in prompts if "相关性、信息密度" in item)
     assert "开源去水印工具 watermarks-remover" in ranking

@@ -30,7 +30,8 @@ from app.pipeline.search_create import (
     ProgressCallback, SearchCreateCancelled, SearchCreateOptions, _check_cancel,
     _emit, _url_key, collect_references, search_queries)
 from app.pipeline.topic_intent import (
-    TopicIntent, topic_search_terms, understand_topic)
+    QUERY_EXAMPLE, QUERY_RULE, TopicIntent, atomize_query, topic_search_terms,
+    understand_topic)
 from app.pipeline.localize import localize_reference_images
 from app.pipeline.synthesizer import (
     DEPTHS, SeriesPlacement, expand_image_refs, referenced_images, synthesize)
@@ -140,7 +141,7 @@ def probe_topic(options: SeriesCreateOptions, *,
     _emit(progress, "probe", "正在检索该主题的公开资料…", stats=stats)
     search_options = options.chapter_options()
     search_options.validate()
-    base = (intent.subject if intent
+    base = (intent.search_base if intent
             else topic_search_terms(options.topic, options.lang))
     queries = [base, f"{base} 综述", f"{base} 入门",
                f"{base} overview", f"{base} tutorial"]
@@ -298,8 +299,9 @@ def _normalise_chapters(value, topic: str, parts: int,
         raw_queries = item.get("search_queries") or item.get("queries") or []
         if not isinstance(raw_queries, list):
             raw_queries = [raw_queries]
-        queries = [str(query).strip() for query in raw_queries
+        queries = [atomize_query(query) for query in raw_queries
                    if str(query).strip()][:4]
+        queries = list(dict.fromkeys(query for query in queries if query))
         if not queries:
             queries = [f"{topic_search_terms(topic, lang)} {title}".strip()]
         raw_prereq = item.get("prerequisites") or []
@@ -391,8 +393,9 @@ def generate_series_outline(topic: str, grounding: str, provider: LLMProvider,
         '{"chapters":[{"title":"章节标题",'
         '"scope":"这一章讲什么、读者读完能得到什么，100 字以内",'
         '"search_queries":["2-4 个用于检索该章资料的检索词，中文英文各至少一个，'
-        '短而具体，使用该领域实际通用的说法，英文不要从中文逐字翻译"],'
+        '使用该领域实际通用的说法，英文不要从中文逐字翻译"],'
         '"prerequisites":["需要先读的本系列其他章节标题"]}]}\n'
+        f"{QUERY_RULE}\n{QUERY_EXAMPLE}\n"
         f"{_DEPTH_QUERY_HINTS[depth]}\n"
         f"{count_rule}不要输出代码围栏或额外说明。"
     )
@@ -425,8 +428,8 @@ def _repair_chapter_queries(chapters: list[dict], thin: list[int], topic: str,
         f"{grounding_block}"
         f"需要改写的章节：\n{listing}\n\n"
         '只输出 JSON：{"fixes":[{"index":1,"search_queries":["检索词"]}]}\n'
-        "检索词要短、具体、用该领域公开资料里实际出现的说法，每章 2-4 个，"
-        "中文英文各至少一个。"
+        "每章 2-4 个，中文英文各至少一个，用该领域公开资料里实际出现的说法。\n"
+        f"{QUERY_RULE}\n{QUERY_EXAMPLE}"
     )
     try:
         parsed = _extract_json(
@@ -444,9 +447,10 @@ def _repair_chapter_queries(chapters: list[dict], thin: list[int], topic: str,
             index = int(item.get("index"))
         except (TypeError, ValueError):
             continue
-        queries = [str(query).strip()
+        queries = [atomize_query(query)
                    for query in (item.get("search_queries") or [])
                    if str(query).strip()][:4]
+        queries = list(dict.fromkeys(query for query in queries if query))
         if index in thin and queries:
             fixes[index] = queries
     return fixes
