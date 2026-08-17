@@ -22,7 +22,7 @@ APP = Path(__file__).resolve().parent.parent / "app"
 # 产出读者会读到的成段文字，必须注入。
 WRITES_PROSE = {
     "pipeline/synthesizer.py": 2,    # 搜索/系列创作的正文
-    "pipeline/rewriter.py": 3,       # 单篇改写，及其重试
+    "pipeline/rewriter.py": 4,       # 单篇改写，及其两种重试（JSON 无效、缩水）
     "pipeline/script.py": 1,         # 口播旁白，是要念出来的
     "platforms/__init__.py": 1,      # 分平台改写，发出去的就是它
     "platforms/video_prepare.py": 1, # 视频简介文案
@@ -33,7 +33,8 @@ WRITES_PROSE = {
 # 产出的是检索词、下标、标签、评分、Mermaid 节点名一类的短标记或 JSON。
 # 写作规则在这里没有意义，也不该出现。
 NO_PROSE = {
-    "pipeline/search_create.py": 2,  # 检索词扩展；按主题排序的下标
+    "pipeline/search_create.py": 1,  # 按主题排序的下标
+    "pipeline/topic_intent.py": 1,   # 读懂选题 + 检索词，产出的是短字段和 JSON
     "pipeline/relevance.py": 1,      # 相关性筛选 JSON
     "pipeline/recommender.py": 6,    # 子主题、关键词、源名、热度
     "pipeline/classifier.py": 1,     # 单个主题标签

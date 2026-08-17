@@ -28,7 +28,9 @@ from app.pipeline.sanitizer import sanitize_draft
 from app.pipeline.score import FLAVOR_NOTICE_AT, grade_draft
 from app.pipeline.search_create import (
     ProgressCallback, SearchCreateCancelled, SearchCreateOptions, _check_cancel,
-    _emit, _topic_search_terms, _url_key, collect_references, search_queries)
+    _emit, _url_key, collect_references, search_queries)
+from app.pipeline.topic_intent import (
+    TopicIntent, topic_search_terms, understand_topic)
 from app.pipeline.localize import localize_reference_images
 from app.pipeline.synthesizer import (
     DEPTHS, SeriesPlacement, expand_image_refs, referenced_images, synthesize)
@@ -120,6 +122,7 @@ class SeriesCreateOptions:
 
 
 def probe_topic(options: SeriesCreateOptions, *,
+                intent: TopicIntent | None = None,
                 progress: ProgressCallback | None = None,
                 should_stop: Callable[[], bool] | None = None,
                 stats: dict | None = None) -> str:
@@ -128,12 +131,17 @@ def probe_topic(options: SeriesCreateOptions, *,
     Fetching is what costs time in this pipeline; search results already carry
     a title and snippet, which is all the outline needs to pick terminology
     that matches what is actually published.
+
+    The survey wording (综述, overview…) is the point of these queries, so they
+    are built around the subject rather than taken from ``intent.queries``,
+    which aim at one article's worth of material.
     """
     _check_cancel(should_stop)
     _emit(progress, "probe", "正在检索该主题的公开资料…", stats=stats)
     search_options = options.chapter_options()
     search_options.validate()
-    base = _topic_search_terms(options.topic, options.lang)
+    base = (intent.subject if intent
+            else topic_search_terms(options.topic, options.lang))
     queries = [base, f"{base} 综述", f"{base} 入门",
                f"{base} overview", f"{base} tutorial"]
 
@@ -293,7 +301,7 @@ def _normalise_chapters(value, topic: str, parts: int,
         queries = [str(query).strip() for query in raw_queries
                    if str(query).strip()][:4]
         if not queries:
-            queries = [f"{_topic_search_terms(topic, lang)} {title}".strip()]
+            queries = [f"{topic_search_terms(topic, lang)} {title}".strip()]
         raw_prereq = item.get("prerequisites") or []
         if not isinstance(raw_prereq, list):
             raw_prereq = [raw_prereq]
@@ -325,16 +333,27 @@ _OUTLINE_SYSTEM = (
 def generate_series_outline(topic: str, grounding: str, provider: LLMProvider,
                             *, parts: int | None = None, depth: str,
                             lang: str = "zh",
-                            knowledge_map: str = "") -> list[dict]:
+                            knowledge_map: str = "",
+                            intent: TopicIntent | None = None) -> list[dict]:
     """Split the subject into chapters.
 
     How many chapters is part of the answer, not part of the question: a
     number picked before anyone has looked at the field makes the model pad a
     narrow subject or compress a broad one. Passing `parts` forces a count for
     the cases where the user wants one.
+
+    ``intent`` carries what the user asked for in their own words. The topic
+    line alone loses it: 「讲清楚 RAG，读者是后端工程师」 arrives as a subject,
+    and the outline would then be cut for nobody in particular.
     """
     language = {"zh": "中文", "en": "English",
                 "bilingual": "中英双语"}.get(lang, "中文")
+    brief = intent.brief() if intent else ""
+    intent_block = (
+        f"用户的原话是「{intent.raw}」，理解如下：\n{brief}\n"
+        "章节划分要照着这个理解来，别跑去讲用户没问的东西。\n\n"
+        if brief else ""
+    )
     grounding_block = (
         "下面是该主题公开资料的标题与摘要，只用于校准术语用词和覆盖面，"
         f"不要当作事实来源，也不要照抄：\n{grounding}\n\n"
@@ -367,7 +386,7 @@ def generate_series_outline(topic: str, grounding: str, provider: LLMProvider,
         "第一章是整个系列的开篇总览：交代这个主题的全貌、几个部分之间的关系，"
         "以及后面每一章各自解决什么问题，本身不深入某一个分支；"
         "它的检索词用该领域综述、入门一类的说法。\n\n"
-        f"{map_block}{grounding_block}"
+        f"{intent_block}{map_block}{grounding_block}"
         "只输出 JSON 对象：\n"
         '{"chapters":[{"title":"章节标题",'
         '"scope":"这一章讲什么、读者读完能得到什么，100 字以内",'
@@ -606,7 +625,7 @@ def _chapter_references(chapter: dict, search_options: SearchCreateOptions,
         chapter["search_queries"], search_options, provider,
         topic=chapter["title"], seen_urls=seen_urls, hits=hits,
         progress=progress, should_stop=should_stop, stats=stats)
-    widened = (f"{_topic_search_terms(topic, search_options.lang)} "
+    widened = (f"{topic_search_terms(topic, search_options.lang)} "
                f"{chapter['title']}").strip()
     if len(articles) >= 2 or widened in chapter["search_queries"]:
         return articles
@@ -824,13 +843,23 @@ def plan_series(store, provider: LLMProvider, options: SeriesCreateOptions, *,
                 ) -> tuple[int, list[dict], dict[int, list[SearchHit]]]:
     """Decide what the series will cover, and record it.
 
-    Everything up to the first chapter being written: grounding, the field's
-    shape, the outline, and the feasibility check. Cheap enough — searches and
-    two model calls — to be worth doing before the user commits to the run.
+    Everything up to the first chapter being written: understanding the topic,
+    grounding, the field's shape, the outline, and the feasibility check. Cheap
+    enough — searches and three model calls — to be worth doing before the user
+    commits to the run.
     """
     options.validate()
+    _check_cancel(should_stop)
+    _emit(progress, "probe", "正在理解系列主题…", stats=stats)
+    intent = understand_topic(options.topic, options.lang, provider,
+                              kind="series")
+    if stats is not None:
+        stats["intent"] = intent.as_dict()
+    if intent.understood:
+        _emit(progress, "probe", f"主题理解：{intent.summary()}", stats=stats)
     grounding = probe_topic(
-        options, progress=progress, should_stop=should_stop, stats=stats)
+        options, intent=intent, progress=progress, should_stop=should_stop,
+        stats=stats)
 
     _check_cancel(should_stop)
     _emit(progress, "map", "正在梳理该领域的核心脉络…", stats=stats)
@@ -842,7 +871,8 @@ def plan_series(store, provider: LLMProvider, options: SeriesCreateOptions, *,
     _emit(progress, "outline", "正在生成系列提纲…", stats=stats)
     chapters = generate_series_outline(
         options.topic, grounding, provider, parts=options.parts,
-        depth=options.depth, lang=options.lang, knowledge_map=knowledge_map)
+        depth=options.depth, lang=options.lang, knowledge_map=knowledge_map,
+        intent=intent)
 
     series_id = store.create_series(
         title=options.topic, topic=options.topic, lang=options.lang,

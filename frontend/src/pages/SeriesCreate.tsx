@@ -62,7 +62,7 @@ const AUTO_MIN_PARTS = 3;
 const AUTO_MAX_PARTS = 10;
 
 const STAGE_LABEL: Record<string, string> = {
-  probe: "检索该主题的公开资料",
+  probe: "理解主题、检索公开资料",
   map: "梳理知识脉络",
   outline: "生成系列提纲",
   preflight: "预检各章资料量",

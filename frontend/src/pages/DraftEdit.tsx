@@ -183,6 +183,11 @@ interface DraftData {
   search_meta?: {
     lang?: string; time_range_days?: number; ref_count?: number;
     style_id?: string | null; engines?: string[]; queries?: string[];
+    topic?: string;
+    intent?: {
+      subject?: string; goal?: string; audience?: string;
+      focus?: string[]; understood?: boolean;
+    };
   };
   series?: SeriesNav | null;
   sensitive_hits: string[]; diversion?: DiversionFinding[];
@@ -1113,6 +1118,40 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
             {isSearchDraft && data.search_meta && (
               <Card size="small" title="搜索参数" style={{ marginTop: 12 }}>
                 <Descriptions size="small" column={1}>
+                  {data.search_meta.topic && (
+                    <Descriptions.Item label="填的选题">
+                      {data.search_meta.topic}
+                    </Descriptions.Item>
+                  )}
+                  {data.search_meta.intent?.understood && (
+                    <Descriptions.Item label="模型的理解">
+                      <Space direction="vertical" size={2}>
+                        <Text>{data.search_meta.intent.subject}</Text>
+                        {data.search_meta.intent.goal && (
+                          <Text type="secondary">{data.search_meta.intent.goal}</Text>
+                        )}
+                        {data.search_meta.intent.audience && (
+                          <Text type="secondary">读者：{data.search_meta.intent.audience}</Text>
+                        )}
+                        {(data.search_meta.intent.focus || []).length > 0 && (
+                          <Space size={[4, 4]} wrap>
+                            {(data.search_meta.intent.focus || []).map((item: string) => (
+                              <Tag key={item}>{item}</Tag>
+                            ))}
+                          </Space>
+                        )}
+                      </Space>
+                    </Descriptions.Item>
+                  )}
+                  {(data.search_meta.queries || []).length > 0 && (
+                    <Descriptions.Item label="检索词">
+                      <Space size={[4, 4]} wrap>
+                        {(data.search_meta.queries || []).map((query: string) => (
+                          <Tag key={query}>{query}</Tag>
+                        ))}
+                      </Space>
+                    </Descriptions.Item>
+                  )}
                   <Descriptions.Item label="语言">
                     {({ zh: "中文", en: "English", bilingual: "中英双语" } as Record<string, string>)[data.search_meta.lang || ""] || data.search_meta.lang || "—"}
                   </Descriptions.Item>

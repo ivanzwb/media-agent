@@ -18,6 +18,7 @@ from app.pipeline.score import FLAVOR_NOTICE_AT, grade_draft
 from app.pipeline.localize import localize_reference_images
 from app.pipeline.synthesizer import (
     DEPTHS, expand_image_refs, referenced_images, synthesize)
+from app.pipeline.topic_intent import TopicIntent, understand_topic
 from app.sources.dedup import dedup, dedup_near_content
 from app.sources.scraper import scrape_single
 from app.sources.web_search import (
@@ -89,71 +90,6 @@ def _emit(progress: ProgressCallback | None, stage: str, detail: str, *,
             "total": total,
             "stats": dict(stats or {}),
         })
-
-
-_ZH_QUESTION_TAIL = re.compile(
-    r"(?:好吗|好不好|行不行|对不对|可以吗|能不能|是不是|会不会|有没有"
-    r"|怎么样|怎么办|为什么|是否|如何)$")
-_ZH_MODAL_WORDS = re.compile(r"真的|到底|究竟|其实|确实|应该")
-
-
-def _topic_search_terms(topic: str, lang: str) -> str:
-    """Reduce a conversational topic to search terms.
-
-    Search engines match natural-language questions poorly, so punctuation
-    becomes term separators and language-level question/modal words are
-    dropped. Only function words are removed; subject matter is preserved.
-    """
-    compact = " ".join(re.sub(r"[,，。、！？!?；;：:]+", " ", topic).split())
-    if lang == "en":
-        return compact
-    segments = []
-    for segment in compact.split():
-        segment = _ZH_MODAL_WORDS.sub("", segment)
-        segment = _ZH_QUESTION_TAIL.sub("", segment)
-        if segment:
-            segments.append(segment)
-    return " ".join(segments) or compact or topic
-
-
-def _local_query_fallback(base: str) -> list[str]:
-    """Bilingual queries built without the model, for when expansion fails."""
-    return [base, f"{base} 分析", f"{base} 专家 建议",
-            f"{base} research", f"{base} expert analysis"]
-
-
-def expand_search_queries(topic: str, lang: str,
-                          provider: LLMProvider) -> list[str]:
-    """Turn a topic into search queries in both Chinese and English.
-
-    ``lang`` is the language the article gets written in, not a limit on where
-    its material may come from: the best writing on a subject is often only in
-    the other language, so both are always searched and the synthesiser
-    translates what it quotes.
-    """
-    prompt = (
-        f"为主题「{topic}」生成 4-6 个适合查找高质量新闻、研究和深度文章的"
-        "搜索引擎检索词。中文和英文检索词都要有，数量大致各半；英文用该领域"
-        "英文资料里实际通用的说法，不要把中文逐字翻译过去。检索词要短而具体，"
-        "把最有区分度的核心概念放在最前面，不要照抄完整问句；同时覆盖专业解释、"
-        "风险/收益、专家建议和可靠数据。"
-        '只输出 JSON：{"queries":["..."]}。'
-    )
-    try:
-        raw = provider.chat([Message(role="user", content=prompt)])
-        parsed = _extract_json(raw) or {}
-        queries = parsed.get("queries") or []
-        cleaned = [str(query).strip() for query in queries if str(query).strip()]
-        if cleaned:
-            base = _topic_search_terms(topic, lang)
-            return list(dict.fromkeys([base, *cleaned]))[:6]
-        logger.warning(
-            "检索词扩展未返回有效 queries，使用本地兜底；响应：%r",
-            str(raw)[:300])
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("检索词扩展失败，使用本地兜底：%s", exc)
-
-    return _local_query_fallback(_topic_search_terms(topic, lang))
 
 
 def _search_timelimit(days: int | None) -> str | None:
@@ -346,6 +282,7 @@ def _url_key(url: str) -> str:
 
 def collect_references(queries: list[str], options: SearchCreateOptions,
                        provider: LLMProvider, *, topic: str | None = None,
+                       intent: TopicIntent | None = None,
                        seen_urls: set[str] | None = None,
                        hits: list[SearchHit] | None = None,
                        progress: ProgressCallback | None = None,
@@ -366,8 +303,13 @@ def collect_references(queries: list[str], options: SearchCreateOptions,
     ``hits`` skips the search when the caller already has results for these
     queries, which is how a series reuses what its feasibility check found
     instead of paying for the same search twice.
+
+    ``intent`` supplies the subject the references get ranked against, so a
+    request typed as a sentence is not scored word-for-word. An explicit
+    ``topic`` still wins: a chapter is ranked against the chapter, not the
+    series it belongs to.
     """
-    topic = topic or options.topic
+    topic = topic or (intent.subject if intent else "") or options.topic
     _check_cancel(should_stop)
     if hits is None:
         _emit(progress, "search", "正在搜索相关文章…",
@@ -478,12 +420,17 @@ def run_search_create(store, provider: LLMProvider,
     }
 
     _check_cancel(should_stop)
-    _emit(progress, "expand", "正在扩展检索词…", stats=stats)
-    queries = expand_search_queries(options.topic, options.lang, provider)
+    _emit(progress, "expand", "正在理解选题、扩展检索词…", stats=stats)
+    intent = understand_topic(options.topic, options.lang, provider)
+    queries = list(intent.queries)
     stats["queries"] = len(queries)
+    stats["intent"] = intent.as_dict()
+    if intent.understood:
+        _emit(progress, "expand", f"选题理解：{intent.summary()}", stats=stats)
+    _emit(progress, "expand", f"检索词：{'、'.join(queries)}", stats=stats)
 
     articles = collect_references(
-        queries, options, provider, progress=progress,
+        queries, options, provider, intent=intent, progress=progress,
         should_stop=should_stop, stats=stats)
     if not stats["urls"]:
         raise ValueError("没有搜索到可用的文章链接")
@@ -556,6 +503,7 @@ def run_search_create(store, provider: LLMProvider,
         citations=result.citations,
         search_meta={
             "topic": options.topic,
+            "intent": intent.as_dict(),
             "queries": queries,
             "lang": options.lang,
             "time_range_days": options.time_range_days or 0,

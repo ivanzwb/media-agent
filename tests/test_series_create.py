@@ -62,14 +62,21 @@ KNOWLEDGE_MAP = (
 CHAPTER_BODY = "## 小节\\n这一章的开头段落。\\n\\n" + "正文 [1] 与 [2]。" * 80
 
 
+# 主题理解：这里刻意让 subject 等于 options() 的主题，好让各用例的检索行为
+# 与理解这一步引入之前保持一致，只有专门测理解的用例才去改它。
+INTENT = ('{"subject":"强化学习","goal":"想系统学会强化学习",'
+          '"audience":"","focus":[],"queries":["强化学习 入门"]}')
+
+
 class ScriptedProvider:
     """Answers by prompt shape, so chapter count never shifts the script."""
 
     def __init__(self, outline: str = OUTLINE, fixes: str = '{"fixes":[]}',
-                 chapter_body: str = CHAPTER_BODY):
+                 chapter_body: str = CHAPTER_BODY, intent: str = INTENT):
         self.outline = outline
         self.fixes = fixes
         self.chapter_body = chapter_body
+        self.intent = intent
         self.prompts: list[str] = []
         self.systems: list[str] = []
 
@@ -78,6 +85,8 @@ class ScriptedProvider:
         self.prompts.append(prompt)
         self.systems.append("\n".join(
             m.content for m in messages if m.role == "system"))
+        if "第一步，读懂这段输入" in prompt:
+            return self.intent
         if "事实核查员" in prompt:
             return '{"flagged_claims":[]}'
         if "梳理知识主题" in prompt:
@@ -175,6 +184,51 @@ def test_probe_topic_reads_titles_without_fetching_pages(monkeypatch):
     assert "另一站：另一个域名" in grounding
     assert "第三篇" not in grounding  # capped at two hits per domain
     assert stats["grounding_hits"] == 3
+
+
+def test_the_series_topic_is_understood_before_the_field_is_probed(
+        tmp_path, monkeypatch):
+    """系列主题常写成一句要求。要搜的是它讲的那个领域，不是这句话。"""
+    store = make_store(tmp_path)
+    hits, articles_by_url = pool(12)
+    search_calls: list[list[str]] = []
+    wire(monkeypatch, hits_for=lambda query: hits,
+         articles_by_url=articles_by_url, search_calls=search_calls)
+    provider = ScriptedProvider(
+        intent='{"subject":"RAG 检索增强生成",'
+               '"goal":"想搭出一套能上线的 RAG","audience":"后端工程师",'
+               '"focus":["落地踩坑"],"queries":["RAG 实践"]}')
+
+    stats: dict = {}
+    plan_series(
+        store, provider,
+        options(topic="想做个系列把 RAG 讲清楚，读者是后端工程师"),
+        status="planned", stats=stats)
+
+    # 探资料用的是理解出来的领域名，配上综述、入门这类找全貌的说法。
+    assert search_calls[0] == [
+        "RAG 检索增强生成", "RAG 检索增强生成 综述", "RAG 检索增强生成 入门",
+        "RAG 检索增强生成 overview", "RAG 检索增强生成 tutorial"]
+    assert stats["intent"]["audience"] == "后端工程师"
+
+    # 提纲要照着这份理解切，同时看得到用户自己的原话。
+    outline = next(item for item in provider.prompts if "系列文章提纲" in item)
+    assert "后端工程师" in outline
+    assert "落地踩坑" in outline
+    assert "想做个系列把 RAG 讲清楚" in outline
+
+
+def test_a_topic_that_cannot_be_understood_still_gets_probed(monkeypatch):
+    """理解这步挂了只是搜得糙一点，不能让整轮跑不下去。"""
+    hits = [SearchHit("入门指南", "https://a.test/one", "基础")]
+    search_calls: list[list[str]] = []
+    wire(monkeypatch, hits_for=lambda query: hits, articles_by_url={},
+         search_calls=search_calls)
+
+    grounding = probe_topic(options(topic="强化学习，到底怎么入门"))
+
+    assert search_calls[0][0] == "强化学习 怎么入门"
+    assert "入门指南：基础" in grounding
 
 
 def test_outline_falls_back_to_topic_terms_when_queries_missing():

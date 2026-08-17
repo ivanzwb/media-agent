@@ -49,7 +49,7 @@ interface SearchCreateForm {
 }
 
 const STAGES = [
-  { key: "expand", title: "扩展检索词" },
+  { key: "expand", title: "理解选题" },
   { key: "search", title: "搜索资料" },
   { key: "scrape", title: "抓取页面" },
   { key: "filter", title: "筛选排序" },

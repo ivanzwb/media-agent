@@ -12,9 +12,8 @@ from app.llm.providers.mock import MockProvider
 from app.models import Article
 from app.pipeline.score import FLAVOR_NOTICE_AT
 from app.pipeline.search_create import (
-    SearchCreateCancelled, SearchCreateOptions, _query_region,
-    expand_search_queries, rank_by_topic, run_search_create,
-    scrape_search_hits)
+    SearchCreateCancelled, SearchCreateOptions, _query_region, rank_by_topic,
+    run_search_create, scrape_search_hits)
 from app.pipeline.synthesizer import (
     _image_manifest, _visual_instruction, expand_image_refs, referenced_images,
     synthesize)
@@ -274,56 +273,6 @@ def test_baidu_search_resolves_redirects_and_drops_ads(monkeypatch):
                   "一项长期跟踪研究。"),
         SearchHit("无法解析", "http://www.baidu.com/link?url=broken", ""),
     ]
-
-
-def test_query_expansion_parses_json_and_has_fallback():
-    provider = MockProvider(['{"queries":["AI research","AI news","AI news"]}'])
-    assert expand_search_queries("AI", "en", provider) == [
-        "AI", "AI research", "AI news"]
-    fallback = MockProvider(["not json"])
-    assert expand_search_queries("AI", "zh", fallback)[0] == "AI"
-
-
-def test_conversational_topic_falls_back_to_search_terms():
-    provider = MockProvider(["not json"])
-    assert expand_search_queries("长期远程办公，真的好吗", "zh", provider) == [
-        "长期远程办公", "长期远程办公 分析", "长期远程办公 专家 建议",
-        "长期远程办公 research", "长期远程办公 expert analysis"]
-    keeps_terms = MockProvider(['{"queries":["远程办公 效率 研究"]}'])
-    assert expand_search_queries(
-        "长期远程办公，究竟好不好？", "zh", keeps_terms) == [
-            "长期远程办公", "远程办公 效率 研究"]
-
-
-class RecordingProvider(MockProvider):
-    def __init__(self, responses):
-        super().__init__(responses)
-        self.prompts: list[str] = []
-
-    def chat(self, messages, **opts):
-        self.prompts.append(messages[-1].content if messages else "")
-        return super().chat(messages, **opts)
-
-
-def test_query_expansion_asks_for_both_languages_whatever_the_article_lang():
-    for lang in ("zh", "en", "bilingual"):
-        provider = RecordingProvider(
-            ['{"queries":["远程办公 研究","remote work study"]}'])
-        assert expand_search_queries("远程办公", lang, provider) == [
-            "远程办公", "远程办公 研究", "remote work study"]
-        assert "中文和英文检索词都要有" in provider.prompts[0]
-
-
-def test_query_expansion_fallback_carries_english_terms():
-    # The offline fallback cannot translate, so it can only hang English
-    # qualifiers off the topic's own wording. Genuinely bilingual queries come
-    # from the model path; this only keeps the degraded path from being
-    # single-language.
-    for lang in ("zh", "en", "bilingual"):
-        queries = expand_search_queries("远程办公", lang, MockProvider(["nope"]))
-        assert queries[0] == "远程办公"
-        assert any("分析" in query for query in queries)
-        assert any("research" in query for query in queries)
 
 
 def test_search_region_follows_the_query_not_the_article_language():
@@ -944,6 +893,57 @@ def _graded_script(body: str) -> list[str]:
         '"citations":[]}',
         '{"flagged_claims":[]}',
     ]
+
+
+def test_the_understood_subject_drives_the_search_and_the_ranking(
+        tmp_path, monkeypatch):
+    """粘进来一个仓库地址：搜的是这个项目，不是这串网址。"""
+    store = _e2e_store(tmp_path)
+    rows = [article(1, days_old=365), article(2, days_old=365)]
+    searched: list[list[str]] = []
+    monkeypatch.setattr(
+        "app.pipeline.search_create.search_queries",
+        lambda queries, *args, **kwargs: (
+            searched.append(list(queries)),
+            [SearchHit("one", rows[0].url), SearchHit("two", rows[1].url)])[1])
+    monkeypatch.setattr(
+        "app.pipeline.search_create.scrape_search_hits",
+        lambda *args, **kwargs: rows)
+    monkeypatch.setattr("app.store._web_image_for_title", lambda *args: None)
+
+    prompts: list[str] = []
+
+    class Recording(MockProvider):
+        def chat(self, messages, **opts):
+            prompts.append(messages[-1].content)
+            return super().chat(messages, **opts)
+
+    url = "https://github.com/guillaumemeyer/watermarks-remover"
+    script = _graded_script("## 正文\\n事实 [1] 与 [2]。")
+    script[0] = (
+        '{"subject":"开源去水印工具 watermarks-remover",'
+        '"goal":"想知道能不能用它批量去水印","audience":"",'
+        '"focus":["批量处理"],'
+        '"queries":["开源 去水印 工具","watermark removal open source"]}')
+
+    result = run_search_create(
+        store, Recording(script),
+        SearchCreateOptions(topic=url, time_range_days=None, ref_count=5))
+
+    assert searched == [[
+        "开源去水印工具 watermarks-remover", "开源 去水印 工具",
+        "watermark removal open source"]]
+    # 排序也按理解出来的主题打分，而不是拿那串网址逐字去比。
+    ranking = next(item for item in prompts if "相关性、信息密度" in item)
+    assert "开源去水印工具 watermarks-remover" in ranking
+    assert url not in ranking
+
+    meta = store.read_draft_body(result["draft_id"])["search_meta"]
+    assert meta["intent"]["subject"] == "开源去水印工具 watermarks-remover"
+    assert meta["intent"]["focus"] == ["批量处理"]
+    assert meta["intent"]["understood"] is True
+    # 用户原本填的东西照原样留着，界面上显示的还是他自己写的那句。
+    assert meta["topic"] == url
 
 
 def test_a_search_created_draft_arrives_with_a_score(tmp_path, monkeypatch):
