@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 from app.config import Config
 from app.db import connect, init_db
 from app.models import Article, Draft
-from app.store import Store, _first_body_image, _cover_is_tiny, _web_image_for_title
+from app.store import (Store, _first_body_image, _cover_is_tiny,
+                       _web_image_for_title, safe_dir_name)
 
 
 def make_store(tmp_path):
@@ -74,6 +75,52 @@ def test_save_article_dedup_returns_existing(tmp_path):
     a1 = store.save_article(sample_article())
     a2 = store.save_article(sample_article(url="https://x.com/a?utm_source=z"))
     assert a1.id == a2.id
+
+
+def test_safe_dir_name_strips_chars_windows_rejects():
+    # 冒号是这次线上报错的字符：WinError 267 The directory name is invalid
+    assert safe_dir_name("https://github.com/a/watermarks-remover") == (
+        "https___github.com_a_watermarks-remover")
+    assert safe_dir_name('a<b>c:d"e|f?g*h') == "a_b_c_d_e_f_g_h"
+    assert safe_dir_name("AI 绘画") == "AI 绘画"
+    # 结尾的点和空格 Windows 会悄悄丢掉，"科技." 和 "科技" 会撞进同一个目录
+    assert safe_dir_name("科技. ") == "科技"
+    # 设备名不能直接拿来当目录
+    assert safe_dir_name("NUL") == "_NUL"
+    assert safe_dir_name("con.md") == "_con.md"
+    # 只剩点/空格的名字退回兜底值，否则 ".." 会把路径带出 data 目录
+    for hostile in ("", "   ", ".", "..", None):
+        assert safe_dir_name(hostile) == "uncategorized"
+    assert safe_dir_name("../../etc") == "_.._etc"
+    assert len(safe_dir_name("话题" * 200)) <= 80
+
+
+def test_save_article_with_url_topic(tmp_path):
+    """搜索创作里粘一个 URL 当选题，也要存得下来（WinError 267 回归）。"""
+    store = make_store(tmp_path)
+    art = sample_article()
+    art.topic = "https://github.com/guillaumemeyer/watermarks-remover"
+    saved = store.save_article(art)
+    path = tmp_path / saved.archive_path
+    assert path.exists()
+    assert ":" not in saved.archive_path
+    # 落在 archive/ 下面，没被 URL 里的斜杠带出去
+    assert path.resolve().is_relative_to((tmp_path / "archive").resolve())
+    # front-matter 和数据库里留的还是用户原本的选题
+    assert store.get_article(saved.id)["topic"] == art.topic
+
+
+def test_save_draft_with_url_topic(tmp_path):
+    store = make_store(tmp_path)
+    art = store.save_article(sample_article())
+    topic = "https://github.com/guillaumemeyer/watermarks-remover"
+    draft = store.save_draft(Draft(
+        article_id=art.id, title_candidates=["标题"], body_md="正文",
+        topic=topic, source_url=art.url, source_name=art.source_name))
+    path = tmp_path / draft.draft_path
+    assert path.exists()
+    assert path.resolve().is_relative_to((tmp_path / "drafts").resolve())
+    assert store.read_draft_body(draft.id)["topic"] == topic
 
 
 def test_exists_by_fingerprint(tmp_path):

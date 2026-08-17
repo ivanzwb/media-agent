@@ -19,6 +19,34 @@ _HTML_IMG_RE = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.I)
 _VIDEO_PLACEHOLDER_RE = re.compile(r'\[\[(?:VID|VIDEO):\d+\]\]', re.I)
 
 
+# Windows 不接受文件名里出现 <>:"/\|?*，也会悄悄丢掉结尾的点和空格，还留了
+# 一批设备名（CON、NUL、COM1…）不许用。topic 不是我们写的——分类器给的、用户
+# 加源时填的，都可能是一整个 URL，冒号一进来 mkdir 就报 WinError 267，整篇文章
+# 存不下去。这里只保证「建得出来」，不追求好看。
+_UNSAFE_IN_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_WINDOWS_DEVICE_NAMES = frozenset({
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{n}" for n in range(1, 10)),
+    *(f"LPT{n}" for n in range(1, 10)),
+})
+# 目录名过长会顶到 Windows 的 MAX_PATH，而 topic 是 URL 时特别容易超。
+_MAX_DIR_NAME = 80
+
+
+def safe_dir_name(value: object, fallback: str = "uncategorized") -> str:
+    """把任意字符串收拾成一个 Windows 和 POSIX 都建得出来的单层目录名。
+
+    只剩点和空格的名字（``.``、``..``）会退回 *fallback*：那不只是难看，
+    ``..`` 会把路径带出 data 目录。
+    """
+    name = _UNSAFE_IN_NAME.sub("_", str(value or "")).strip(" .")
+    if not name:
+        return fallback
+    if name.split(".")[0].upper() in _WINDOWS_DEVICE_NAMES:
+        name = f"_{name}"
+    return name[:_MAX_DIR_NAME].strip(" .") or fallback
+
+
 def _has_video(content_md: str, videos: list[str] | None = None) -> bool:
     if videos:
         return True
@@ -179,8 +207,7 @@ class Store:
             return article
 
         topic = article.topic or "uncategorized"
-        topic_dir = str(topic).replace("/", "_").replace("\\", "_").strip(" .")
-        topic_dir = topic_dir or "uncategorized"
+        topic_dir = safe_dir_name(topic)
         date = (article.published_at or article.fetched_at).strftime("%Y%m%d")
         slug = _slug(article.title)[:60]
         if slug == "untitled":
@@ -230,8 +257,7 @@ class Store:
         # content. Strip legacy blocks at the persistence boundary too.
         draft.body_md = strip_image_prompts(draft.body_md)
         topic = draft.topic or "uncategorized"
-        topic_dir = str(topic).replace("/", "_").replace("\\", "_").strip(" .")
-        topic_dir = topic_dir or "uncategorized"
+        topic_dir = safe_dir_name(topic)
         slug = _slug(draft.title_candidates[0] if draft.title_candidates
                      else "draft")[:60]
         rel = Path("drafts") / topic_dir / f"{draft.article_id}-{slug}.md"
