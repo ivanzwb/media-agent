@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 
 from app.pipeline.anti_slop import ANTI_SLOP_SYSTEM_INSTRUCTION
 from app.pipeline.rewriter import REWRITE_INSTRUCTION, REWRITE_SYSTEM
+from app.pipeline.terminology import TERM_RULE
 
 if TYPE_CHECKING:
     from app.store import Store
@@ -76,9 +77,10 @@ class RewriteStyle:
 _COMMON_RULES = (
     "### 通用要求（所有风格通用）\n"
     "- 基于且仅基于原文事实改写，绝不编造原文没有的数据、引用、结论或时间；不确定的不要写。\n"
-    "- 数据全部保留，这是硬价值。专业术语保留英文原文，不要硬译成中文；确属生僻术语才用一句话解释，术语本身仍保留英文。\n"
+    "- 数据全部保留，这是硬价值。\n"
     "- 短句、短段落，手机友好。长难句拆成 2-3 个短句。\n"
     "- 结尾注明原文标题、来源，以及（若原文提供）日期。\n"
+    "\n" + TERM_RULE + "\n\n"
     "{seo_block}\n"
     "{promotion_block}\n\n"
     + ANTI_SLOP_SYSTEM_INSTRUCTION + "\n\n"
