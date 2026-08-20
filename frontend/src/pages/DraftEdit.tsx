@@ -38,6 +38,11 @@ interface DiversionFinding {
   kind: string; label: string; text: string; line: number; where: string;
 }
 
+// 术语体检：中文正文里剩下的英文，kind 是 phrase（短语没译）或 word（该用中文）。
+interface TermFinding {
+  kind: string; label: string; text: string; line: number; hint: string;
+}
+
 // AI 味体检：分数越高越像机器写的，findings 指到具体哪一行。
 interface FlavorFinding { key: string; label: string; text: string; line: number }
 interface FlavorDimension {
@@ -191,6 +196,7 @@ interface DraftData {
   };
   series?: SeriesNav | null;
   sensitive_hits: string[]; diversion?: DiversionFinding[];
+  terms?: TermFinding[];
   article_id: number | null;
   article_published_at: string | null; article_title: string;
   has_video: boolean; has_narration: boolean; video_brand_name: string;
@@ -1001,6 +1007,35 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
                 <Text type="secondary" style={{ display: "block", marginTop: 8 }}>
                   正文、摘要或推广文案里出现微信号、二维码和站外链接，文章会失去推荐流量。
                   这里只做提示，不会改稿，也不阻止发布。
+                </Text>
+              </>
+            ),
+          }]} />
+      )}
+      {(data.terms?.length ?? 0) > 0 && (
+        <Collapse size="small" style={{ marginBottom: 12, background: "#fff7e6", borderColor: "#ffd591", flexShrink: 0 }}
+          items={[{
+            key: "1",
+            label: (
+              <span style={{ color: "#ad4e00" }}>
+                🔤 术语体检：{data.terms!.length} 处英文可能没译
+              </span>
+            ),
+            children: (
+              <>
+                <ul style={{ margin: 0, paddingLeft: 20 }}>
+                  {data.terms!.map((f: TermFinding, i: number) => (
+                    <li key={i}>
+                      <Tag color="orange" style={{ marginInlineEnd: 6 }}>{f.label}</Tag>
+                      第 {f.line} 行：<Text code>{f.text}</Text>
+                      <Text type="secondary">　{f.hint}</Text>
+                    </li>
+                  ))}
+                </ul>
+                <Text type="secondary" style={{ display: "block", marginTop: 8 }}>
+                  模型名、缩写和 agent、prompt 这类词本来就该留英文，
+                  但修饰它们的普通英文要写成中文（plain-language prompt → 大白话 prompt）。
+                  该不该留终究要人看一眼，这里只提示，不会改稿。
                 </Text>
               </>
             ),

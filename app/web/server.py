@@ -37,6 +37,7 @@ from app.pipeline.adapter import adapt, PLATFORMS
 from app.pipeline.ai_flavor import check_text as check_ai_flavor
 from app.pipeline.anti_slop import ANTI_SLOP_SYSTEM_INSTRUCTION
 from app.pipeline.diversion import check_draft
+from app.pipeline.terminology import check_terms
 from app.platforms.registry import get as get_platform, list_all as list_platforms
 from app.pipeline.images import attach_cover
 from app.pipeline.narration import (
@@ -1173,6 +1174,7 @@ def create_app(config: Config | None = None,
             "flagged_claims": body.get("flagged_claims", []) or [],
             "sensitive_hits": body.get("sensitive_hits", []) or [],
             "diversion": diversion,
+            "terms": check_terms(body.get("body_md", "")),
             "origin": body.get("origin") or row["origin"] or "rewrite",
             "sources": body.get("sources", []) or [],
             "citations": body.get("citations", []) or [],

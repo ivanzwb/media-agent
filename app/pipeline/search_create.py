@@ -18,6 +18,7 @@ from app.pipeline.score import FLAVOR_NOTICE_AT, grade_draft
 from app.pipeline.localize import localize_reference_images
 from app.pipeline.synthesizer import (
     DEPTHS, expand_image_refs, referenced_images, synthesize)
+from app.pipeline.terminology import term_samples
 from app.pipeline.topic_intent import (
     TopicIntent, shorten_query, understand_topic)
 from app.sources.dedup import dedup, dedup_near_content
@@ -425,6 +426,11 @@ def _grade(store, draft, draft_id: int, provider: LLMProvider,
         kinds = "、".join(dict.fromkeys(f["label"] for f in grade.diversion))
         _emit(progress, "grade",
               f"导流体检发现 {len(grade.diversion)} 处（{kinds}），发布前需处理",
+              stats=stats)
+    if grade.terms:
+        stats["terms"] = len(grade.terms)
+        _emit(progress, "grade",
+              f"有 {len(grade.terms)} 处英文没译（{term_samples(grade.terms)}）",
               stats=stats)
 
 

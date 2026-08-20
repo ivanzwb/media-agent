@@ -29,6 +29,7 @@ from app.pipeline.score import FLAVOR_NOTICE_AT, grade_draft
 from app.pipeline.search_create import (
     ProgressCallback, SearchCreateCancelled, SearchCreateOptions, _check_cancel,
     _emit, _url_key, collect_references, search_queries)
+from app.pipeline.terminology import term_samples
 from app.pipeline.topic_intent import (
     QUERY_EXAMPLE, QUERY_RULE, TopicIntent, atomize_query, topic_search_terms,
     understand_topic)
@@ -700,6 +701,11 @@ def _grade_chapter(store, draft, draft_id: int, context: _ChapterContext,
         kinds = "、".join(dict.fromkeys(f["label"] for f in grade.diversion))
         _emit(progress, "grade",
               f"第 {index} 章导流体检发现 {len(grade.diversion)} 处（{kinds}）",
+              stats=stats)
+    if grade.terms:
+        _emit(progress, "grade",
+              f"第 {index} 章有 {len(grade.terms)} 处英文没译"
+              f"（{term_samples(grade.terms)}）",
               stats=stats)
 
 
