@@ -21,8 +21,8 @@ from app.pipeline.score import grade_draft
 from app.pipeline.styles import build_learned_instruction, builtin_styles
 from app.pipeline.synthesizer import DEPTHS, _depth_instruction
 from app.pipeline.terminology import (
-    KEPT_PHRASES, MUST_TRANSLATE, PLAIN_WORDS, TERM_RULE, TERM_RULE_LINE,
-    check_terms, term_samples)
+    KEEP_WORDS, KEPT_PHRASES, MUST_TRANSLATE, PLAIN_WORDS, TERM_RULE,
+    TERM_RULE_LINE, check_terms, term_samples)
 
 APP = Path(__file__).resolve().parent.parent / "app"
 
@@ -72,9 +72,15 @@ def test_the_examples_show_both_directions():
 
 
 def test_the_word_list_and_the_rule_cannot_drift():
-    """检查器认的词，提示词里必须逐条写着，反之亦然。"""
+    """词表给出的中文说法，提示词里必须逐条写着，反之亦然。"""
     for english, chinese in MUST_TRANSLATE + PLAIN_WORDS:
         assert f"{english} 写「{chinese}」" in TERM_RULE
+
+
+def test_the_rule_says_the_word_list_is_only_a_sample():
+    """不说清是举例，模型会把这几个词当成「只有这些要译」。"""
+    assert "这几个只是举例" in TERM_RULE
+    assert "不在这份例子里不等于可以留着英文" in TERM_RULE
 
 
 def test_the_short_form_still_carries_both_directions():
@@ -131,7 +137,17 @@ def test_a_word_with_a_settled_chinese_spelling_is_caught():
     found = check_terms("这一轮 training 用了 8 张卡，performance 提升明显。")
     assert kinds(found) == ["word", "word"]
     assert texts(found) == ["training", "performance"]
+    # 词表里有的，顺手把中文说法一起报出来。
     assert [f["hint"] for f in found] == ["写「训练」", "写「性能」"]
+
+
+def test_a_word_no_list_could_have_predicted_is_caught():
+    """换个主题就换一批词，词表永远列不全——所以判断不能靠词表。"""
+    for word in ("evaluation", "scaffolding", "checkpoint", "guardrails",
+                 "provenance", "watermarking"):
+        found = check_terms(f"这次 {word} 是自己做的。")
+        assert texts(found) == [word], word
+        assert found[0]["hint"] == "不是名字也不是缩写，中文技术圈有说法就译过来"
 
 
 def test_plurals_count_as_the_same_word():
@@ -166,6 +182,26 @@ def test_a_term_standing_on_its_own_is_left_alone():
         assert check_terms(line) == [], line
 
 
+def test_a_single_name_or_acronym_needs_no_list():
+    """大写就认得出是名字和缩写，不用一个个列出来。"""
+    for line in ("这次用 Claude 跑的，比 Qwen 稳。",
+                 "SDK 和 CUDA 的版本都得对上。",
+                 "Llama 之后 Mistral 也开源了。"):
+        assert check_terms(line) == [], line
+
+
+def test_a_gloss_in_brackets_is_what_the_rule_asked_for():
+    """「上下文窗口（context window）」是规则自己建议的写法，不能反手报它。"""
+    assert check_terms("先看上下文窗口（context window）这个数。") == []
+    # 括号里夹着中文的照查，别拿括号当挡箭牌。
+    assert texts(check_terms("先看窗口（这一步叫 sliding window）。")) == [
+        "sliding window"]
+
+
+def test_units_stuck_to_numbers_are_not_words():
+    assert check_terms("128k 上下文，延迟 200ms，显存 8gb。") == []
+
+
 def test_names_are_not_untranslated_english():
     for name in ("GPT-4 Turbo", "Hugging Face", "Stable Diffusion",
                  "Mixture of Experts", "Attention Is All You Need"):
@@ -175,6 +211,14 @@ def test_names_are_not_untranslated_english():
 def test_the_few_phrases_chinese_writing_keeps_are_left_alone():
     for phrase in sorted(KEPT_PHRASES):
         assert check_terms(f"先看 {phrase} 那一段。") == [], phrase
+
+
+def test_the_keep_list_is_short_enough_to_be_honest():
+    """该留英文的小写词是个封闭的小集合——它一长，就说明又在拿词表当闸门了。"""
+    assert len(KEEP_WORDS) < 20
+    for word in KEEP_WORDS:
+        assert word.islower(), word
+        assert check_terms(f"这里说的是 {word}。") == [], word
 
 
 def test_code_and_links_are_not_prose():

@@ -24,6 +24,11 @@ import re
 from app.pipeline import references
 
 # ── 词表：规则和检查共用 ────────────────────────────────────────────────
+# 下面两份词表都只是举例——换个主题就换一批词，这种表永远列不全，所以它
+# 不负责决定报不报，只负责在报的时候顺手给出中文说法。真正拦人的是
+# :func:`_stays_english` 那套结构判断：该留英文的集合才是封闭的（名字、缩写，
+# 加上中文圈确实照写的那几个小写词），剩下的英文一概先当没译完看。
+#
 # 早有通行中文说法的术语，留着英文就是没译完。第二次栽的就是这批词。
 MUST_TRANSLATE: tuple[tuple[str, str], ...] = (
     ("training", "训练"),
@@ -52,8 +57,16 @@ PLAIN_WORDS: tuple[tuple[str, str], ...] = (
     ("update", "更新"),
 )
 
-# 中文技术圈确实整段照写的英文短语。故意只列几个：这是一份报告用的名单，
-# 漏了顶多多报一条让人自己看，塞太多反而把真该译的短语放过去了。
+# 中文技术圈确实照写的小写英文词。名字和缩写不用列——大写就认得出来，
+# 而这一份是真的短：中文里说「agent」「prompt」「token」不别扭，说
+# 「training」「latency」就是没译完。列不准顶多多报一条让人自己看，
+# 这份名单只要错在「多报」那一边就是安全的。
+KEEP_WORDS: frozenset[str] = frozenset({
+    "agent", "agents", "prompt", "prompts", "token", "tokens",
+    "embedding", "embeddings", "app", "bug", "bugs",
+})
+
+# 中文技术圈确实整段照写的英文短语。同样只列几个。
 KEPT_PHRASES: frozenset[str] = frozenset({
     "system prompt",
     "prompt injection",
@@ -93,10 +106,11 @@ TERM_RULE = (
     "（LLM、RAG、MoE、API、SDK、GPU）；中文圈本来就直接说英文的词"
     "（agent、prompt、token、Transformer）。把 AI agent 写成「AI 代理」"
     "反而显得外行。\n"
-    "- **用中文**：已经有通行中文说法的一律译过来——"
-    + _pairs(MUST_TRANSLATE) + "。这类词留着英文不叫专业，叫没译完。\n"
-    "- **普通词汇不是术语**，一律用中文："
-    + _pairs(PLAIN_WORDS) + "。\n"
+    "- **用中文**：已经有通行中文说法的一律译过来，例如"
+    + _pairs(MUST_TRANSLATE) + "。这几个只是举例——凡是中文里有说法的都算，"
+    "不在这份例子里不等于可以留着英文。这类词留着英文不叫专业，叫没译完。\n"
+    "- **普通词汇不是术语**，一律用中文，例如"
+    + _pairs(PLAIN_WORDS) + "，同样只是举例。\n"
     "- **英文只留术语本身那一个词**，修饰它的、连接它的、跟它并列的普通英文"
     "全都要写成中文。一个术语在留英文的名单里，不等于带着它的整个短语都能"
     "留在英文里——这是最容易出错的地方。除了产品名（GPT-4 Turbo）和固定"
@@ -131,6 +145,9 @@ _IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _LINK_TARGET = re.compile(r"\]\([^)]*\)")
 _INLINE_CODE = re.compile(r"`[^`]*`")
 _HTML_TAG = re.compile(r"<[^>]{1,200}>")
+# 「上下文窗口（context window）」——括号里标一下英文原词是规则自己建议的写法，
+# 不能反手报它没译。只认整段都是英文的括号，中文夹在里面的照查。
+_GLOSS = re.compile(r"[（(][ A-Za-z0-9.,'’/&+-]+[）)]")
 
 # 只认 ASCII 字母：\w 在 Python 里连中文一起吃，用它就永远命中整句话。
 _WORD_CHARS = r"[A-Za-z0-9]"
@@ -147,9 +164,10 @@ _FUNCTION_WORDS = frozenset({
 
 _MUST = {en: zh for en, zh in MUST_TRANSLATE + PLAIN_WORDS}
 
-LABELS = {"phrase": "英文短语没译", "word": "该用中文的词"}
+LABELS = {"phrase": "英文短语没译", "word": "英文词没译"}
 
 _PHRASE_HINT = "英文只留术语本身，修饰它的词要写成中文"
+_WORD_HINT = "不是名字也不是缩写，中文技术圈有说法就译过来"
 
 
 def _prose_lines(text: str) -> list[tuple[int, str]]:
@@ -173,6 +191,7 @@ def _prose_lines(text: str) -> list[tuple[int, str]]:
         line = _LINK_TARGET.sub(" ", line)
         line = _URL.sub(" ", line)
         line = _INLINE_CODE.sub(" ", line)
+        line = _GLOSS.sub(" ", line)
         out.append((index + 1, _HTML_TAG.sub(" ", line)))
     return out
 
@@ -193,8 +212,26 @@ def _is_name(phrase: str) -> bool:
                for word in words)
 
 
-def _must_translate(word: str) -> str | None:
-    """这个词有通行中文说法吗？顺手认一下复数。"""
+def _is_unit(line: str, start: int) -> bool:
+    """紧跟在数字后面的是单位，不是词：128k、200ms、7b。"""
+    return start > 0 and line[start - 1].isdigit()
+
+
+def _stays_english(word: str) -> bool:
+    """这个词留着英文是对的吗？
+
+    判断反过来做：不去列「该译的词」——换个主题就换一批，那种表永远列不全，
+    上一版就是被这个卡住的。该留英文的集合才是封闭的：名字和缩写靠大小写
+    认（GPT-4、LLM、Claude、Transformer），中文圈确实照写的小写词只有
+    :data:`KEEP_WORDS` 那几个。剩下的一概先当没译完。
+    """
+    if word[:1].isupper() or word.isupper() or any(c.isdigit() for c in word):
+        return True
+    return word.lower().strip(".'’-") in KEEP_WORDS
+
+
+def _chinese_for(word: str) -> str | None:
+    """这个词的通行中文说法，词表里有就给出来。顺手认一下复数。"""
     key = word.lower()
     if key in _MUST:
         return _MUST[key]
@@ -218,10 +255,13 @@ def term_samples(findings: list[dict], limit: int = 3) -> str:
 def check_terms(text: str) -> list[dict]:
     """挑出成稿里没译完的英文，按行号排好。
 
-    两种命中：连着两个以上英文单词的短语（产品名和 :data:`KEPT_PHRASES`
-    除外），以及 :data:`MUST_TRANSLATE`、:data:`PLAIN_WORDS` 里那些早有通行
-    中文说法的词。只报不改——「该不该留英文」终究要人看一眼，机器判死了迟早
-    把该留的也给译了。
+    两种命中：连着两个以上英文单词的短语（名字和 :data:`KEPT_PHRASES` 除外），
+    以及单个留着英文、但按 :func:`_stays_english` 判下来没理由留的词。判断不
+    依赖任何主题词表——词表只在报的时候顺手给出中文说法，列不全也不影响谁被
+    报出来。
+
+    只报不改——「该不该留英文」终究要人看一眼，机器判死了迟早把该留的也给
+    译了。
     """
     findings: list[dict] = []
     for line_no, line in _prose_lines(text):
@@ -240,9 +280,15 @@ def check_terms(text: str) -> list[dict]:
             if any(start <= match.start() and match.end() <= end
                    for start, end in covered):
                 continue
-            chinese = _must_translate(_trim(match.group(0)))
-            if chinese:
-                findings.append(_finding(
-                    "word", match.group(0), line_no, f"写「{chinese}」"))
+            word = _trim(match.group(0))
+            # 单个字母是标号、公式和单位的碎渣，报出来没人看得懂要改什么。
+            if len(word) < 2 or _is_unit(line, match.start()):
+                continue
+            if _stays_english(word):
+                continue
+            chinese = _chinese_for(word)
+            findings.append(_finding(
+                "word", match.group(0), line_no,
+                f"写「{chinese}」" if chinese else _WORD_HINT))
     findings.sort(key=lambda f: f["line"])
     return findings
