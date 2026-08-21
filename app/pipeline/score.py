@@ -9,7 +9,6 @@ from datetime import datetime, timezone, timedelta
 from app.llm.base import LLMProvider, Message
 from app.pipeline.ai_flavor import check_text
 from app.pipeline.diversion import check_draft
-from app.pipeline.terminology import check_terms
 
 logger = logging.getLogger(__name__)
 
@@ -87,15 +86,10 @@ class DraftGrade:
     """Everything that can be said about a finished draft without a human.
 
     ``ai_flavor`` is the :func:`app.pipeline.ai_flavor.check_text` report.
-    ``terms`` is the :func:`app.pipeline.terminology.check_terms` list: the
-    English left sitting in Chinese prose. Two rounds of prompt work went into
-    that rule and both regressed unnoticed, because nothing looked at what came
-    back out.
     """
     score: float
     diversion: list[dict]
     ai_flavor: dict
-    terms: list[dict]
 
 
 def grade_draft(draft, *, provider: LLMProvider | None = None,
@@ -128,8 +122,7 @@ def grade_draft(draft, *, provider: LLMProvider | None = None,
         },
         promotion_footer,
     )
-    body = draft.body_md or ""
-    return DraftGrade(score, findings, check_text(body), check_terms(body))
+    return DraftGrade(score, findings, check_text(draft.body_md or ""))
 
 
 def _llm_score(
