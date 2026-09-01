@@ -327,7 +327,7 @@ function ArticleTab({ data, body, setBody, titleCn, setTitleCn, titleCands, setT
   const [flavor, setFlavor] = useState<FlavorResult | null>(null);
   const [flavorOpen, setFlavorOpen] = useState(false);
   const [flavorBusy, setFlavorBusy] = useState(false);
-  const [rewriting, setRewriting] = useLocalState<boolean>(`draftedit-rewriting-${data.id}`, false);
+  const [rewriting, setRewriting] = useState<boolean>(false);
   const [rewriteStyle, setRewriteStyle] = useState("");
   const [platform, setPlatform] = useState("");
   const [localizing, setLocalizing] = useState(false);
@@ -1957,8 +1957,8 @@ function AgentModal({ open, draftId, body, titleCn, titleCands, onClose, onAppli
 function VideoTab({ data }: { data: DraftData }) {
   const { message } = AntApp.useApp();
   const qc = useQueryClient();
-  const [narrating, setNarrating] = useLocalState<boolean>(`draftedit-narrating-${data.id}`, false);
-  const [synth, setSynth] = useLocalState<boolean>(`draftedit-synth-${data.id}`, false);
+  const [narrating, setNarrating] = useState<boolean>(false);
+  const [synth, setSynth] = useState<boolean>(false);
   const [synthProg, setSynthProg] = useState<{ pct: number; eta: number | null } | null>(null);
   const [hasVideo, setHasVideo] = useState(data.has_video);
   const [voice, setVoice] = useState<string | undefined>(undefined);

@@ -433,7 +433,7 @@ export default function Sources() {
     message.success(`已${enabled ? "启用" : "禁用"} ${r.data.updated} 个来源`);
     setSelSources([]); refetch();
   }
-  const [checking, setChecking] = useLocalState<boolean>("sources-checking", false);
+  const [checking, setChecking] = useState<boolean>(false);
   const [checkProg, setCheckProg] = useState<{current: number; total: number; disabled: number} | null>(null);
   async function checkAllReachability() {
     setChecking(true);
@@ -468,7 +468,7 @@ export default function Sources() {
       setChecking(false);
     }
   }
-  const [fixing, setFixing] = useLocalState<boolean>("sources-fixing", false);
+  const [fixing, setFixing] = useState<boolean>(false);
   const [fixProg, setFixProg] = useState<{current: number; total: number; fixed: number; skipped: number; removed: number} | null>(null);
   async function fixDisabledSources() {
     setFixing(true);
