@@ -467,11 +467,24 @@ export default function Sources() {
     }
   }
   const [fixing, setFixing] = useLocalState<boolean>("sources-fixing", false);
+  const [fixProg, setFixProg] = useState<{current: number; total: number; fixed: number; skipped: number; removed: number} | null>(null);
   async function fixDisabledSources() {
     setFixing(true);
+    setFixProg(null);
+    // Start the fix (async, thread-pool networked per source) and poll progress
+    const fixDone = api.post("/sources/fix-disabled");
+    const poll = setInterval(async () => {
+      try {
+        const r = await getJson<{running: boolean; current: number; total: number; fixed: number; skipped: number; removed: number}>("/sources/fix-disabled/progress");
+        setFixProg({ current: r.current, total: r.total, fixed: r.fixed, skipped: r.skipped, removed: r.removed });
+        if (!r.running) { clearInterval(poll); }
+      } catch { /* ignore */ }
+    }, 500);
     try {
-      const r = await api.post("/sources/fix-disabled");
+      const r = await fixDone;
       const { total, fixed, skipped, removed } = r.data;
+      clearInterval(poll);
+      setFixProg(null);
       if (total === 0) {
         message.info("没有禁用的来源需要修复");
       } else {
@@ -483,6 +496,8 @@ export default function Sources() {
       }
       refetch();
     } catch {
+      clearInterval(poll);
+      setFixProg(null);
       message.error("修复失败");
     } finally {
       setFixing(false);
@@ -689,7 +704,11 @@ export default function Sources() {
           <Button size="small" loading={checking} onClick={checkAllReachability}>
             {checkProg ? `检测中 ${checkProg.current}/${checkProg.total}${checkProg.disabled ? ` (不可达: ${checkProg.disabled})` : ""}` : "检测可达性"}
           </Button>
-          <Button size="small" loading={fixing} onClick={fixDisabledSources}>修复禁用来源</Button>
+          <Button size="small" loading={fixing} onClick={fixDisabledSources}>
+            {fixProg && fixProg.total > 0
+              ? `修复中 ${fixProg.current}/${fixProg.total} (已修${fixProg.fixed})`
+              : "修复禁用来源"}
+          </Button>
         </Space>
         <Table rowKey="url" size="small" pagination={false} dataSource={sources}
           rowSelection={{ selectedRowKeys: selSources, onChange: (k) => setSelSources(k as string[]) }}

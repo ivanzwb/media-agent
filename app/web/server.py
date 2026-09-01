@@ -383,6 +383,8 @@ def create_app(config: Config | None = None,
 
     # ---- reachability check progress ----
     check_progress = {"running": False, "current": 0, "total": 0, "disabled": 0, "results": []}
+    fix_progress = {"running": False, "current": 0, "total": 0, "fixed": 0, "skipped": 0,
+                    "removed": 0, "results": []}
 
     # ---- operations DB-backed registry (survives page refresh) ----
     from app.db import (
@@ -2678,16 +2680,17 @@ def create_app(config: Config | None = None,
 
         cfg = load_feeds(feeds_path)
         disabled_sources = [s for s in cfg.sources if not s.enabled]
+        total = len(disabled_sources)
         if not disabled_sources:
+            fix_progress.update(running=False, current=0, total=0, fixed=0,
+                                skipped=0, removed=0, results=[])
             return {"total": 0, "fixed": 0, "removed": 0, "results": []}
 
         results: list[dict] = []
-        fixed_count = 0
-        removed_count = 0
-        skipped_count = 0
+        fix_progress.update(running=True, current=0, total=total, fixed=0,
+                            skipped=0, removed=0, results=[])
 
         def _fix_source(s):
-            nonlocal fixed_count, removed_count
             name = s.name
             old_url = s.url
             # First: re-check if original URL is now reachable (may have been transient)
@@ -2705,33 +2708,44 @@ def create_app(config: Config | None = None,
         with ThreadPoolExecutor(max_workers=5) as pool:
             futures = {pool.submit(_fix_source, s): s for s in disabled_sources}
             for future in futures:
-                results.append(future.result())
+                r = future.result()
+                results.append(r)
+                fix_progress["current"] = len(results)
+                fix_progress["fixed"] = sum(1 for x in results if x["status"] == "fixed")
+                fix_progress["skipped"] = sum(1 for x in results if x["status"] == "skipped")
+                fix_progress["removed"] = sum(1 for x in results if x["status"] == "removed")
+                fix_progress["results"] = list(results)
 
         # Apply changes
         def _apply(cfg):
-            nonlocal fixed_count, removed_count, skipped_count
             for r in results:
                 if r["status"] == "fixed":
                     for s in cfg.sources:
                         if s.url == r["old_url"]:
                             s.url = r["new_url"]
                             s.enabled = True
-                            fixed_count += 1
                             break
                 elif r["status"] == "removed":
                     cfg.sources = [s for s in cfg.sources if s.url != r["old_url"]]
-                    removed_count += 1
-                elif r["status"] == "skipped":
-                    skipped_count += 1
         update_feeds(feeds_path, _apply)
 
+        # Counts derived from results (update_feeds discards modifier return)
+        fixed_count = sum(1 for r in results if r["status"] == "fixed")
+        removed_count = sum(1 for r in results if r["status"] == "removed")
+        skipped_count = sum(1 for r in results if r["status"] == "skipped")
+
+        fix_progress.update(running=False, results=list(results))
         return {
-            "total": len(disabled_sources),
+            "total": total,
             "fixed": fixed_count,
             "skipped": skipped_count,
             "removed": removed_count,
             "results": results,
         }
+
+    @app.get("/sources/fix-disabled/progress")
+    async def sources_fix_disabled_progress():
+        return fix_progress
 
     def _search_create_public_state() -> dict:
         with search_create_lock:
