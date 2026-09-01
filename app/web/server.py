@@ -2224,8 +2224,10 @@ def create_app(config: Config | None = None,
 
     @app.post("/sources/check-reachability")
     def sources_check_reachability():
-        """Check all enabled sources with 3 retries each; disable unreachable."""
+        """Check all enabled sources with 3 retries each; optionally disable unreachable."""
         from concurrent.futures import ThreadPoolExecutor
+        store = get_store()
+        auto_disable = (store.get_setting("reachability_auto_disable") or "0") not in ("0", "false", "no", "")
         def _check_with_retries(url: str, retries: int = 3, timeout: float = 10.0) -> bool:
             for attempt in range(retries):
                 if check_url_connectivity(url, timeout=timeout, proxy=_resolve_proxy()):
@@ -2235,7 +2237,7 @@ def create_app(config: Config | None = None,
         cfg = load_feeds(feeds_path)
         enabled_sources = [s for s in cfg.sources if s.enabled]
         if not enabled_sources:
-            return {"total": 0, "disabled": 0, "results": []}
+            return {"total": 0, "disabled": 0, "auto_disabled": auto_disable, "results": []}
 
         total = len(enabled_sources)
         check_progress.update(running=True, current=0, total=total, disabled=0, results=[])
@@ -2255,7 +2257,7 @@ def create_app(config: Config | None = None,
                 check_progress["results"] = results
 
         disabled_urls = [r["url"] for r in results if not r["reachable"]]
-        if disabled_urls:
+        if auto_disable and disabled_urls:
             disabled_set = set(disabled_urls)
             def _do_disable(cfg):
                 for s in cfg.sources:
@@ -2267,6 +2269,7 @@ def create_app(config: Config | None = None,
         return {
             "total": total,
             "disabled": len(disabled_urls),
+            "auto_disabled": auto_disable,
             "results": results,
         }
 
@@ -4836,6 +4839,7 @@ def create_app(config: Config | None = None,
             "download_images": (store.get_setting("download_images") or "1") not in ("0", "false", "no", ""),
             "download_videos": (store.get_setting("download_videos") or "1") not in ("0", "false", "no", ""),
             "relevance_filter": (store.get_setting("relevance_filter") or "1") not in ("0", "false", "no", ""),
+            "reachability_auto_disable": (store.get_setting("reachability_auto_disable") or "0") not in ("0", "false", "no", ""),
             "wechat_appid": _get("wechat_appid") or (config.wechat_appid or ""),
             "wechat_author": _get("wechat_author") or (config.wechat_author or ""),
             "wechat_open_comment": (
@@ -4894,9 +4898,10 @@ def create_app(config: Config | None = None,
                        wechat_author: str = Form(""),
                        wechat_open_comment: str = Form("0"),
                        wechat_fans_only_comment: str = Form("0"),
-                       download_images: str = Form("0"),
-                       download_videos: str = Form("0"),
-                       relevance_filter: str = Form("0"),
+                        download_images: str = Form("0"),
+                        download_videos: str = Form("0"),
+                        relevance_filter: str = Form("0"),
+                        reachability_auto_disable: str = Form("0"),
                         cli_tool: str = Form(""),
                         rewrite_priority: str = Form(""),
                           fetch_proxy: str = Form(""),
@@ -5027,6 +5032,8 @@ def create_app(config: Config | None = None,
                           "1" if download_videos in ("1", "on", "true") else "0")
         store.set_setting("relevance_filter",
                           "1" if relevance_filter in ("1", "on", "true") else "0")
+        store.set_setting("reachability_auto_disable",
+                          "1" if reachability_auto_disable in ("1", "on", "true") else "0")
         store.set_setting("avatar_enabled",
                           "1" if avatar_enabled in ("1", "on", "true") else "0")
         store.set_setting(

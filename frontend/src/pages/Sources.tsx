@@ -449,13 +449,15 @@ export default function Sources() {
     }, 500);
     try {
       const r = await checkDone;
-      const { total, disabled } = r.data;
+      const { total, disabled, auto_disabled } = r.data;
       clearInterval(poll);
       setCheckProg(null);
       if (disabled === 0) {
         message.success(`全部 ${total} 个来源可达`);
-      } else {
+      } else if (auto_disabled) {
         message.warning(`${total} 个来源中 ${disabled} 个不可达，已禁用`);
+      } else {
+        message.warning(`${total} 个来源中 ${disabled} 个不可达（未自动禁用，可在设置中开启自动禁用）`);
       }
       refetch();
     } catch {

@@ -62,6 +62,7 @@ export default function Settings() {
         "schedule_enabled", "download_images", "download_videos",
         "relevance_filter", "seo_tags_enabled",
         "wechat_open_comment", "wechat_fans_only_comment",
+        "reachability_auto_disable",
       ];
       for (const [k, val] of Object.entries(v)) {
         if (keyFields.includes(k)) { if (val) payload[k] = val; continue; }
@@ -106,6 +107,7 @@ export default function Settings() {
         rewrite_style: data.rewrite_style,
         download_images: data.download_images, download_videos: data.download_videos,
         relevance_filter: data.relevance_filter,
+        reachability_auto_disable: data.reachability_auto_disable,
         schedule_cron: data.schedule_cron, schedule_enabled: data.schedule_enabled,
         llm_api_key: "", image_api_key: "", tts_api_key: "", wechat_appsecret: "",
       }}>
@@ -332,6 +334,10 @@ export default function Settings() {
                   </Form.Item>
                   <Form.Item name="relevance_filter" label="AI 相关性过滤（只保留新闻/行业动态/研究文章）" valuePropName="checked"
                     tooltip="抓取后用大模型判断每条内容是否为真正的新闻/行业动态/研究文章，丢弃公司主页、关于我们、产品/营销落地页、招聘、导航/列表页等非文章内容（MEDIA_AGENT_RELEVANCE_FILTER）">
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item name="reachability_auto_disable" label="检测可达性时自动禁用不可达来源" valuePropName="checked"
+                    tooltip="默认关闭：检测只报告不可达来源，不自动禁用（避免从大陆网络把境外站点批量误判不可达后禁用）。开启后检测到不可达会自动禁用该来源">
                     <Switch />
                   </Form.Item>
                   <Form.Item name="download_workers" label={`并发下载数（默认 ${data.default_workers}）`}><Input /></Form.Item>
