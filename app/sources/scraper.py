@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -16,6 +17,19 @@ from app.sources import feed_discovery
 from app.sources.extractor import extract_from_html
 
 logger = logging.getLogger(__name__)
+
+# Playwright's sync API is NOT thread-safe (playwright.dev/python/docs/intro
+# #threading; microsoft/playwright-python#470): it drives the Node driver via
+# greenlet hops between the caller thread and an asyncio event-loop thread.
+# Concurrent sync_playwright() contexts from multiple threads corrupt that
+# machinery natively — observed as a hard SIGSEGV killing the whole serve
+# process, after which the freshly-spawned driver of a retry attempt dies
+# with EPIPE (broken pipe to the dead parent).  collect_sources() scrapes all
+# sources in a ThreadPoolExecutor with render_js=True by default, i.e. many
+# concurrent callers, so ALL Playwright use in this process is serialized
+# through this lock.  Abandoned stragglers from orchestrator timeouts simply
+# queue here and finish one at a time.
+_PLAYWRIGHT_LOCK = threading.Lock()
 
 # How many pages focused_crawler fetches per iterative call (small batches let
 # us re-check the overall time budget between calls).
@@ -357,6 +371,10 @@ def render_with_playwright(url: str, timeout: float,
     On Windows, Chrome 129+ "new" headless can flash a blank white window
     while scraping.  The off-screen ``--window-position`` prevents the user
     from seeing it (safe across chromium/chrome).
+
+    THREAD SAFETY: the whole render (including all retry attempts) runs under
+    ``_PLAYWRIGHT_LOCK`` — see its comment.  Never call Playwright outside
+    this function in this process.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -401,34 +419,38 @@ def render_with_playwright(url: str, timeout: float,
         browser.close()
         return html
 
-    try:
-        with sync_playwright() as p:
-            return _do_launch(p)
-    except Exception as exc:
-        # Some pages (HubSpot templates with a parser-blocking script, heavy
-        # tracking widgets) never reach "domcontentloaded" even though the
-        # full body is already present — the parser is held open indefinitely.
-        # Retrying with "commit" (resolves on response headers) rescues them;
-        # the wait_for below still allows client-side rendering to finish.
-        logger.warning(
-            "Playwright domcontentloaded failed for %s: %s. "
-            "Retrying with wait_until='commit' …", url, exc)
+    # One sync_playwright() context exists in this process at any moment
+    # (see _PLAYWRIGHT_LOCK) — concurrent contexts segfault the process.
+    with _PLAYWRIGHT_LOCK:
         try:
             with sync_playwright() as p:
-                return _do_launch(p, wait_until="commit")
-        except Exception as exc2:
+                return _do_launch(p)
+        except Exception as exc:
+            # Some pages (HubSpot templates with a parser-blocking script,
+            # heavy tracking widgets) never reach "domcontentloaded" even
+            # though the full body is already present — the parser is held
+            # open indefinitely.  Retrying with "commit" (resolves on
+            # response headers) rescues them; the wait_for below still
+            # allows client-side rendering to finish.
             logger.warning(
-                "Playwright commit also failed for %s: %s. "
-                "Trying channel='chrome' …", url, exc2)
+                "Playwright domcontentloaded failed for %s: %s. "
+                "Retrying with wait_until='commit' …", url, exc)
             try:
                 with sync_playwright() as p:
-                    return _do_launch(p, wait_until="commit",
-                                      channel="chrome")
-            except Exception as exc3:
+                    return _do_launch(p, wait_until="commit")
+            except Exception as exc2:
                 logger.warning(
-                    "Playwright channel='chrome' also failed for %s: %s",
-                    url, exc3)
-                return None
+                    "Playwright commit also failed for %s: %s. "
+                    "Trying channel='chrome' …", url, exc2)
+                try:
+                    with sync_playwright() as p:
+                        return _do_launch(p, wait_until="commit",
+                                          channel="chrome")
+                except Exception as exc3:
+                    logger.warning(
+                        "Playwright channel='chrome' also failed for %s: %s",
+                        url, exc3)
+                    return None
 
 
 def _client_get(url: str, timeout: float, headers: dict[str, str],
