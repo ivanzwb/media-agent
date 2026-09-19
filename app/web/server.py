@@ -339,6 +339,7 @@ def create_app(config: Config | None = None,
             record=True, max_drafts=run_config.max_drafts or 10,
             max_age_days=run_config.max_age_days,
             max_per_source=run_config.max_per_source,
+            source_timeout=run_config.source_timeout,
             download_images=run_config.download_images,
             download_videos=run_config.download_videos,
             relevance_filter=run_config.relevance_filter,
@@ -1796,6 +1797,7 @@ def create_app(config: Config | None = None,
         "image_provider", "image_api_base", "image_model",
         "tts_provider", "tts_api_base", "tts_model", "tts_voice",
         "max_age_days", "max_per_source", "max_drafts", "download_workers",
+        "source_timeout",
         "video_fit", "video_brand_name",
         "sensitive_level", "sensitive_words",
         "promotion_footer", "seo_tags_enabled",
@@ -4816,6 +4818,7 @@ def create_app(config: Config | None = None,
             "max_per_source": _get("max_per_source") or (str(config.max_per_source) if config.max_per_source else ""),
             "max_drafts": _get("max_drafts") or (str(config.max_drafts) if config.max_drafts else ""),
             "download_workers": _get("download_workers") or (str(config.download_workers) if config.download_workers else ""),
+            "source_timeout": _get("source_timeout") or (str(config.source_timeout) if config.source_timeout else ""),
             "default_workers": os.cpu_count() or 4,
             "video_fit": _get("video_fit") or (config.video_fit or "fit"),
             "video_brand_name": _get("video_brand_name") or (config.video_brand_name or "Media Agent"),
@@ -4882,6 +4885,7 @@ def create_app(config: Config | None = None,
                       max_per_source: str = Form(""),
                       max_drafts: str = Form(""),
                       download_workers: str = Form(""),
+                      source_timeout: str = Form(""),
                         video_fit: str = Form(""),
                         video_brand_name: str = Form(""),
                         avatar_enabled: str = Form("0"),
@@ -5022,6 +5026,16 @@ def create_app(config: Config | None = None,
                     store.set_setting("download_workers", download_workers.strip())
                 else:
                     store.delete_setting("download_workers")
+            except ValueError:
+                pass
+
+        if source_timeout.strip():
+            try:
+                int_val = int(source_timeout.strip())
+                if int_val > 0:
+                    store.set_setting("source_timeout", source_timeout.strip())
+                else:
+                    store.delete_setting("source_timeout")
             except ValueError:
                 pass
 

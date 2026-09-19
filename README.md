@@ -231,6 +231,7 @@ sources:
 | `MEDIA_AGENT_MAX_PER_SOURCE` | 每个来源最多抓取条数（空=不限） | 不限 |
 | `MEDIA_AGENT_MAX_DRAFTS` | 每轮最多转写 / 改写篇数 | `10` |
 | `MEDIA_AGENT_DOWNLOAD_WORKERS` | 来源抓取 / 图片视频下载的并发线程数（空=CPU 核数） | CPU 核数 |
+| `MEDIA_AGENT_SOURCE_TIMEOUT` | 单个来源抓取超时秒数（慢站/JS 渲染可调大；超时则跳过该来源） | `300` |
 | `MEDIA_AGENT_DOWNLOAD_IMAGES` | 抓取时本地化图片（`0` 关闭） | `1` |
 | `MEDIA_AGENT_DOWNLOAD_VIDEOS` | 抓取时本地化视频（`0` 关闭） | `1` |
 | `MEDIA_AGENT_RELEVANCE_FILTER` | LLM 过滤非新闻 / 非研究内容（`0` 关闭） | `1` |

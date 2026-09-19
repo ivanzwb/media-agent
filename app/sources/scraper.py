@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-import threading
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -17,19 +17,6 @@ from app.sources import feed_discovery
 from app.sources.extractor import extract_from_html
 
 logger = logging.getLogger(__name__)
-
-# Playwright's sync API is NOT thread-safe (playwright.dev/python/docs/intro
-# #threading; microsoft/playwright-python#470): it drives the Node driver via
-# greenlet hops between the caller thread and an asyncio event-loop thread.
-# Concurrent sync_playwright() contexts from multiple threads corrupt that
-# machinery natively — observed as a hard SIGSEGV killing the whole serve
-# process, after which the freshly-spawned driver of a retry attempt dies
-# with EPIPE (broken pipe to the dead parent).  collect_sources() scrapes all
-# sources in a ThreadPoolExecutor with render_js=True by default, i.e. many
-# concurrent callers, so ALL Playwright use in this process is serialized
-# through this lock.  Abandoned stragglers from orchestrator timeouts simply
-# queue here and finish one at a time.
-_PLAYWRIGHT_LOCK = threading.Lock()
 
 # How many pages focused_crawler fetches per iterative call (small batches let
 # us re-check the overall time budget between calls).
@@ -372,85 +359,93 @@ def render_with_playwright(url: str, timeout: float,
     while scraping.  The off-screen ``--window-position`` prevents the user
     from seeing it (safe across chromium/chrome).
 
-    THREAD SAFETY: the whole render (including all retry attempts) runs under
-    ``_PLAYWRIGHT_LOCK`` — see its comment.  Never call Playwright outside
-    this function in this process.
+    THREAD SAFETY: uses the async Playwright API — each caller gets its own
+    asyncio event loop (via ``asyncio.run()``) and independent browser
+    instance.  No global lock needed; multiple threads render concurrently.
     """
     try:
-        from playwright.sync_api import sync_playwright
+        from playwright.async_api import async_playwright
     except ImportError:
         return None
 
     VIEWPORT = {"width": 1280, "height": 720}
+    LAUNCH_ARGS = [
+        "--no-sandbox",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--disable-setuid-sandbox",
+        "--disable-blink-features=AutomationControlled",
+        "--window-position=-32000,-32000",
+        f"--window-size={VIEWPORT['width']},{VIEWPORT['height']}",
+    ]
 
-    def _do_launch(p, wait_until="domcontentloaded", **kwargs):
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-gpu",
-                "--disable-dev-shm-usage",
-                "--disable-setuid-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--window-position=-32000,-32000",
-                f"--window-size={VIEWPORT['width']},{VIEWPORT['height']}",
-            ],
-            **kwargs,
-        )
-        context = browser.new_context(
-            user_agent=_UA_STR,
-            viewport=VIEWPORT,
-            locale="en-US",
-        )
-        page = context.new_page()
-        response = page.goto(url, wait_until=wait_until,
-                             timeout=int(timeout * 1000))
+    async def _do_launch(p, wait_until="domcontentloaded", **kwargs):
+        browser = await p.chromium.launch(headless=True, args=LAUNCH_ARGS,
+                                         **kwargs)
+        context = await browser.new_context(
+            user_agent=_UA_STR, viewport=VIEWPORT, locale="en-US")
+        page = await context.new_page()
+        response = await page.goto(url, wait_until=wait_until,
+                                   timeout=int(timeout * 1000))
         # Reject HTTP error pages (4xx, 5xx) — Playwright renders them as
         # fully-styled HTML which would pass through as fake "article" content.
         if response and response.status >= 400:
             logger.debug("playwright: %s returned HTTP %d — skipping",
                          url, response.status)
-            browser.close()
+            await browser.close()
             return None
         # Extra wait for client-side rendering (Webflow, Next.js, etc.)
         if wait_for:
-            page.wait_for_timeout(wait_for)
-        html = page.content()
-        browser.close()
+            await page.wait_for_timeout(wait_for)
+        html = await page.content()
+        await browser.close()
         return html
 
-    # One sync_playwright() context exists in this process at any moment
-    # (see _PLAYWRIGHT_LOCK) — concurrent contexts segfault the process.
-    with _PLAYWRIGHT_LOCK:
+    def _run(coro):
+        """Run an async coroutine from a sync context (worker thread).
+
+        Each call creates a fresh event loop so concurrent threads each get
+        their own Playwright browser instance — no shared state, no lock.
+        """
+        return asyncio.run(coro)
+
+    # Async API — no global lock needed.  Each worker thread creates its own
+    # event loop via asyncio.run(), launching an independent browser process.
+    try:
+        return _run(_render_with_retry(async_playwright, _do_launch, url))
+    except Exception:
+        return None
+
+
+async def _render_with_retry(async_playwright, do_launch, url):
+    """Shared retry logic for Playwright rendering (async).
+
+    Tries domcontentloaded → commit → chrome channel, mirroring the
+    original sync retry chain but in a single async flow.
+    """
+    try:
+        async with async_playwright() as p:
+            return await do_launch(p)
+    except Exception as exc:
+        logger.warning(
+            "Playwright domcontentloaded failed for %s: %s. "
+            "Retrying with wait_until='commit' …", url, exc)
         try:
-            with sync_playwright() as p:
-                return _do_launch(p)
-        except Exception as exc:
-            # Some pages (HubSpot templates with a parser-blocking script,
-            # heavy tracking widgets) never reach "domcontentloaded" even
-            # though the full body is already present — the parser is held
-            # open indefinitely.  Retrying with "commit" (resolves on
-            # response headers) rescues them; the wait_for below still
-            # allows client-side rendering to finish.
+            async with async_playwright() as p:
+                return await do_launch(p, wait_until="commit")
+        except Exception as exc2:
             logger.warning(
-                "Playwright domcontentloaded failed for %s: %s. "
-                "Retrying with wait_until='commit' …", url, exc)
+                "Playwright commit also failed for %s: %s. "
+                "Trying channel='chrome' …", url, exc2)
             try:
-                with sync_playwright() as p:
-                    return _do_launch(p, wait_until="commit")
-            except Exception as exc2:
-                logger.warning(
-                    "Playwright commit also failed for %s: %s. "
-                    "Trying channel='chrome' …", url, exc2)
-                try:
-                    with sync_playwright() as p:
-                        return _do_launch(p, wait_until="commit",
+                async with async_playwright() as p:
+                    return await do_launch(p, wait_until="commit",
                                           channel="chrome")
-                except Exception as exc3:
-                    logger.warning(
-                        "Playwright channel='chrome' also failed for %s: %s",
-                        url, exc3)
-                    return None
+            except Exception as exc3:
+                logger.warning(
+                    "Playwright channel='chrome' also failed for %s: %s",
+                    url, exc3)
+                return None
 
 
 def _client_get(url: str, timeout: float, headers: dict[str, str],
@@ -669,7 +664,7 @@ def _is_article_content(data: dict) -> bool:
 
 
 def scrape_single(url: str, source_name: str, timeout: float = 30.0,
-                  render_js: bool = True,
+                  render_js: bool = False,
                   proxy: str | None = None) -> Article | None:
     html = _fetch_html(url, render_js=render_js, timeout=timeout, proxy=proxy)
     data = extract_from_html(html, url=url)
@@ -793,7 +788,7 @@ def _classify_skip(exc: BaseException) -> str:
 def scrape_list(url: str, source_name: str, include_pattern: str | None = None,
                 exclude_pattern: str | None = None,
                 max_articles: int = 10, delay: float = 1.0,
-                max_pages: int = 3, render_js: bool = True,
+                max_pages: int = 3, render_js: bool = False,
                 timeout: float = 30.0,
                 proxy: str | None = None) -> list[Article]:
     """Deep-crawl the site at *url* to discover article pages across multiple

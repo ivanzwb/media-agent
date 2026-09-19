@@ -91,6 +91,7 @@ export default function Settings() {
         tts_provider: data.tts_provider || "kitten", tts_api_base: data.tts_api_base, tts_model: data.tts_model, tts_voice: data.tts_voice,
         tts_rate: data.tts_rate, tts_pitch: data.tts_pitch, tts_instruct: data.tts_instruct,
         max_age_days: data.max_age_days, max_per_source: data.max_per_source, max_drafts: data.max_drafts, download_workers: data.download_workers,
+        source_timeout: data.source_timeout,
         video_fit: data.video_fit, video_brand_name: data.video_brand_name,
         avatar_enabled: data.avatar_enabled, avatar_image: data.avatar_image,
         avatar_position: data.avatar_position, avatar_provider: data.avatar_provider,
@@ -341,6 +342,10 @@ export default function Settings() {
                     <Switch />
                   </Form.Item>
                   <Form.Item name="download_workers" label={`并发下载数（默认 ${data.default_workers}）`}><Input /></Form.Item>
+                  <Form.Item name="source_timeout" label="每个来源抓取超时秒数（留空默认 300）"
+                    tooltip="单个来源抓取的最长等待秒数，超时则放弃该来源继续下一个。慢站（如加载慢/JS 渲染列表页）可调大（MEDIA_AGENT_SOURCE_TIMEOUT）">
+                    <Input />
+                  </Form.Item>
                   <Form.Item name="download_images" label="本地化图片" valuePropName="checked"
                     tooltip="归档时把文章图片下载到本地，避免防盗链失效；关闭则保留远程 URL（MEDIA_AGENT_DOWNLOAD_IMAGES）">
                     <Switch />

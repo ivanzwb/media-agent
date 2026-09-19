@@ -52,6 +52,7 @@ class Config:
     max_per_source: int | None = None
     max_drafts: int | None = None   # 每次运行最多改写/转写的文章篇数 (None → 默认 10)
     download_workers: int | None = None
+    source_timeout: int | None = None  # per-source fetch timeout in seconds (None → 300)
     video_fit: str | None = None  # fit | crop | blur
     video_brand_name: str | None = None  # brand name for intro/outro
     # 数字人主播 (digital-human presenter)
@@ -148,6 +149,7 @@ class Config:
             max_per_source=_int_env("MEDIA_AGENT_MAX_PER_SOURCE"),
             max_drafts=_int_env("MEDIA_AGENT_MAX_DRAFTS"),
             download_workers=_int_env("MEDIA_AGENT_DOWNLOAD_WORKERS"),
+            source_timeout=_int_env("MEDIA_AGENT_SOURCE_TIMEOUT"),
             video_fit=os.environ.get("MEDIA_AGENT_VIDEO_FIT_MODE"),
             video_brand_name=os.environ.get("MEDIA_AGENT_VIDEO_BRAND_NAME"),
             avatar_enabled=os.environ.get("MEDIA_AGENT_AVATAR_ENABLED", "0") not in ("0", "false", "no", ""),
@@ -255,6 +257,12 @@ class Config:
             parsed = _int_str(workers)
             if parsed is not None:
                 self.download_workers = parsed
+
+        s_to = store.get_setting("source_timeout")
+        if s_to is not None:
+            parsed = _int_str(s_to)
+            if parsed is not None:
+                self.source_timeout = parsed
 
         cli_to = store.get_setting("cli_timeout")
         if cli_to is not None:

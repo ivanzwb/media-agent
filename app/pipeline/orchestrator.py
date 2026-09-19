@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 def _fetch_source(src, proxy: str | None = None) -> list[Article]:
     if src.type == "rss":
         return fetch_feed(src.url, src.name,
-                          render_js=getattr(src, "render_js", True),
+                          render_js=getattr(src, "render_js", False),
                           proxy=proxy)
     if src.type == "scrape":
         if src.mode == "list":
@@ -39,9 +39,9 @@ def _fetch_source(src, proxy: str | None = None) -> list[Article]:
                 src.url, src.name, include_pattern=src.include_pattern,
                 exclude_pattern=src.exclude_pattern,
                 max_pages=getattr(src, "max_pages", 3) or 3,
-                render_js=getattr(src, "render_js", True), proxy=proxy)
+                render_js=getattr(src, "render_js", False), proxy=proxy)
         art = scrape_single(src.url, src.name,
-                            render_js=getattr(src, "render_js", True),
+                            render_js=getattr(src, "render_js", False),
                             proxy=proxy)
         return [art] if art else []
     return []
@@ -51,13 +51,17 @@ def collect_sources(feeds: FeedsConfig,
                     max_per_source: int | None = None,
                     progress=None, workers: int | None = None,
                     proxy: str | None = None,
-                    source_timeout: float = 120.0) -> list[Article]:
+                    source_timeout: float = 300.0) -> list[Article]:
     """Fetch articles from all enabled sources concurrently.
 
     Uses ``ex.submit()`` with per-task timeouts to prevent a single slow
     source (e.g. Playwright hanging on a page) from blocking the entire
-    pipeline.  Each source gets *source_timeout* seconds; if it doesn't
-    finish, the task is abandoned and an error is logged.
+    pipeline.  Each source gets *source_timeout* seconds (default 300) of
+    ACTUAL EXECUTION TIME — the clock starts when its worker thread picks
+    it up, NOT when it was submitted.  Sources waiting in the thread-pool
+    queue are not penalized for queue time (583 sources on 16 workers must
+    not mass-cancel at the first wall-clock timeout).  If a source exceeds
+    its budget, the task is abandoned and an error is logged.
     """
     enabled = [s for s in feeds.sources if s.enabled]
     if not enabled:
@@ -65,8 +69,15 @@ def collect_sources(feeds: FeedsConfig,
     workers = max(1, workers or (os.cpu_count() or 4))
     total = len(enabled)
     _counter = [0]  # mutable thread-safe counter for closure
+    # Per-source execution clock: set when the worker thread ACTUALLY begins
+    # processing the source (recorded inside fetch_one), NOT at submission
+    # time.  With more sources than workers, most futures wait in the thread
+    # pool's queue — their per-source budget must not tick while queued.
+    started_at: dict[int, float] = {}
+    wall_start = time.monotonic()
 
     def fetch_one(src):
+        started_at[id(src)] = time.monotonic()
         _counter[0] += 1
         idx = _counter[0]
         if progress:
@@ -104,9 +115,11 @@ def collect_sources(feeds: FeedsConfig,
     # Submit all tasks and collect with per-task timeout to avoid one slow
     # source blocking the entire pipeline (the ex.map() ordering problem).
     #
-    # Use wait(FIRST_COMPLETED) in a loop: each iteration waits up to
-    # source_timeout for the NEXT future to complete.  If nothing finishes
-    # within that window, we cancel remaining futures and move on.
+    # Use wait(FIRST_COMPLETED) in a loop, polling every ~5 s.  Each
+    # iteration computes deadlines ONLY for sources whose worker thread has
+    # actually started (recorded inside fetch_one); sources still queued
+    # behind the pool have no deadline yet and are never cancelled for queue
+    # time.  A future whose own execution budget expires is abandoned.
     #
     # IMPORTANT: We must NOT use `with ThreadPoolExecutor()` here because
     # its __exit__ calls shutdown(wait=True), which blocks until ALL threads
@@ -126,16 +139,45 @@ def collect_sources(feeds: FeedsConfig,
     try:
         future_to_src = {ex.submit(fetch_one, src): src for src in enabled}
         pending: set = set(future_to_src.keys())
-        elapsed = 0.0
         while pending:
-            # Wait a short interval so the main thread can call progress
-            # (which checks stop_requested).  If a source finishes before
-            # the interval, wait() returns immediately.
-            poll = min(_POLL_INTERVAL, source_timeout - elapsed)
-            if poll <= 0:
-                poll = 0.1  # ensure we don't pass <= 0 to wait()
+            # Compute poll interval: shortest time until any RUNNING source's
+            # deadline expires — ensures we wake up in time to cancel it.
+            # Only futures whose worker thread has ACTUALLY started have a
+            # deadline (recorded inside fetch_one).  Futures still queued
+            # behind the worker pool have none yet: their per-source budget
+            # only starts ticking once they begin executing, so a huge queue
+            # (e.g. 583 sources on 16 workers) no longer mass-cancels the
+            # whole run at the first wall-clock timeout.
+            now = time.monotonic()
+            running_deadlines = [
+                started_at[id(future_to_src[f])] + source_timeout
+                for f in pending if id(future_to_src[f]) in started_at
+            ]
+            if running_deadlines:
+                time_until_deadline = max(0.0, min(running_deadlines) - now)
+                poll = min(_POLL_INTERVAL, time_until_deadline) or 0.1
+            else:
+                poll = _POLL_INTERVAL
             done, not_done = wait(pending, timeout=poll,
                                   return_when=FIRST_COMPLETED)
+            # ── Cancel sources that exceeded their execution deadline ──
+            now = time.monotonic()
+            timed_out = {
+                f for f in not_done
+                if id(future_to_src[f]) in started_at
+                and now - started_at[id(future_to_src[f])] >= source_timeout
+            }
+            for future in timed_out:
+                src = future_to_src[future]
+                logger.warning(
+                    "collect_sources: source %s still running after "
+                    "%.0fs, cancelling", src.name, source_timeout,
+                )
+                if progress:
+                    progress(f"  来源超时：{src.name}"
+                             f"（>{source_timeout:.0f}s）")
+            not_done -= timed_out
+            # ── Collect results from completed futures ──────────────────
             for future in done:
                 src = future_to_src[future]
                 try:
@@ -146,28 +188,19 @@ def collect_sources(feeds: FeedsConfig,
                                    src.name, type(e).__name__, e)
                     if progress:
                         progress(f"  来源异常：{src.name}（{type(e).__name__}）")
-            if not done:
-                elapsed += _POLL_INTERVAL
-                # Heartbeat on main thread — triggers stop_requested check
+            # ── Heartbeat when nothing finished this interval ───────────
+            if not done and not timed_out:
+                running = sum(1 for f in not_done
+                              if id(future_to_src[f]) in started_at)
+                queued = len(not_done) - running
+                waited = now - wall_start
                 if progress:
-                    progress(f"  等待来源完成中…（{len(not_done)} 个仍在运行，"
-                             f"已等待 {elapsed:.0f}s）")
-                if elapsed >= source_timeout:
-                    # Per-source timeout exceeded — cancel stragglers.
-                    for future in not_done:
-                        src = future_to_src[future]
-                        logger.warning(
-                            "collect_sources: source %s still running after "
-                            "%.0fs, cancelling", src.name, source_timeout,
-                        )
-                        if progress:
-                            progress(f"  来源超时：{src.name}"
-                                     f"（>{source_timeout:.0f}s）")
-                    break
-            else:
-                # At least one completed — reset elapsed so each source
-                # gets the full source_timeout budget independently.
-                elapsed = 0.0
+                    if queued:
+                        progress(f"  等待来源完成中…（{running} 个运行中，"
+                                 f"{queued} 个排队，已等待 {waited:.0f}s）")
+                    else:
+                        progress(f"  等待来源完成中…（{running} 个运行中，"
+                                 f"已等待 {waited:.0f}s）")
             pending = not_done
     finally:
         # wait=False: don't block on still-running threads (e.g. Playwright
@@ -227,6 +260,7 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
                  record: bool = False,
                  max_age_days: int | None = None,
                  max_per_source: int | None = None,
+                 source_timeout: int | None = None,
                  download_images: bool = True,
                  download_videos: bool = True,
                  relevance_filter: bool = False,
@@ -240,10 +274,12 @@ def run_pipeline(feeds: FeedsConfig, store: Store, provider: LLMProvider,
 
     try:
         emit("开始抓取来源…", stats)
+        timeout = source_timeout or store.config.source_timeout or 300
         articles = collect_sources(feeds, max_per_source=max_per_source,
                                    progress=lambda m: emit(m, stats),
                                    workers=store.config.workers,
-                                   proxy=store.config.fetch_proxy)
+                                   proxy=store.config.fetch_proxy,
+                                   source_timeout=timeout)
         emit(f"抓取完成，共 {len(articles)} 篇，去重中…", stats)
         articles = filter_by_age(articles, max_age_days,
                                  progress=lambda m: emit(m, stats))

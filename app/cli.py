@@ -66,6 +66,7 @@ def run(feeds: str = typer.Option("feeds.yaml", help="Path to feeds.yaml"),
         image_provider=image_provider, record=True,
         max_age_days=max_age_days or cfg.max_age_days,
         max_per_source=max_per_source or cfg.max_per_source,
+        source_timeout=cfg.source_timeout,
         download_images=cfg.download_images,
         download_videos=cfg.download_videos,
         relevance_filter=cfg.relevance_filter)

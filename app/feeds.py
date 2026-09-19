@@ -57,7 +57,7 @@ class SourceConfig:
     include_pattern: str | None = None
     exclude_pattern: str | None = None
     max_pages: int = 3     # for scrape list: follow N pagination pages
-    render_js: bool = True  # render with Playwright (SPA/SSR sites) by default
+    render_js: bool = False  # render with Playwright only for SPA/SSR sites (opt-in)
     enabled: bool = True
 
 
@@ -124,7 +124,7 @@ def load_feeds(path: Path | str) -> FeedsConfig:
             include_pattern=s.get("include_pattern"),
             exclude_pattern=s.get("exclude_pattern"),
             max_pages=int(s.get("max_pages", 3) or 3),
-            render_js=bool(s.get("render_js", True)),
+            render_js=bool(s.get("render_js", False)),
             enabled=s.get("enabled", True),
         ))
     return FeedsConfig(topics=topics, sources=sources)
@@ -147,11 +147,11 @@ def _build_feeds_data(config: FeedsConfig) -> dict:
             if s.exclude_pattern:
                 entry["exclude_pattern"] = s.exclude_pattern
             # Persist only when it differs from the default (max_pages=3,
-            # render_js=True) so a non-default value (incl. an explicit
-            # render_js: false) round-trips correctly.
+            # render_js=False) so a non-default value (incl. an explicit
+            # render_js: true) round-trips correctly.
             if s.max_pages and s.max_pages != 3:  # noqa: PLR2004
                 entry["max_pages"] = s.max_pages
-            if not s.render_js:
+            if s.render_js:
                 entry["render_js"] = s.render_js
         data["sources"].append(entry)
     return data

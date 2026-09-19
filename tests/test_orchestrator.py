@@ -70,7 +70,7 @@ def test_run_pipeline_end_to_end(tmp_path, monkeypatch):
                               topics=["AI"])])
 
     monkeypatch.setattr("app.pipeline.orchestrator.collect_sources",
-                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None, proxy=None: fake_articles())
+                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None, proxy=None, **kwargs: fake_articles())
 
     rewrite_json = json.dumps({"title_candidates": ["爆款标题"],
                                "body_md": "## 钩子\n正文"})
@@ -95,7 +95,7 @@ def test_run_pipeline_skips_duplicates(tmp_path, monkeypatch):
     cfg, store = build(tmp_path)
     feeds = FeedsConfig(topics=[Topic(name="AI", keywords=["GPT"])], sources=[])
     monkeypatch.setattr("app.pipeline.orchestrator.collect_sources",
-                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None, proxy=None: fake_articles())
+                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None, proxy=None, **kwargs: fake_articles())
     provider = MockProvider(responses=[
         json.dumps({"title_candidates": ["t"], "body_md": "b"}),
         json.dumps({"flagged_claims": []})])
@@ -111,7 +111,7 @@ def test_run_pipeline_skips_same_title_source(tmp_path, monkeypatch):
 
     # First run: saves article with URL-A
     monkeypatch.setattr("app.pipeline.orchestrator.collect_sources",
-                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None, proxy=None: [
+                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None, proxy=None, **kwargs: [
         Article(title="Same Title", content_md="body", url="https://x.com/url-a",
                 source_name="Test Source", source_type="rss", published_at=None,
                 images=[], raw_summary=None,
@@ -125,7 +125,7 @@ def test_run_pipeline_skips_same_title_source(tmp_path, monkeypatch):
 
     # Second run: same title+source, different URL → should be skipped
     monkeypatch.setattr("app.pipeline.orchestrator.collect_sources",
-                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None, proxy=None: [
+                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None, proxy=None, **kwargs: [
         Article(title="Same Title", content_md="body", url="https://x.com/url-b",
                 source_name="Test Source", source_type="rss", published_at=None,
                 images=[], raw_summary=None,
@@ -308,7 +308,7 @@ def test_run_pipeline_handles_source_failure(tmp_path, monkeypatch):
     )
 
     monkeypatch.setattr("app.pipeline.orchestrator.collect_sources",
-                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None, proxy=None: [])
+                        lambda feeds_cfg, max_per_source=None, progress=None, workers=None, proxy=None, **kwargs: [])
 
     provider = MockProvider(responses=[
         json.dumps({"title_candidates": ["t"], "body_md": "b"}),
@@ -430,3 +430,51 @@ def test_collect_sources_stop_after_heartbeat(tmp_path, monkeypatch):
     elapsed = time.monotonic() - start
     # Stop should take effect within ~5-6 seconds, not 60
     assert elapsed < 15, f"Stop took {elapsed:.1f}s, expected < 15s"
+
+
+# ── per-source timeout: budget starts when the worker picks the source ────
+
+
+def test_collect_sources_queue_wait_not_charged_to_timeout(tmp_path, monkeypatch):
+    """Sources waiting in the pool queue are NOT cancelled at the first
+    wall-clock timeout — each source's budget starts when its worker thread
+    actually begins executing it, not when it was submitted.
+
+    Regression: 583 sources submitted to a ~16-worker pool mass-cancelled at
+    300s because every future shared the submission-time start clock; queued
+    (not-yet-started) sources were dropped without ever running.
+    """
+    monkeypatch.setenv("MEDIA_AGENT_DATA_DIR", str(tmp_path))
+    from app.pipeline.orchestrator import collect_sources
+
+    feeds = FeedsConfig(
+        topics=[],
+        sources=[
+            SourceConfig(name="A", type="rss",
+                         url="https://a.example.com/feed", topics=["AI"]),
+            SourceConfig(name="B", type="rss",
+                         url="https://b.example.com/feed", topics=["AI"]),
+            SourceConfig(name="C", type="rss",
+                         url="https://c.example.com/feed", topics=["AI"]),
+        ],
+    )
+
+    def modest_fetch(src, proxy=None):
+        # Each source is well within a 2.5s budget once started (fetch takes
+        # 0.3s + 0.3-1.5s stagger), but with workers=1 the two queued sources
+        # don't even begin until the previous one finished.
+        time.sleep(0.3)
+        return [Article(title=src.name, content_md="body",
+                        url=f"https://{src.name}.example.com/a",
+                        source_name=src.name, source_type="rss",
+                        published_at=None, images=[], raw_summary=None,
+                        fetched_at=datetime.now(timezone.utc))]
+
+    with patch("app.pipeline.orchestrator._fetch_source", side_effect=modest_fetch):
+        articles = collect_sources(feeds, workers=1, source_timeout=2.5)
+
+    # All three must be collected.  Old behavior: at wall clock == 2.5s all
+    # pending futures (including queued B and C) shared the submission start
+    # time → B and C were wrongly "timed out" and never ran.
+    names = {a.source_name for a in articles}
+    assert names == {"A", "B", "C"}, f"got {names}"
